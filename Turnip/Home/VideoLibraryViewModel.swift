@@ -122,7 +122,12 @@ final class VideoLibraryViewModel: ObservableObject {
         guard let fetchResult, let details = change.changeDetails(for: fetchResult) else { return }
         let updated = details.fetchResultAfterChanges
         self.fetchResult = updated
-        replaceVideos(with: Self.prefix(of: updated, count: max(videos.count, Self.pageSize)))
+        videos = Self.prefix(of: updated, count: max(videos.count, Self.pageSize))
+        // Not `replaceVideos`: dropping the whole thumbnail cache on a content-only change — an
+        // iCloud download finishing, a favorite toggle — would leave it empty until a tile next
+        // appears, and no tile appears while the user is stationary.
+        let changed = details.hasIncrementalChanges ? details.changedObjects : []
+        thumbnails.replaceAssets(videos, invalidating: Set(changed.map(\.localIdentifier)))
     }
 
     private func replaceVideos(with assets: [PHAsset]) {

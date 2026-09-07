@@ -41,7 +41,7 @@ final class VideoFrameSamplerTests: XCTestCase {
         let observations = FrameObservations()
         let sampler = VideoFrameSampler()
 
-        try await sampler.sampleFrames(from: videoURL) { frame in
+        try await sampler.sampleFrames(from: AVURLAsset(url: videoURL)) { frame in
             // Read the thread *before* any await — an await may resume on a different thread.
             // `pthread_main_np` rather than `Thread.isMainThread`, which is marked unavailable
             // from async contexts (a Swift 6 error).
@@ -63,7 +63,7 @@ final class VideoFrameSamplerTests: XCTestCase {
         let sampler = VideoFrameSampler()
         let timestamps = Timestamps()
 
-        try await sampler.sampleFrames(from: videoURL) { frame in
+        try await sampler.sampleFrames(from: AVURLAsset(url: videoURL)) { frame in
             await timestamps.append(frame.timestamp)
         }
 

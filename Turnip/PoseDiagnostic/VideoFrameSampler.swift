@@ -27,20 +27,17 @@ struct SampledFrame: @unchecked Sendable {
 struct VideoFrameSampler: Sendable {
     private let sampleStride = 3
 
-    /// Decodes `url` and invokes `handler` once per kept frame, sequentially, off the main actor.
+    /// Decodes `asset` and invokes `handler` once per kept frame, sequentially, off the main actor.
+    ///
+    /// Takes the `AVURLAsset` itself, not just its URL: for Photos-library videos the object
+    /// PhotoKit returned is what carries read access to the file, and opening a fresh asset on the
+    /// bare path is not guaranteed to work. `SelectedVideo` hands that object straight through.
     ///
     /// `handler` is `@Sendable` on purpose: a non-`Sendable` closure formed inside a `@MainActor`
     /// context (e.g. `PoseDiagnosticViewModel`) inherits that isolation, and every call to it would
     /// hop back onto the main thread — putting per-frame inference on the UI thread. `@Sendable`
     /// breaks that inheritance so the handler runs on the generic executor alongside decoding, and
     /// callers must hop to `MainActor` explicitly for any UI-bound writes.
-    func sampleFrames(from url: URL, handler: @Sendable (SampledFrame) async throws -> Void) async throws {
-        try await sampleFrames(from: AVURLAsset(url: url), handler: handler)
-    }
-
-    /// Takes the `AVURLAsset` itself, not just its URL: for Photos-library videos the object
-    /// PhotoKit returned is what carries read access to the file, and opening a fresh asset on the
-    /// bare path is not guaranteed to work. `SelectedVideo` hands that object straight through.
     func sampleFrames(from asset: AVURLAsset, handler: @Sendable (SampledFrame) async throws -> Void) async throws {
         guard let track = try await asset.loadTracks(withMediaType: .video).first else {
             throw PoseDiagnosticError.videoLoadFailed(underlying: nil)

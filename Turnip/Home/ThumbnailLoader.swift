@@ -20,11 +20,14 @@ final class ThumbnailLoader {
     private let options: PHImageRequestOptions
     private var cachedRange: Range<Int> = 0..<0
     private var cachedAssets: [PHAsset] = []
+    /// The tile the window is centered on, kept so the window can be rebuilt against a new asset
+    /// list without waiting for another tile to appear.
+    private var center: Int?
     /// Learned from the first tile request. Tiles are uniform, so one size serves the whole grid.
     private var pixelSize: CGSize?
 
-    init() {
-        manager = PHCachingImageManager()
+    init(manager: PHCachingImageManager = PHCachingImageManager()) {
+        self.manager = manager
         manager.allowsCachingHighQualityImages = false
         options = PHImageRequestOptions()
         options.deliveryMode = .opportunistic
@@ -53,15 +56,45 @@ final class ThumbnailLoader {
 
     /// Tile `index` of `assets` just appeared: re-center the prefetch window on it.
     func tileAppeared(at index: Int, in assets: [PHAsset]) {
-        guard let pixelSize else { return }
+        center = index
+        guard pixelSize != nil else { return }
         let range = Self.prefetchRange(around: index, count: assets.count, radius: Self.prefetchRadius)
         guard range != cachedRange else { return }
+        moveWindow(to: range, in: assets, invalidating: [])
+    }
 
+    /// The asset list was replaced underneath the window without the user scrolling. Re-centers on
+    /// the same tile and diffs by identifier, so a decode survives whether its asset stayed put or
+    /// merely shifted index; `invalidated` identifiers are re-cached because their content changed.
+    func replaceAssets(_ assets: [PHAsset], invalidating invalidated: Set<String>) {
+        guard pixelSize != nil, let center else {
+            reset()
+            return
+        }
+        let range = Self.prefetchRange(around: center, count: assets.count, radius: Self.prefetchRadius)
+        moveWindow(to: range, in: assets, invalidating: invalidated)
+    }
+
+    /// The grid was reloaded from scratch (authorization change, limited-library reselection): drop
+    /// the window entirely, since the next `tileAppeared` rebuilds it against the new list.
+    func reset() {
+        manager.stopCachingImagesForAllAssets()
+        cachedRange = 0..<0
+        cachedAssets = []
+        center = nil
+    }
+
+    private func moveWindow(to range: Range<Int>, in assets: [PHAsset], invalidating invalidated: Set<String>) {
+        guard let pixelSize else { return }
         let incoming = Array(assets[range])
         let incomingIDs = Set(incoming.map(\.localIdentifier))
         let currentIDs = Set(cachedAssets.map(\.localIdentifier))
-        let toStop = cachedAssets.filter { !incomingIDs.contains($0.localIdentifier) }
-        let toStart = incoming.filter { !currentIDs.contains($0.localIdentifier) }
+        let toStop = cachedAssets.filter {
+            !incomingIDs.contains($0.localIdentifier) || invalidated.contains($0.localIdentifier)
+        }
+        let toStart = incoming.filter {
+            !currentIDs.contains($0.localIdentifier) || invalidated.contains($0.localIdentifier)
+        }
 
         if !toStop.isEmpty {
             manager.stopCachingImages(for: toStop, targetSize: pixelSize, contentMode: .aspectFill, options: options)
@@ -71,14 +104,6 @@ final class ThumbnailLoader {
         }
         cachedRange = range
         cachedAssets = incoming
-    }
-
-    /// The asset list changed underneath the window (library change, reload): drop everything so
-    /// the next `tileAppeared` rebuilds the window against the new list.
-    func reset() {
-        manager.stopCachingImagesForAllAssets()
-        cachedRange = 0..<0
-        cachedAssets = []
     }
 
     /// The half-open index range to keep cached around `index`, clamped to `0..<count`.

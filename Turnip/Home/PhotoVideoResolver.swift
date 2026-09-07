@@ -150,11 +150,14 @@ struct PhotoVideoResolver {
         return .failure(errorKind(info?[PHImageErrorKey] as? Error))
     }
 
-    /// PhotoKit doesn't expose a typed "download failed" error; the failures seen in practice are
-    /// URL-loading errors or come from Photos' cloud-library error domain.
+    /// PhotoKit reports a failed iCloud fetch either as a URL-loading error or as one of two
+    /// `PHPhotosError` codes; neither is surfaced as a typed "download failed".
     private static func looksLikeNetworkError(_ error: Error?) -> Bool {
         guard let error = error as NSError? else { return false }
-        return error.domain == NSURLErrorDomain || error.domain.localizedCaseInsensitiveContains("cloud")
+        if error.domain == NSURLErrorDomain { return true }
+        guard error.domain == PHPhotosErrorDomain else { return false }
+        return error.code == PHPhotosError.Code.networkAccessRequired.rawValue
+            || error.code == PHPhotosError.Code.networkError.rawValue
     }
 }
 
