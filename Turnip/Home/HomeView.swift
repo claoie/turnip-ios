@@ -55,7 +55,11 @@ struct VideoGalleryView: View {
 
     var body: some View {
         Group {
-            if viewModel.videos.isEmpty {
+            if !viewModel.hasLoaded {
+                // Not yet the same thing as "no videos" — the first fetch hasn't run.
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.videos.isEmpty {
                 emptyState
             } else {
                 grid

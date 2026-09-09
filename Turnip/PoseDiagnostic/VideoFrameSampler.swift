@@ -61,6 +61,9 @@ struct VideoFrameSampler: Sendable {
 
         var frameIndex = 0
         while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
+            // Decoding a multi-minute clip outlives the screen that asked for it unless the loop
+            // itself gives up: nothing else here suspends at a cancellation point.
+            try Task.checkCancellation()
             defer { frameIndex += 1 }
             guard frameIndex % sampleStride == 0 else { continue }
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { continue }

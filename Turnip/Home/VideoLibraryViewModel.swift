@@ -27,6 +27,10 @@ final class VideoLibraryViewModel: ObservableObject {
     /// (`tileAppeared(at:)`). `PHAsset` objects are lightweight faults; the expensive part
     /// (thumbnails) is loaded lazily per visible tile and prefetched around it by `thumbnails`.
     @Published private(set) var videos: [PHAsset] = []
+    /// False until the first fetch has run. Authorization resolves synchronously in `init`, so an
+    /// already-authorized cold launch would otherwise render the "no videos" empty state for one
+    /// frame before `reload()` has looked.
+    @Published private(set) var hasLoaded = false
     @Published private(set) var resolution: Resolution?
     @Published var errorMessage: String?
     @Published var path: [SelectedVideo] = []
@@ -68,6 +72,7 @@ final class VideoLibraryViewModel: ObservableObject {
     }
 
     func reload() {
+        defer { hasLoaded = true }
         guard authorization.canReadLibrary else {
             fetchResult = nil
             replaceVideos(with: [])
@@ -115,6 +120,30 @@ final class VideoLibraryViewModel: ObservableObject {
         changeForwarder = forwarder
     }
 
+    /// What a library change means for the grid, as plain values. `PHChange` and
+    /// `PHFetchResultChangeDetails` have no public initializer, so this is the only part of
+    /// `apply(_:)` that can be exercised directly.
+    struct LibraryChangeUpdate: Equatable {
+        /// How much of the updated fetch result to materialize.
+        let prefixCount: Int
+        /// Which thumbnails to re-request.
+        let invalidatedIdentifiers: Set<String>
+    }
+
+    static func libraryChangeUpdate(
+        loadedCount: Int,
+        hasIncrementalChanges: Bool,
+        changedIdentifiers: () -> [String]
+    ) -> LibraryChangeUpdate {
+        LibraryChangeUpdate(
+            // Never shrink below what the user has already scrolled past, nor below one page.
+            prefixCount: max(loadedCount, pageSize),
+            // `changedObjects` is only populated for an incremental change, so it is not even
+            // evaluated otherwise.
+            invalidatedIdentifiers: hasIncrementalChanges ? Set(changedIdentifiers()) : []
+        )
+    }
+
     /// Re-materializes the loaded prefix against the post-change fetch result. That is O(loaded
     /// prefix), not O(library): the prefix is bounded by how far the user has scrolled, and
     /// `PHAsset` faults are cheap to create, so this stays flat regardless of library size.
@@ -122,12 +151,16 @@ final class VideoLibraryViewModel: ObservableObject {
         guard let fetchResult, let details = change.changeDetails(for: fetchResult) else { return }
         let updated = details.fetchResultAfterChanges
         self.fetchResult = updated
-        videos = Self.prefix(of: updated, count: max(videos.count, Self.pageSize))
+        let update = Self.libraryChangeUpdate(
+            loadedCount: videos.count,
+            hasIncrementalChanges: details.hasIncrementalChanges,
+            changedIdentifiers: { details.changedObjects.map(\.localIdentifier) }
+        )
+        videos = Self.prefix(of: updated, count: update.prefixCount)
         // Not `replaceVideos`: dropping the whole thumbnail cache on a content-only change — an
         // iCloud download finishing, a favorite toggle — would leave it empty until a tile next
         // appears, and no tile appears while the user is stationary.
-        let changed = details.hasIncrementalChanges ? details.changedObjects : []
-        thumbnails.replaceAssets(videos, invalidating: Set(changed.map(\.localIdentifier)))
+        thumbnails.replaceAssets(videos, invalidating: update.invalidatedIdentifiers)
     }
 
     private func replaceVideos(with assets: [PHAsset]) {
