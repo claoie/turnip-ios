@@ -23,6 +23,13 @@ struct VideoTileView: View {
     /// final image arrives must be allowed to request again when it comes back.
     @State private var imageIsDegraded = false
     @State private var requestID: PHImageRequestID?
+    /// The revision the image on screen was decoded for. A replacement request that is cancelled
+    /// before it delivers leaves an image that is stale but looks final, so the appearance path has
+    /// to stay open until this catches up with `revision`.
+    @State private var loadedRevision = 0
+    /// Identifies the request whose delivery is allowed to write state. A cancelled request still
+    /// calls its handler, and that late callback must not touch what a newer request now owns.
+    @State private var requestToken = 0
 
     var body: some View {
         GeometryReader { proxy in
@@ -83,18 +90,50 @@ struct VideoTileView: View {
 
     // MARK: - Thumbnail loading
 
+    /// Whether a request should be issued for a tile in this state.
+    ///
+    /// The invariant is that the appearance path stays open until a final delivery for the current
+    /// revision has landed — an image left over from an earlier revision looks indistinguishable
+    /// from a finished one, and nothing else would ever replace it.
+    static func shouldRequestImage(
+        hasImage: Bool,
+        imageIsDegraded: Bool,
+        hasRequestInFlight: Bool,
+        loadedRevision: Int,
+        revision: Int,
+        replacingCurrentImage: Bool
+    ) -> Bool {
+        if replacingCurrentImage {
+            return true
+        }
+        if hasRequestInFlight {
+            return false
+        }
+        return !hasImage || imageIsDegraded || loadedRevision != revision
+    }
+
     /// `replacingCurrentImage` re-requests over a final image, which the appearance path must never
     /// do; the old image stays on screen until the new decode lands, rather than flashing empty.
     private func load(targetSize: CGSize, replacingCurrentImage: Bool = false) {
+        guard Self.shouldRequestImage(
+            hasImage: image != nil,
+            imageIsDegraded: imageIsDegraded,
+            hasRequestInFlight: requestID != nil,
+            loadedRevision: loadedRevision,
+            revision: revision,
+            replacingCurrentImage: replacingCurrentImage
+        ) else { return }
         if replacingCurrentImage {
             cancel()
-        } else if requestID != nil || (image != nil && !imageIsDegraded) {
-            return
         }
         let pixelSize = ThumbnailLoader.pixelSize(for: targetSize, scale: displayScale)
 
+        requestToken += 1
+        let token = requestToken
+        let requestedRevision = revision
         var finished = false
         let id = thumbnails.requestImage(for: asset, pixelSize: pixelSize) { result, isDegraded in
+            guard token == requestToken else { return }
             // Opportunistic delivery may call back twice (degraded, then final); keep whichever is latest.
             if let result {
                 image = result
@@ -103,6 +142,7 @@ struct VideoTileView: View {
             if !isDegraded {
                 finished = true
                 requestID = nil
+                loadedRevision = requestedRevision
             }
         }
         // A cache hit delivers the final image synchronously, before `requestImage` returns; don't
@@ -117,6 +157,7 @@ struct VideoTileView: View {
             thumbnails.cancel(requestID)
         }
         requestID = nil
+        requestToken += 1
     }
 }
 

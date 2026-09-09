@@ -79,6 +79,11 @@ final class ThumbnailLoader {
     /// merely shifted index; `invalidated` identifiers are re-cached because their content changed.
     func replaceAssets(_ assets: [PHAsset], invalidating invalidated: Set<String>) {
         guard pixelSize != nil, let center else {
+            // The window can only be rebuilt by the next `tileAppeared`, but a tile that is on
+            // screen right now is showing the pre-change image and the counter is its only signal.
+            for identifier in invalidated {
+                revisions[identifier, default: 0] += 1
+            }
             reset()
             return
         }

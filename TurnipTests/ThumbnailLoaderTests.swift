@@ -171,6 +171,22 @@ final class ThumbnailLoaderCachingTests: XCTestCase {
         XCTAssertEqual(list.map { loader.revision(for: $0) }, Array(repeating: 0, count: list.count))
     }
 
+    func testAChangeThatLandsBeforeTheWindowIsRebuiltStillBumpsTheChangedAsset() {
+        // Between a reload and the next tile appearance there is no window to re-cache against, but
+        // the tiles on screen keep their identities and their images, so the counter still has to move.
+        let list = assets(count: 200)
+        primeTileSize(with: list[0])
+        loader.tileAppeared(at: 40, in: list)
+        loader.reset()
+
+        loader.replaceAssets(list, invalidating: ["asset-40"])
+
+        let bumped = list.filter { loader.revision(for: $0) != 0 }.map(\.localIdentifier)
+        XCTAssertEqual(bumped, ["asset-40"])
+        XCTAssertEqual(manager.stoppedAllCount, 2)
+        XCTAssertEqual(manager.started.count, 1)
+    }
+
     // MARK: - Fixtures
 
     private func assets(count: Int) -> [PHAsset] {
