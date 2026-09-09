@@ -123,6 +123,54 @@ final class ThumbnailLoaderCachingTests: XCTestCase {
         XCTAssertEqual(manager.started.last, (22...58).map { "asset-\($0)" })
     }
 
+    func testContentOnlyChangeBumpsTheRevisionOfExactlyTheChangedAsset() {
+        let list = assets(count: 200)
+        primeTileSize(with: list[0])
+        loader.tileAppeared(at: 40, in: list)
+        let before = list.map { loader.revision(for: $0) }
+
+        loader.replaceAssets(list, invalidating: ["asset-40"])
+
+        let bumped = zip(list, before)
+            .filter { loader.revision(for: $0.0) != $0.1 }
+            .map(\.0.localIdentifier)
+        XCTAssertEqual(bumped, ["asset-40"])
+        XCTAssertEqual(loader.revision(for: list[40]), before[40] + 1)
+    }
+
+    func testASecondChangeToTheSameAssetBumpsAgainSoTheTileRepaintsTwice() {
+        let list = assets(count: 200)
+        primeTileSize(with: list[0])
+        loader.tileAppeared(at: 40, in: list)
+
+        loader.replaceAssets(list, invalidating: ["asset-40"])
+        let afterFirst = loader.revision(for: list[40])
+        loader.replaceAssets(list, invalidating: ["asset-40"])
+
+        XCTAssertEqual(loader.revision(for: list[40]), afterFirst + 1)
+    }
+
+    func testAChangeOutsideTheWindowBumpsNothingSinceNoTileIsShowingIt() {
+        let list = assets(count: 200)
+        primeTileSize(with: list[0])
+        loader.tileAppeared(at: 40, in: list)
+
+        loader.replaceAssets(list, invalidating: ["asset-150"])
+
+        XCTAssertEqual(list.map { loader.revision(for: $0) }, Array(repeating: 0, count: list.count))
+    }
+
+    func testScrollingAndUninvalidatedReplacementLeaveEveryRevisionAlone() {
+        let list = assets(count: 200)
+        primeTileSize(with: list[0])
+        loader.tileAppeared(at: 40, in: list)
+
+        loader.tileAppeared(at: 41, in: list)
+        loader.replaceAssets(list, invalidating: [])
+
+        XCTAssertEqual(list.map { loader.revision(for: $0) }, Array(repeating: 0, count: list.count))
+    }
+
     // MARK: - Fixtures
 
     private func assets(count: Int) -> [PHAsset] {

@@ -25,6 +25,11 @@ final class ThumbnailLoader {
     private var center: Int?
     /// Learned from the first tile request. Tiles are uniform, so one size serves the whole grid.
     private var pixelSize: CGSize?
+    /// Bumped for an asset whose content changed. A tile that is already on screen gets no second
+    /// `onAppear` while the grid is stationary, so this counter is the only thing that can tell it
+    /// the thumbnail it is showing is stale. Monotonic: `reset()` leaves it alone, because dropping
+    /// the cache doesn't make an already-delivered image wrong.
+    private var revisions: [String: Int] = [:]
 
     init(manager: PHCachingImageManager = PHCachingImageManager()) {
         self.manager = manager
@@ -52,6 +57,12 @@ final class ThumbnailLoader {
 
     func cancel(_ requestID: PHImageRequestID) {
         manager.cancelImageRequest(requestID)
+    }
+
+    /// How many times `asset`'s content has been invalidated. A tile reads this as a plain value
+    /// and re-requests when it changes.
+    func revision(for asset: PHAsset) -> Int {
+        revisions[asset.localIdentifier] ?? 0
     }
 
     /// Tile `index` of `assets` just appeared: re-center the prefetch window on it.
@@ -94,6 +105,10 @@ final class ThumbnailLoader {
         }
         let toStart = incoming.filter {
             !currentIDs.contains($0.localIdentifier) || invalidated.contains($0.localIdentifier)
+        }
+
+        for asset in toStart where invalidated.contains(asset.localIdentifier) {
+            revisions[asset.localIdentifier, default: 0] += 1
         }
 
         if !toStop.isEmpty {

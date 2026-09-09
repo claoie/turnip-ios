@@ -87,6 +87,7 @@ struct VideoGalleryView: View {
                         VideoTileView(
                             asset: asset,
                             thumbnails: viewModel.thumbnails,
+                            revision: viewModel.thumbnails.revision(for: asset),
                             isResolving: viewModel.isResolving(asset),
                             downloadProgress: viewModel.downloadProgress(for: asset)
                         )

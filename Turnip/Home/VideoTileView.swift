@@ -10,6 +10,10 @@ import SwiftUI
 struct VideoTileView: View {
     let asset: PHAsset
     let thumbnails: ThumbnailLoader
+    /// Changes when this asset's content changed in Photos. The grid keys tiles on
+    /// `localIdentifier`, which survives an edit, so the view keeps its `@State image` across the
+    /// change and this is the only signal that the image is stale.
+    let revision: Int
     let isResolving: Bool
     let downloadProgress: Double?
 
@@ -33,6 +37,7 @@ struct VideoTileView: View {
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
             .onAppear { load(targetSize: proxy.size) }
+            .onChange(of: revision) { _ in load(targetSize: proxy.size, replacingCurrentImage: true) }
             .onDisappear(perform: cancel)
         }
         .aspectRatio(1, contentMode: .fit)
@@ -78,10 +83,17 @@ struct VideoTileView: View {
 
     // MARK: - Thumbnail loading
 
-    private func load(targetSize: CGSize) {
-        guard requestID == nil, image == nil || imageIsDegraded else { return }
+    /// `replacingCurrentImage` re-requests over a final image, which the appearance path must never
+    /// do; the old image stays on screen until the new decode lands, rather than flashing empty.
+    private func load(targetSize: CGSize, replacingCurrentImage: Bool = false) {
+        if replacingCurrentImage {
+            cancel()
+        } else if requestID != nil || (image != nil && !imageIsDegraded) {
+            return
+        }
         let pixelSize = ThumbnailLoader.pixelSize(for: targetSize, scale: displayScale)
 
+        var finished = false
         let id = thumbnails.requestImage(for: asset, pixelSize: pixelSize) { result, isDegraded in
             // Opportunistic delivery may call back twice (degraded, then final); keep whichever is latest.
             if let result {
@@ -89,12 +101,13 @@ struct VideoTileView: View {
                 imageIsDegraded = isDegraded
             }
             if !isDegraded {
+                finished = true
                 requestID = nil
             }
         }
         // A cache hit delivers the final image synchronously, before `requestImage` returns; don't
         // record an ID for a request that has already finished.
-        if image == nil || imageIsDegraded {
+        if !finished {
             requestID = id
         }
     }
