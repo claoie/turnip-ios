@@ -112,6 +112,13 @@ struct VideoTileView: View {
         return !hasImage || imageIsDegraded || loadedRevision != revision
     }
 
+    /// Whether a delivery puts the requested revision on screen. A final callback that carried no
+    /// image — a failed iCloud fetch, say — ends the request without changing what is drawn, so the
+    /// revision on screen is still the previous one and the appearance path has to stay open.
+    static func deliveryLoadsRevision(hasResult: Bool, isDegraded: Bool) -> Bool {
+        hasResult && !isDegraded
+    }
+
     /// `replacingCurrentImage` re-requests over a final image, which the appearance path must never
     /// do; the old image stays on screen until the new decode lands, rather than flashing empty.
     private func load(targetSize: CGSize, replacingCurrentImage: Bool = false) {
@@ -139,10 +146,12 @@ struct VideoTileView: View {
                 image = result
                 imageIsDegraded = isDegraded
             }
+            if Self.deliveryLoadsRevision(hasResult: result != nil, isDegraded: isDegraded) {
+                loadedRevision = requestedRevision
+            }
             if !isDegraded {
                 finished = true
                 requestID = nil
-                loadedRevision = requestedRevision
             }
         }
         // A cache hit delivers the final image synchronously, before `requestImage` returns; don't
