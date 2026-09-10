@@ -6,6 +6,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   # Only cancel superseded PR pushes — cancelling a push-to-main run can
@@ -19,10 +22,10 @@ jobs:
       BUNDLE_PATH: vendor/bundle
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Cache CocoaPods
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             Pods
@@ -32,7 +35,7 @@ jobs:
             pods-${{ runner.os }}-
 
       - name: Cache Bundler gems
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: vendor/bundle
           key: gems-${{ runner.os }}-${{ hashFiles('Gemfile.lock') }}
@@ -42,25 +45,21 @@ jobs:
       # Matches the Xcode version CONTRIBUTING.md documents as the dev
       # baseline. XcodeGen's emitted project format tracks its own release,
       # not the selected Xcode, so this must stay new enough to open it —
-      # see https://github.com/yonaskolb/XcodeGen/issues/1578. This only
-      # exercises 26.3; CONTRIBUTING.md's "15+ is the floor" claim isn't
-      # covered by CI and should be read as aspirational, not verified.
+      # see https://github.com/yonaskolb/XcodeGen/issues/1578. 26.3 is the
+      # only version exercised here; README.md and CONTRIBUTING.md name it as
+      # the verified one and mark the older minimum as untested.
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
       # Homebrew only bottles the latest formula version, and its default
       # `pod` (via `brew install cocoapods`) drifts independently of
-      # Xcode Cloud's ci_post_clone.sh. Pin both tools explicitly and
-      # identically in both places instead. Installed to a user-writable
-      # prefix (no sudo) so this step matches ci_post_clone.sh exactly —
-      # Xcode Cloud's build environment has no passwordless sudo.
-      - name: Install XcodeGen 2.46.0
+      # Xcode Cloud's ci_post_clone.sh, so both pipelines call the same
+      # pinned installer instead. A user-writable prefix (no sudo) keeps
+      # this identical to ci_post_clone.sh — Xcode Cloud's build
+      # environment has no passwordless sudo.
+      - name: Install XcodeGen
         run: |
-          curl -sL -o xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
-          unzip -q xcodegen.zip -d xcodegen-pkg
-          mkdir -p "$HOME/.local"
-          ./xcodegen-pkg/xcodegen/install.sh "$HOME/.local"
-          rm -rf xcodegen.zip xcodegen-pkg
+          ci_scripts/install-xcodegen.sh "$HOME/.local"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Generate Xcode project

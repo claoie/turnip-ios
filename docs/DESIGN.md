@@ -91,8 +91,8 @@ Output: list of `(start_time, end_time)` in seconds.
 - Per-frame bounding box = min/max of confidence-filtered (`> 0.3`) keypoints
 - Union across all frames in the window
 - Expand 25% each side for breathing room + pose undershoot at edges
-- Snap to target aspect ratio (9:16 for Reels default): grow the shorter axis around the box center
-- Clamp to `[0, 1]` if expansion pushes past frame edges; if clamping breaks the target ratio, accept mild letterbox
+- Snap to target aspect ratio (9:16 for Reels default): grow the shorter axis around the box center. The ratio is measured on the box's *pixel* size, not its normalized size — a normalized unit is a fraction of its own axis, so a normalized 9:16 rect on a 1080x1920 source is 9:16 twice over
+- Slide back inside `[0, 1]` if expansion pushes past a frame edge, which keeps the ratio; an axis longer than the frame takes the frame's full extent instead and the clip letterboxes on that axis rather than cropping tighter
 - Denormalize by multiplying by source video's pixel dimensions → final `(min_x, max_x, min_y, max_y)`
 
 Static crop (one rect per clip) is Rev 1's choice — simpler, works well when the athlete stays roughly in one area. Dynamic crop (Ken Burns-style, rect changes per frame) is a v2 nice-to-have.
@@ -254,7 +254,7 @@ Every repo ships (at repo root, standard OSS conventions):
 - **`.github/`**:
   - `ISSUE_TEMPLATE/bug.md`, `ISSUE_TEMPLATE/feature.md`
   - `PULL_REQUEST_TEMPLATE.md`
-  - `workflows/ci.yml` (lint + test on every PR)
+  - `workflows/ci.yml` (build + test on every PR)
   - `workflows/cd.yml` (deploy on push to main — turnip-farm only)
 - **`SECURITY.md`** — how to responsibly disclose vulnerabilities
 - **`CLA.md`** *(optional, decide upfront)* — do we require contributors to sign a CLA? Apache 2.0's Individual Contributor License Agreement is standard but adds friction; most permissive-license OSS projects skip it.
@@ -289,7 +289,7 @@ R2's $0 egress is what keeps this cheap even as video volume grows. AWS S3 would
   - Backend: TypeScript, Bun, Postgres, Docker
   - ML: Python, TensorFlow, coremltools, model evaluation
 - **PR review flow**: reviewer approval; use a small `.github/CODEOWNERS` to auto-request the right reviewer per subdirectory
-- **CI on PRs**: lint + unit tests. Nothing gates review, but red CI slows merges.
+- **CI on PRs**: build + unit tests. Nothing gates review, but red CI slows merges.
 
 ## Decisions (formerly open questions)
 
