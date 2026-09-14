@@ -234,7 +234,8 @@ final class PhotoVideoResolverTests: XCTestCase {
     /// PhotoKit never got far enough to report a single download tick.
     func testAURLLoadingFailureIsAnICloudDownloadFailure() async throws {
         let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
-        let failure = try XCTUnwrap(await classifyFailure(of: CallbackImageManager.failing(with: error)))
+        let outcome = await classifyFailure(of: CallbackImageManager.failing(with: error))
+        let failure = try XCTUnwrap(outcome)
 
         XCTAssertEqual(failure.classification, .iCloudDownloadFailed)
         XCTAssertEqual((failure.underlying as? NSError)?.domain, NSURLErrorDomain)
@@ -254,7 +255,8 @@ final class PhotoVideoResolverTests: XCTestCase {
         for (code, expected) in cases {
             let error = NSError(domain: PHPhotosErrorDomain, code: code)
             let manager = CallbackImageManager.failing(with: error)
-            let failure = try XCTUnwrap(await classifyFailure(of: manager))
+            let outcome = await classifyFailure(of: manager)
+            let failure = try XCTUnwrap(outcome)
             XCTAssertEqual(failure.classification, expected, "PHPhotosError code \(code)")
         }
     }
@@ -263,7 +265,8 @@ final class PhotoVideoResolverTests: XCTestCase {
     /// user to check their connection would send them chasing the wrong thing.
     func testALocalFailureWithNoDownloadInSightIsUnavailable() async throws {
         let error = NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoSuchFileError)
-        let failure = try XCTUnwrap(await classifyFailure(of: CallbackImageManager.failing(with: error)))
+        let outcome = await classifyFailure(of: CallbackImageManager.failing(with: error))
+        let failure = try XCTUnwrap(outcome)
 
         XCTAssertEqual(failure.classification, .unavailable)
     }
@@ -274,7 +277,8 @@ final class PhotoVideoResolverTests: XCTestCase {
     func testTheSameFailureAfterADownloadTickBlamesICloud() async throws {
         let error = NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoSuchFileError)
         let manager = CallbackImageManager.failing(with: error, downloadTicks: [0.3])
-        let failure = try XCTUnwrap(await classifyFailure(of: manager))
+        let outcome = await classifyFailure(of: manager)
+        let failure = try XCTUnwrap(outcome)
 
         XCTAssertEqual(failure.classification, .iCloudDownloadFailed)
     }
@@ -282,7 +286,8 @@ final class PhotoVideoResolverTests: XCTestCase {
     /// Photos can return nothing and say nothing — an asset deleted mid-flight, an unsupported
     /// format. There is no underlying error to carry and nothing to blame on the network.
     func testAFailureWithNoInfoAtAllIsUnavailableWithNoUnderlyingError() async throws {
-        let failure = try XCTUnwrap(await classifyFailure(of: CallbackImageManager()))
+        let outcome = await classifyFailure(of: CallbackImageManager())
+        let failure = try XCTUnwrap(outcome)
 
         XCTAssertEqual(failure.classification, .unavailable)
         XCTAssertNil(failure.underlying)
