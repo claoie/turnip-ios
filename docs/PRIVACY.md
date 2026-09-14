@@ -62,7 +62,8 @@ require a manifest/signature. If a dependency is added, check both.
   write half anyway, so one honest prompt covers both.
 - `NSPhotoLibraryUsageDescription` explains the read side in plain
   language. `NSPhotoLibraryAddUsageDescription` ships alongside it, for
-  the export path that writes clips back.
+  the export path that writes clips back. That path is built but not yet
+  reachable, so the add-only prompt it declares cannot fire today.
 - `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` is set: with
   limited access the app shows its own "select more" affordance instead
   of iOS re-prompting on its own schedule.
