@@ -141,15 +141,33 @@ final class VideoLibraryViewModel: ObservableObject {
     /// region and grows the loaded prefix when the user nears its end.
     func tileAppeared(at index: Int) {
         thumbnails.tileAppeared(at: index, in: videos)
-        if index >= videos.count - Self.loadMoreThreshold {
+        if Self.shouldLoadNextPage(tileIndex: index, loadedCount: videos.count) {
             loadNextPage()
         }
     }
 
+    /// Whether a tile appearing at `tileIndex` is close enough to the end of the loaded prefix to
+    /// grow it. Split out for the same reason as `libraryChangeUpdate`: the threshold arithmetic is
+    /// the part worth pinning, and the rest of `tileAppeared(at:)` needs a live thumbnail cache.
+    static func shouldLoadNextPage(tileIndex: Int, loadedCount: Int) -> Bool {
+        tileIndex >= loadedCount - loadMoreThreshold
+    }
+
+    /// The next slice of a fetch result to materialize, or nil when `loadedCount` already covers
+    /// everything there is. Both the first page and every later one go through here, so a fetch
+    /// result is never asked for zero objects and the bound lives in one place.
+    static func pageRange(loadedCount: Int, total: Int, pageSize: Int) -> Range<Int>? {
+        let end = min(total, loadedCount + pageSize)
+        guard end > loadedCount else { return nil }
+        return loadedCount..<end
+    }
+
     private func loadNextPage() {
-        guard let fetchResult, videos.count < fetchResult.count else { return }
-        let end = min(fetchResult.count, videos.count + Self.pageSize)
-        videos.append(contentsOf: fetchResult.objects(at: IndexSet(integersIn: videos.count..<end)))
+        guard let fetchResult,
+              let range = Self.pageRange(
+                  loadedCount: videos.count, total: fetchResult.count, pageSize: Self.pageSize)
+        else { return }
+        videos.append(contentsOf: fetchResult.objects(at: IndexSet(integersIn: range)))
     }
 
     private func observeLibraryChanges() {
@@ -210,9 +228,10 @@ final class VideoLibraryViewModel: ObservableObject {
     }
 
     private static func prefix(of result: PHFetchResult<PHAsset>, count: Int) -> [PHAsset] {
-        let end = min(result.count, count)
-        guard end > 0 else { return [] }
-        return result.objects(at: IndexSet(integersIn: 0..<end))
+        guard let range = pageRange(loadedCount: 0, total: result.count, pageSize: count) else {
+            return []
+        }
+        return result.objects(at: IndexSet(integersIn: range))
     }
 
     // MARK: - Selection
