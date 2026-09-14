@@ -248,7 +248,7 @@ final class PhotoVideoResolverTests: XCTestCase {
         let cases: [(Int, Classification)] = [
             (PHPhotosError.Code.networkAccessRequired.rawValue, .iCloudDownloadFailed),
             (PHPhotosError.Code.networkError.rawValue, .iCloudDownloadFailed),
-            (PHPhotosError.Code.invalidResource.rawValue, .unavailable),
+            (PHPhotosError.Code.invalidResource.rawValue, .unavailable)
         ]
 
         for (code, expected) in cases {
