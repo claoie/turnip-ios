@@ -44,6 +44,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # Prose in CONTRIBUTING.md names every directory under Turnip/, and
+      # nothing ties that sentence to the tree — adding a directory renames
+      # nothing and breaks no build, so a stale list stays green. Runs before
+      # the Xcode steps so drift costs seconds rather than a full build.
+      - name: Check the documented directory list against the tree
+        run: ci_scripts/check-directory-list.sh
+
       - name: Cache CocoaPods
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
