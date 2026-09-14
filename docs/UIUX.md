@@ -9,8 +9,9 @@ Companion to [`DESIGN.md`](DESIGN.md), which specifies the auto-edit *pipeline*
 doc specifies the *screens* the v1 app needs to carry a user from "I have a
 recording" to "clips are in my Photos library," and is scoped to v1
 (auto-clip + auto-crop, iOS-only, on-device). It does not cover v2 (community
-labeling, following/feed, Share Sheet, OTA models) — those get their own flow
-notes once the v1 screens exist and v2 work starts.
+labeling, following/feed) — those get their own flow notes once the v1 screens
+exist and v2 work starts. The Share Sheet and OTA models were scoped here as v2
+and have since been built ahead of that; see "Built ahead of this doc" below.
 
 ## Why this doc exists
 
@@ -117,15 +118,27 @@ flowchart TD
 
 - Accessibility acceptance criteria per screen — those live in
   [`ACCESSIBILITY.md`](ACCESSIBILITY.md) (issue #22) and are checked on each screen's PR.
-- Community upload opt-in, Share Sheet ([#12](https://github.com/hoiekim/turnip-ios/issues/12)),
-  OTA model updates ([#13](https://github.com/hoiekim/turnip-ios/issues/13)) —
-  all v2, layered onto this flow later (most likely: a Share action added to
-  Clip Detail and/or Export Confirmation once #12 lands).
+- Community upload opt-in — v2, layered onto this flow later.
 - Settings screen — nothing in v1 scope needs configurable state (aspect
   ratio, buffer duration) beyond the per-clip adjustment already covered by
   Clip Detail's drag handles.
 - Visual design (colors, typography, exact layout) — this doc fixes screens
   and transitions, not pixels.
+
+## Built ahead of this doc
+
+Two features this doc scoped as v2 are on `main` already. Neither is reachable
+from Home, so the flow above still describes what a user can actually do — but
+the code exists and a contributor should start from it rather than design it
+again.
+
+- **Share Sheet** — `Turnip/Sharing/ClipShareButton.swift`, placed on each row
+  of Export Confirmation. The Share action disables itself unless the URL is a
+  file URL that exists, so it never opens a sheet over nothing.
+- **OTA model updates** — `Turnip/ModelUpdates/`: a manifest client, a version
+  store with atomic replace, and a service that no-ops when no endpoint is
+  configured, which is the case today. No screen this doc specifies surfaces
+  it, and the doc does not yet say where one would go.
 
 ## Decisions (formerly open questions)
 
