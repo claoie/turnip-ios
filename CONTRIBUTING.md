@@ -241,8 +241,11 @@ SwiftLint runs in CI on every PR (`lint + build + test` — see
 ## Code organization
 
 `Turnip/` is a single Xcode target; its subdirectories are flat, one per
-domain, named for the domain they own (`App`, `Home`, `Models`, `Pose`,
-`PoseDiagnostic`, `Resources`, `TrickDetection`).
+domain, named for the domain they own (`App`, `ClipEditor`, `ClipList`,
+`ExportConfirmation`, `Home`, `ModelUpdates`, `Models`, `Pose`,
+`PoseDiagnostic`, `Processing`, `Resources`, `Sharing`, `TrickDetection`).
+`ci_scripts/check-directory-list.sh` compares that list against the tree on
+every PR, so adding a directory without naming it here fails CI.
 
 - A new screen or feature adds a new top-level directory. A directory named
   for a screen keeps only that screen's view, view model, and screen-private
