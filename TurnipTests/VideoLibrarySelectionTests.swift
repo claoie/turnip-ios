@@ -206,4 +206,3 @@ private final class StubAsset: PHAsset {
     override var localIdentifier: String { identifier }
     override var duration: TimeInterval { seconds }
 }
-
