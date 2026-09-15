@@ -127,21 +127,20 @@ flowchart TD
 
 ## Built ahead of this doc
 
-Two features this doc scoped as v2 are on `main` already. Nothing past Home is
-reachable yet, these two included, so the flow above is still the v1
-specification rather than a description of what a user can do today — but the
-code exists and a contributor should start from it rather than design it
-again.
+Two features this doc scoped as v2 are on `main` already, so a contributor
+should start from that code rather than design it again. One of them a user can
+already reach:
 
 - **Share Sheet** — `Turnip/Sharing/ClipShareButton.swift`, placed on each row
-  of Export Confirmation. The Share action disables itself unless the URL is a
-  file URL that exists when the row renders; that check is a render-time
-  snapshot rather than an invariant, so the caller owns the file's lifetime
-  from then on.
+  of Export Confirmation, which the flow above now reaches from Home. The Share
+  action disables itself unless the URL is a file URL that exists when the row
+  renders; that check is a render-time snapshot rather than an invariant, so
+  the caller owns the file's lifetime from then on.
 - **OTA model updates** — `Turnip/ModelUpdates/`: a manifest client, a version
   store with atomic replace, and a service that no-ops when no endpoint is
   configured, which is the case today. No screen this doc specifies surfaces
-  it, and the doc does not yet say where one would go.
+  it, no app code constructs it, and the doc does not yet say where one would
+  go.
 
 ## Decisions (formerly open questions)
 

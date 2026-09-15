@@ -34,28 +34,23 @@ as an explicit opt-in, and the privacy story will be updated then.
 
 ## Status
 
-Very early. As of 2026-09-13 the repo has initial app scaffolding: the
-Home screen (a grid of every video in your Photos library — the first of
-the v1 screens in [`docs/UIUX.md`](docs/UIUX.md)) and a pose-detection
-diagnostic screen (tap a video, run MoveNet Thunder on it, log per-frame
-confidence + keypoint count) — the latter is the design doc's "empirical
-test" first work item, not the auto-edit pipeline itself.
+Very early, but the v1 flow now runs end to end. Home (a grid of every
+video in your Photos library — the first of the v1 screens in
+[`docs/UIUX.md`](docs/UIUX.md)) pushes `Processing` when you tap a video;
+`Processing` runs the detection pipeline and pushes `ClipList`, whose
+triage grid opens `ClipEditor` and `ExportConfirmation`, and `Sharing`
+puts a Share action on each export row.
 
 Steps 4-6 of the pipeline — turning pose keypoints into trick windows and
 a crop rect — are library code under `Turnip/TrickDetection/`, unit-tested
-but not yet driven by a screen. Tapping a video on Home still opens the
-diagnostic, so the later v1 screens are not reachable from Home yet.
+and driven by `Processing`'s pipeline rather than by a screen of their own.
 
-The rest of the v1 flow is written but not connected to that entry point.
-`Processing`, `ClipList`, `ClipEditor` and `ExportConfirmation` each hold a
-real screen that nothing but an Xcode preview constructs — except
-`ExportConfirmationView`, which a `#if DEBUG` screenshot harness also builds
-under a UI-test launch argument — and the clip list pushes placeholder views
-rather than the editor and export screens sitting beside it. `Sharing` adds a
-Share action to export confirmation, which that same launch argument reaches
-and a running app does not. `ModelUpdates` holds an OTA client no app code
-constructs. Read those directories as tested components waiting to be wired,
-not as features you can run.
+Two directories sit outside that flow. `PoseDiagnostic` — the design doc's
+"empirical test" first work item, which runs MoveNet Thunder over a video
+and overlays per-frame keypoints — lost its entry point when Home started
+pushing `Processing`; only its own Xcode preview constructs it now.
+`ModelUpdates` holds an OTA client no app code constructs. Read those two
+as tested components, not as features you can run.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full architecture plan
 including the community labeling + continuous ML training that will
