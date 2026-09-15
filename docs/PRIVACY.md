@@ -20,12 +20,13 @@ marked as such below.
   but `https`, it takes its endpoint as a parameter rather than holding one, and
   `ModelUpdateService.checkForUpdates` returns on a `nil` base URL before it
   reaches the client. No app code constructs either type, so nothing supplies
-  that URL; the only callers are unit tests against a mock. Bytes do cross the
-  network when PhotoKit downloads an iCloud-only video (`isNetworkAccessAllowed`
-  in `PhotoVideoResolver`/`ThumbnailLoader`) — from the user's own iCloud,
-  through a system framework. Videos are read from the Photos library the user
-  grants access to, processed on-device by the bundled MoveNet model, and
-  exported clips are written back to Photos.
+  that URL; the service's only callers are unit tests against a mock, and the
+  client's own test exercises the `https` guard without issuing a request.
+  Bytes do cross the network when PhotoKit downloads an iCloud-only video
+  (`isNetworkAccessAllowed` in `PhotoVideoResolver`/`ThumbnailLoader`) — from
+  the user's own iCloud, through a system framework. Videos are read from the
+  Photos library the user grants access to, processed on-device by the bundled
+  MoveNet model, and exported clips are written back to Photos.
 - Nothing is uploaded, shared, or transmitted to any Turnip-controlled server.
 
 ## Privacy manifest (`Turnip/Resources/PrivacyInfo.xcprivacy`)

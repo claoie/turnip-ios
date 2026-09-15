@@ -48,12 +48,14 @@ diagnostic, so the later v1 screens are not reachable from Home yet.
 
 The rest of the v1 flow is written but not connected to that entry point.
 `Processing`, `ClipList`, `ClipEditor` and `ExportConfirmation` each hold a
-real screen that nothing but an Xcode preview constructs, and the clip list
-pushes placeholder views rather than the editor and export screens sitting
-beside it. `Sharing` adds a Share action to export confirmation, which a
-UI-test launch argument reaches and a running app does not. `ModelUpdates`
-holds an OTA client no app code constructs. Read those directories as
-tested components waiting to be wired, not as features you can run.
+real screen that nothing but an Xcode preview constructs — except
+`ExportConfirmationView`, which a `#if DEBUG` screenshot harness also builds
+under a UI-test launch argument — and the clip list pushes placeholder views
+rather than the editor and export screens sitting beside it. `Sharing` adds a
+Share action to export confirmation, which that same launch argument reaches
+and a running app does not. `ModelUpdates` holds an OTA client no app code
+constructs. Read those directories as tested components waiting to be wired,
+not as features you can run.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full architecture plan
 including the community labeling + continuous ML training that will
