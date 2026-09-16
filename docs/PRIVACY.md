@@ -62,10 +62,13 @@ require a manifest/signature. If a dependency is added, check both.
   library) or read/write — and exporting clips back to Photos needs the
   write half anyway, so one honest prompt covers both.
 - `NSPhotoLibraryUsageDescription` explains the read side in plain
-  language. `NSPhotoLibraryAddUsageDescription` ships alongside it, for
-  the export path that writes clips back — reachable from Home through
-  Processing and the clip list, so the add-only prompt it declares does
-  fire when a user confirms an export.
+  language. `NSPhotoLibraryAddUsageDescription` ships alongside it
+  because the export path — reachable from Home through Processing and
+  the clip list — calls `requestAuthorization(for: .addOnly)`, and iOS
+  terminates the app on that call when the string is absent. A user does
+  not normally see the string: reaching an export means the read/write
+  grant from Home is already in place, which determines add-only as
+  authorized, so the call returns without presenting a second prompt.
 - `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` is set: with
   limited access the app shows its own "select more" affordance instead
   of iOS re-prompting on its own schedule.
