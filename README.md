@@ -47,10 +47,12 @@ and driven by `Processing`'s pipeline rather than by a screen of their own.
 
 Two directories sit outside that flow. `PoseDiagnostic` — the design doc's
 "empirical test" first work item, which runs MoveNet Thunder over a video
-and overlays per-frame keypoints — lost its entry point when Home started
-pushing `Processing`; only its own Xcode preview constructs it now.
-`ModelUpdates` holds an OTA client no app code constructs. Read those two
-as tested components, not as features you can run.
+and overlays per-frame keypoints — is no longer pushed from Home, which
+goes to `Processing` instead. It is constructed by its own Xcode preview
+and by the `#if DEBUG` screenshot harness that `TurnipUITests` launches
+with `-screenshotPoseDiagnostic`. `ModelUpdates` holds an OTA client no
+app code constructs. Read those two as tested components, not as features
+you can run.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full architecture plan
 including the community labeling + continuous ML training that will
