@@ -14,13 +14,19 @@ marked as such below.
   Apple-mediated (Xcode Organizer + MetricKit) under the user's own "Share With App
   Developers" opt-in — not declarable as collected data. See `docs/DESIGN.md`
   decision #7.
-- No calls to any Turnip-controlled server in the v1 path (verified by inspection:
-  no `URLSession`/`URLRequest` usage in `Turnip/`). Bytes do cross the network when
-  PhotoKit downloads an iCloud-only video (`isNetworkAccessAllowed` in
-  `PhotoVideoResolver`/`ThumbnailLoader`) — from the user's own iCloud, through a
-  system framework. Videos are read from the Photos library the user grants access
-  to, processed on-device by the bundled MoveNet model, and exported clips are
-  written back to Photos.
+- No calls to any Turnip-controlled server in the v1 path. A `URLSession` client
+  for OTA model updates does exist — `Turnip/ModelUpdates/ModelUpdateClient.swift`,
+  the only networking code in `Turnip/` — and it is inert: it refuses any scheme
+  but `https`, it takes its endpoint as a parameter rather than holding one, and
+  `ModelUpdateService.checkForUpdates` returns on a `nil` base URL before it
+  reaches the client. No app code constructs either type, so nothing supplies
+  that URL; the service's only callers are unit tests against a mock, and the
+  client's own test exercises the `https` guard without issuing a request.
+  Bytes do cross the network when PhotoKit downloads an iCloud-only video
+  (`isNetworkAccessAllowed` in `PhotoVideoResolver`/`ThumbnailLoader`) — from
+  the user's own iCloud, through a system framework. Videos are read from the
+  Photos library the user grants access to, processed on-device by the bundled
+  MoveNet model, and exported clips are written back to Photos.
 - Nothing is uploaded, shared, or transmitted to any Turnip-controlled server.
 
 ## Privacy manifest (`Turnip/Resources/PrivacyInfo.xcprivacy`)
@@ -56,8 +62,13 @@ require a manifest/signature. If a dependency is added, check both.
   library) or read/write — and exporting clips back to Photos needs the
   write half anyway, so one honest prompt covers both.
 - `NSPhotoLibraryUsageDescription` explains the read side in plain
-  language. `NSPhotoLibraryAddUsageDescription` ships with the export
-  work (PR #55, issue #10), which is the first code path that writes.
+  language. `NSPhotoLibraryAddUsageDescription` ships alongside it
+  because the export path — reachable from Home through Processing and
+  the clip list — calls `requestAuthorization(for: .addOnly)`, and iOS
+  terminates the app on that call when the string is absent. A user does
+  not normally see the string: reaching an export means the read/write
+  grant from Home is already in place, which determines add-only as
+  authorized, so the call returns without presenting a second prompt.
 - `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` is set: with
   limited access the app shows its own "select more" affordance instead
   of iOS re-prompting on its own schedule.
@@ -99,9 +110,9 @@ require a manifest/signature. If a dependency is added, check both.
 `ITSAppUsesNonExemptEncryption` is `NO`: v1 talks to no Turnip-controlled server,
 so TestFlight uploads don't prompt for export-compliance answers. (The only
 network is iCloud downloads through PhotoKit, over HTTPS — exempt either way.)
-v2's OTA model-update polling uses HTTPS only, which is exempt — the flag stays
-`NO` then too. Revisit only if non-exempt encryption or non-HTTPS networking is
-introduced.
+The OTA model-update client now on `main` refuses any scheme but `https`, which
+is exempt as well, so the flag stays `NO` once an endpoint is configured.
+Revisit only if non-exempt encryption or non-HTTPS networking is introduced.
 
 ## Deferred to v2 / later
 
