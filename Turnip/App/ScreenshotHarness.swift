@@ -270,7 +270,7 @@ struct ScreenshotProcessingHarness: View {
                     asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
                     duration: 60),
                 runner: ScreenshotProcessingRunner(),
-                destination: { _ in EmptyView() })
+                destination: { _, _ in EmptyView() })
         }
     }
 }
