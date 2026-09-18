@@ -193,7 +193,7 @@ private final class ScriptedImageManager: PHImageManager, @unchecked Sendable {
 }
 
 /// A `PHAsset` carrying only what the selection path reads off one.
-private final class StubAsset: PHAsset {
+private final class StubAsset: PHAsset, @unchecked Sendable {
     private let identifier: String
     private let seconds: TimeInterval
 

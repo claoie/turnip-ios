@@ -58,8 +58,9 @@ final class ProcessingViewModel: ObservableObject {
         // Weak capture: the task must not keep the view model (and its screen) alive.
         runTask = Task { [weak self] in
             do {
-                let result = try await runner.run(video: video) { progress in
-                    await MainActor.run { [weak self] in self?.apply(progress, from: generation) }
+                let result = try await runner.run(video: video) { [weak self] progress in
+                    guard let self else { return }
+                    await MainActor.run { self.apply(progress, from: generation) }
                 }
                 await MainActor.run { [weak self] in self?.finish(with: result, from: generation) }
             } catch is CancellationError {

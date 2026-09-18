@@ -109,43 +109,6 @@ final class ClipListTests: XCTestCase {
         XCTAssertTrue(viewModel.keptItems.isEmpty)
     }
 
-    // MARK: - Trim rule (shared with ClipEditorViewModel)
-
-    func testListTrimStartStopsAtEndMinusMinimumDuration() {
-        // Mirrors ClipEditorTests' trim-clamping tests: the list's inline trim
-        // timeline and the editor's slider share the same clamp helpers, so the
-        // same drag must produce the same window on both surfaces.
-        let window = ClipEditorViewModel.trimmedStart(
-            TrickWindow(startTime: 2, endTime: 5), to: 4.9)
-
-        XCTAssertEqual(window.startTime, 4.5, accuracy: 0.0001)
-        XCTAssertEqual(window.endTime, 5, accuracy: 0.0001)
-    }
-
-    func testListTrimStartClampsToZero() {
-        let window = ClipEditorViewModel.trimmedStart(
-            TrickWindow(startTime: 2, endTime: 5), to: -5)
-
-        XCTAssertEqual(window.startTime, 0, accuracy: 0.0001)
-        XCTAssertEqual(window.endTime, 5, accuracy: 0.0001)
-    }
-
-    func testListTrimEndStopsAtStartPlusMinimumDuration() {
-        let window = ClipEditorViewModel.trimmedEnd(
-            TrickWindow(startTime: 2, endTime: 5), to: 2.1, duration: 10)
-
-        XCTAssertEqual(window.startTime, 2, accuracy: 0.0001)
-        XCTAssertEqual(window.endTime, 2.5, accuracy: 0.0001)
-    }
-
-    func testListTrimEndClampsToDuration() {
-        let window = ClipEditorViewModel.trimmedEnd(
-            TrickWindow(startTime: 2, endTime: 5), to: 600, duration: 10)
-
-        XCTAssertEqual(window.startTime, 2, accuracy: 0.0001)
-        XCTAssertEqual(window.endTime, 10, accuracy: 0.0001)
-    }
-
     // MARK: - Editor and export destinations
 
     @MainActor
@@ -322,15 +285,34 @@ final class ClipListTests: XCTestCase {
             9.0 / 16.0)
     }
 
-    @MainActor
-    func testPlaceholderAspectRatioFallsBackToTheCropRectWithoutATrack() async {
-        // The dummy asset resolves to nothing, so the track geometry never loads and
-        // the view model must fall back to the crop rect's own (encoded-space) ratio —
-        // the previous behavior — rather than failing.
-        let viewModel = ClipListViewModel(items: [makeItem()], asset: dummyAsset())
+    // MARK: - Add clip
 
-        let ratio = await viewModel.placeholderAspectRatio(for: makeItem())
-        XCTAssertEqual(ratio, 1.0)
+    @MainActor
+    func testAddClipAppendsAFullFrameClipAtTheStart() async throws {
+        // The dummy asset resolves to nothing, so duration never loads and the new
+        // clip falls back to the default 3-second window — clamped to the minimum
+        // clip duration, though 3s never actually hits that floor.
+        let viewModel = ClipListViewModel(items: [], asset: dummyAsset())
+
+        await viewModel.addClip()
+
+        XCTAssertEqual(viewModel.items.count, 1)
+        let added = try XCTUnwrap(viewModel.items.first)
+        XCTAssertEqual(added.window.startTime, 0)
+        XCTAssertEqual(added.window.endTime, 3)
+        XCTAssertEqual(added.cropRect, fullFrame)
+        XCTAssertTrue(added.isKept)
+    }
+
+    @MainActor
+    func testAddClipAppendsAfterExistingItems() async {
+        let existing = makeItem()
+        let viewModel = ClipListViewModel(items: [existing], asset: dummyAsset())
+
+        await viewModel.addClip()
+
+        XCTAssertEqual(viewModel.items.count, 2)
+        XCTAssertEqual(viewModel.items[0], existing)
     }
 
     // MARK: - ClipThumbnailLoader.croppedThumbnail

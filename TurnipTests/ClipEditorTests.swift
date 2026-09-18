@@ -289,13 +289,21 @@ final class ClipEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testVisibleRangePadsTheWindowWithContext() {
+    func testVisibleRangeSpansTheWholeAsset() {
+        // The timeline shows the whole video (not a zoomed range around the window),
+        // so a clip's position on it reads as "roughly this part of the video."
         let viewModel = makeViewModel(window: TrickWindow(startTime: 20, endTime: 23))
 
-        // Padding is max(window duration, 2s) = 3s each side.
         let range = viewModel.visibleRange
-        XCTAssertEqual(range?.lowerBound ?? -1, 17, accuracy: 0.0001)
-        XCTAssertEqual(range?.upperBound ?? -1, 26, accuracy: 0.0001)
+        XCTAssertEqual(range?.lowerBound ?? -1, 0, accuracy: 0.0001)
+        XCTAssertEqual(range?.upperBound ?? -1, duration, accuracy: 0.0001)
+    }
+
+    @MainActor
+    func testVisibleRangeIsNilBeforeDurationLoads() {
+        let viewModel = ClipEditorViewModel(source: makeSource(frames: twoPositionFrames()))
+
+        XCTAssertNil(viewModel.visibleRange)
     }
 
     @MainActor

@@ -92,6 +92,28 @@ struct ScreenshotClipListHarness: View {
     }
 }
 
+/// Clip list over real media (`-screenshotClipListMedia`): two clips within the
+/// generated sample movie's six seconds, so — unlike `-screenshotClipList`'s `/dev/null`
+/// asset — the asset duration actually loads and each tile's inline trim timeline
+/// renders instead of staying hidden behind its `if let duration` guard. Shares
+/// `ScreenshotClipEditorHarness`'s sample-movie writer and warm-up.
+struct ScreenshotClipListMediaHarness: View {
+    var body: some View {
+        NavigationStack {
+            ClipListView(
+                items: [
+                    ClipListItem(
+                        window: TrickWindow(startTime: 0.5, endTime: 2),
+                        cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1)),
+                    ClipListItem(
+                        window: TrickWindow(startTime: 3, endTime: 4.5),
+                        cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1))
+                ],
+                asset: AVURLAsset(url: ScreenshotClipEditorHarness.sampleMovieURL))
+        }
+    }
+}
+
 // MARK: - Clip editor
 
 /// Clip editor (`-screenshotClipEditor`): the trimmed clip looping with its live crop
@@ -111,7 +133,7 @@ struct ScreenshotClipEditorHarness: View {
     /// the accessing thread — so `warmUpSampleMovie()` starts it on a background
     /// queue from `TurnipApp.init()` (when the `-screenshotClipEditor` launch arg
     /// is present) before any view appears, keeping the encode off the UI thread.
-    private static let sampleMovieURL: URL = makeScreenshotSampleMovie()
+    fileprivate static let sampleMovieURL: URL = makeScreenshotSampleMovie()
 
     /// Starts the sample-movie encode on a background queue ahead of first use.
     /// Called from `TurnipApp.init()` when the `-screenshotClipEditor` launch arg
@@ -270,6 +292,23 @@ struct ScreenshotProcessingHarness: View {
                     asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
                     duration: 60),
                 runner: ScreenshotProcessingRunner(),
+                destination: { _, _ in EmptyView() })
+        }
+    }
+}
+
+/// Processing's resting state (`-screenshotProcessingIdle`): the picked video filling
+/// the screen with no native playback chrome, the thin scrub bar, and the manual
+/// "Start analysis" button. `autostart: false` so the pipeline never actually runs.
+struct ScreenshotProcessingIdleHarness: View {
+    var body: some View {
+        NavigationStack {
+            ProcessingView(
+                video: SelectedVideo(
+                    assetIdentifier: "screenshot",
+                    asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
+                    duration: 60),
+                autostart: false,
                 destination: { _, _ in EmptyView() })
         }
     }

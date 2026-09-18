@@ -1,22 +1,63 @@
 import AVFoundation
-import AVKit
 import SwiftUI
 
-/// The triage screen (`docs/UIUX.md` § "Clip List (triage)"): one card per
-/// detected trick window — thumbnail, an inline trim timeline with draggable
-/// start/end handles, duration, and the keep/discard toggle — plus the "Export N
-/// clips" action and a "Select All" / "Deselect All" toolbar button.
+/// The export-confirmation screen's per-clip export, wired to the real pipeline step 7
+/// (`ClipExporter`): trims the source video to the window, crops to its rect, and writes
+/// an `.mp4` into the screen's scratch directory. Failures surface as
+/// `ExportConfirmationError.exportFailed` so the screen's per-clip callout names the
+/// step; cancellation propagates untouched so the screen stops the run instead of
+/// failing the clip.
 ///
-/// The processing screen pushes this with the pipeline's output. Tapping a card's
-/// thumbnail plays the clip full-screen; a per-card Edit button navigates to the clip
-/// editor (which still owns crop); the export action goes to export confirmation. The
-/// back chevron pops to Home rather than to the processing screen, Photos-app style —
-/// centered inline title on the same line as the chevron.
-/// This view deliberately
-/// declares no `NavigationStack` of its own — it lives on the flow's shared stack.
+/// File-scope rather than a member of `ClipListView`: a static method value taken from a
+/// `View`-conforming type carries the enclosing type in its thunk, which the Swift 6
+/// concurrency checker won't treat as `@Sendable` even when the function itself captures
+/// nothing.
+private func exportOneClip(
+    _ window: TrickWindow, _ cropRect: NormalizedRect, _ asset: AVAsset, _ directory: URL,
+    _ progress: @escaping @Sendable (Double) -> Void
+) async throws -> URL {
+    do {
+        let exported = try await ClipExporter().export(
+            ClipSpec(window: window, cropRect: cropRect),
+            from: asset,
+            to: directory,
+            progress: progress)
+        return exported.fileURL
+    } catch {
+        if error is CancellationError { throw error }
+        throw ExportConfirmationError.exportFailed(reason: error.localizedDescription)
+    }
+}
+
+/// The export-confirmation screen's Photos save, wired to `ClipPhotosSaver` (add-only
+/// authorization). Failures surface as `ExportConfirmationError.photosSaveFailed` so the
+/// per-clip callout names the step. File-scope for the same reason as `exportOneClip`.
+private func saveOneClipToPhotos(_ url: URL) async throws {
+    do {
+        try await ClipPhotosSaver().saveVideo(at: url)
+    } catch {
+        throw ExportConfirmationError.photosSaveFailed(reason: error.localizedDescription)
+    }
+}
+
+/// The triage screen (`docs/UIUX.md` § "Clip List (triage)"): a grid of square tiles,
+/// one per detected trick window, plus a trailing "+" tile that appends a new clip. Each
+/// tile plays its clip inline on tap, draws a read-only timeline over the bottom
+/// showing where its window sits in the full source video (not adjustable here — that's
+/// what the editor is for), and carries an expand button (straight into the full
+/// `ClipEditorView` — "view large" and "edit" are the same entry point, not two icons
+/// on the tile) and the keep/discard toggle.
+///
+/// The processing screen pushes this with the pipeline's output; the export action goes
+/// to export confirmation. The back chevron pops to Home rather than to the processing
+/// screen, Photos-app style — centered inline title on the same line as the chevron.
+/// This view deliberately declares no `NavigationStack` of its own — it lives on the
+/// flow's shared stack.
 struct ClipListView: View {
     @StateObject private var viewModel: ClipListViewModel
+    @StateObject private var playback: ClipPlaybackController
     @State private var showingExport = false
+    @State private var expandTarget: ExpandTarget?
     let popToRoot: () -> Void
 
     init(
@@ -27,40 +68,8 @@ struct ClipListView: View {
     ) {
         _viewModel = StateObject(wrappedValue: ClipListViewModel(
             items: items, asset: asset, loader: loader))
+        _playback = StateObject(wrappedValue: ClipPlaybackController(asset: asset))
         self.popToRoot = popToRoot
-    }
-
-    /// The export-confirmation screen's per-clip export, wired to the real
-    /// pipeline step 7 (`ClipExporter`): trims the source video to the window,
-    /// crops to its rect, and writes an `.mp4` into the screen's scratch
-    /// directory. Failures surface as `ExportConfirmationError.exportFailed`
-    /// so the screen's per-clip callout names the step; cancellation
-    /// propagates untouched so the screen stops the run instead of failing
-    /// the clip.
-    private static let exportOneClip: ExportOneClip = { window, cropRect, asset, directory, progress in
-        do {
-            let exported = try await ClipExporter().export(
-                ClipSpec(window: window, cropRect: cropRect),
-                from: asset,
-                to: directory,
-                progress: progress)
-            return exported.fileURL
-        } catch {
-            if error is CancellationError { throw error }
-            throw ExportConfirmationError.exportFailed(reason: error.localizedDescription)
-        }
-    }
-
-    /// The export-confirmation screen's Photos save, wired to `ClipPhotosSaver`
-    /// (add-only authorization). Failures surface as
-    /// `ExportConfirmationError.photosSaveFailed` so the per-clip callout names
-    /// the step.
-    private static let saveOneClipToPhotos: SaveOneClipToPhotos = { url in
-        do {
-            try await ClipPhotosSaver().saveVideo(at: url)
-        } catch {
-            throw ExportConfirmationError.photosSaveFailed(reason: error.localizedDescription)
-        }
     }
 
     var body: some View {
@@ -70,8 +79,13 @@ struct ClipListView: View {
                 spacing: 16
             ) {
                 ForEach(viewModel.items) { item in
-                    ClipCardView(item: item, viewModel: viewModel)
+                    ClipCardView(
+                        item: item,
+                        viewModel: viewModel,
+                        playback: playback,
+                        onExpand: { expandTarget = ExpandTarget(id: item.id) })
                 }
+                AddClipTile { Task { await viewModel.addClip() } }
             }
             .padding()
         }
@@ -100,27 +114,12 @@ struct ClipListView: View {
                 }
             }
         }
-        .navigationDestination(for: ClipListDestination.self) { destination in
-            switch destination {
-            case .editor(let id):
-                // The editor's commit writes back into the list by id so
-                // trim/crop edits commit on back-navigation (docs/UIUX.md
-                // § "Clip Detail / Editor").
-                if let item = viewModel.binding(for: id) {
-                    ClipEditorView(
-                        source: viewModel.editorSource(for: item.wrappedValue),
-                        onCommit: { result in
-                            viewModel.applyEditorResult(result, to: id)
-                        })
-                }
-            }
-        }
         .navigationDestination(isPresented: $showingExport) {
             ExportConfirmationView(
                 items: viewModel.exportConfirmationItems,
                 asset: viewModel.sourceAsset,
-                exportClip: Self.exportOneClip,
-                saveToPhotos: Self.saveOneClipToPhotos,
+                exportClip: exportOneClip,
+                saveToPhotos: saveOneClipToPhotos,
                 popToRoot: popToRoot)
         }
         .safeAreaInset(edge: .bottom) {
@@ -131,204 +130,200 @@ struct ClipListView: View {
                 .padding()
                 .background(.thinMaterial)
         }
+        .fullScreenCover(item: $expandTarget) { target in
+            editor(for: target)
+        }
+        .onChange(of: expandTarget?.id) { _ in
+            // The grid's own inline playback shouldn't keep running behind the
+            // editor, and shouldn't resume stale audio once the editor closes.
+            playback.stop()
+        }
+    }
+
+    /// The expand button's destination: the full `ClipEditorView` (crop + trim) —
+    /// expand goes directly to the editor rather than through an intermediate
+    /// full-screen viewer, merging "view large" and "edit" into one entry point.
+    @ViewBuilder
+    private func editor(for target: ExpandTarget) -> some View {
+        if let itemBinding = viewModel.binding(for: target.id) {
+            NavigationStack {
+                ClipEditorView(
+                    source: viewModel.editorSource(for: itemBinding.wrappedValue),
+                    onCommit: { result in viewModel.applyEditorResult(result, to: target.id) }
+                )
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            expandTarget = nil
+                        } label: {
+                            Image(systemName: "chevron.backward")
+                        }
+                        .accessibilityLabel("Back to clips")
+                    }
+                }
+            }
+        }
     }
 }
 
-/// The clip list's navigation exit: the card's Edit button goes to the editor. The
-/// destination carries the item's id rather than the item itself so the editor can bind
-/// back into the view model's list — edits commit to the triage list on back-navigation
-/// instead of dying with a value copy.
-/// (Tapping a card's thumbnail plays the clip full-screen instead of navigating
-/// anywhere; the editor stays reachable through the Edit button.)
-/// The export action uses `isPresented` instead, so the destination reads the kept clips at
-/// navigation time rather than at body-evaluation time.
-private enum ClipListDestination: Hashable {
-    case editor(UUID)
+/// The expand button's presentation target: `UUID` alone isn't `Identifiable`, and
+/// `fullScreenCover(item:)` needs one to know which clip to open (and to dismiss when
+/// it goes back to `nil`).
+private struct ExpandTarget: Identifiable {
+    let id: UUID
 }
 
-/// One triage card: the clip's thumbnail (tap to play the clip full-screen), its inline
-/// trim timeline, its duration, and the keep/discard toggle plus the Edit button.
-///
-/// The toggle and the Edit button sit *outside* the play button as a `ZStack` overlay so
-/// tapping either never starts playback — the issue calls the toggle a quick action that
-/// must not require opening detail, and the editor stays one tap away without hijacking
-/// the card. The trim timeline sits below the thumbnail, also outside the play button,
-/// so handle drags never fight the tap gesture.
+/// The "+" tile: a grey square with a centered plus sign, appended after every clip
+/// card. Tapping it appends a new full-frame clip at the start of the asset (`docs/UIUX.md`
+/// § "Clip List (triage)"), which the user then trims like any other card.
+private struct AddClipTile: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(.secondarySystemFill))
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    Image(systemName: "plus")
+                        .font(.system(size: 32, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add clip")
+    }
+}
+
+/// One triage tile: a square clip surface (thumbnail, or the live inline playback while
+/// it's the active clip) with the expand button at the top-leading corner, the
+/// keep/discard toggle at the top-trailing corner, and a read-only range timeline
+/// overlaid on the bottom edge — all siblings drawn as overlays on the tap-driven media
+/// layer rather than nested inside a shared `Button`, so each keeps its own hit target
+/// instead of racing the tile's play/pause tap (the bug in the previous pencil-icon
+/// button).
 private struct ClipCardView: View {
     let item: ClipListItem
     @ObservedObject var viewModel: ClipListViewModel
+    @ObservedObject var playback: ClipPlaybackController
+    let onExpand: () -> Void
+
     @State private var thumbnail: CGImage?
-    @State private var placeholderRatio: CGFloat?
     @State private var duration: TimeInterval?
-    @State private var isPlaying = false
+
+    private var isActive: Bool { playback.activeItemID == item.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .topTrailing) {
-                Button {
-                    isPlaying = true
-                } label: {
-                    thumbnailView
-                }
-                .buttonStyle(.plain)
-                // The UI-test screenshot harness waits on this label to prove the
-                // thumbnail fallback actually engaged (the nav bar alone appears
-                // whether or not the decode failed). The placeholder's own label
-                // inside `thumbnailView` is swallowed by the Button, so the Button
-                // carries it while the fallback is showing.
-                .accessibilityLabel(thumbnail == nil ? "Thumbnail placeholder" : "Play clip")
-
-                HStack(spacing: 0) {
-                    // A real NavigationLink (not a Button driving state): the
-                    // list's `.navigationDestination(for:)` below is the iOS 16
-                    // entry point — the iOS 17 `item:` variant can't be used
-                    // with this target.
-                    NavigationLink(value: ClipListDestination.editor(item.id)) {
-                        Image(systemName: "pencil.circle")
-                            .font(.title2)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(8)
-                    .accessibilityLabel("Edit clip")
-
-                    Button(
-                        action: { viewModel.toggleKeep(item) },
-                        label: {
-                            Image(systemName: item.isKept ? "checkmark.circle.fill" : "circle")
-                                .font(.title2)
-                        }
-                    )
-                    .buttonStyle(.plain)
-                    .padding(8)
-                    .accessibilityLabel(item.isKept ? "Discard clip" : "Keep clip")
-                }
-            }
-            .opacity(item.isKept ? 1 : 0.45)
-
-            if let duration {
-                ClipWindowTrimView(window: windowBinding, duration: duration)
-            }
-
+            tile
             Text(item.durationLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .fullScreenCover(isPresented: $isPlaying) {
-            ClipPlayerView(window: playbackWindow, asset: viewModel.sourceAsset)
-        }
         .task {
-            // Fetch the displayed-space placeholder ratio alongside the thumbnail. The
-            // ratio is cached per asset, and the thumbnail shares one in-flight decode
-            // per card — a `.task` re-fire joins the decode already running (or reads
-            // the cached image) instead of seeking the same frame a second time. The
-            // duration is cached per asset the same way, for the trim timeline.
-            async let ratio = viewModel.placeholderAspectRatio(for: item)
+            // The thumbnail decode and the shared asset duration each dedupe/cache in
+            // the view model, so a re-fired `.task` (e.g. scrolling the card off-screen
+            // and back) joins the work already done instead of repeating it.
             async let image = viewModel.thumbnail(for: item)
             async let assetDuration = viewModel.assetDuration()
-            placeholderRatio = await ratio
             thumbnail = await image
             duration = await assetDuration
         }
     }
 
-    /// The window as of now, for playback and the trim binding: trims land in the view
-    /// model, and both read the current value rather than the card's snapshot.
-    private var playbackWindow: TrickWindow {
-        viewModel.items.first(where: { $0.id == item.id })?.window ?? item.window
-    }
-
-    /// A write-through binding to the item's window for the inline trim timeline.
-    private var windowBinding: Binding<TrickWindow> {
-        Binding(
-            get: { playbackWindow },
-            set: { viewModel.setWindow($0, for: item.id) }
-        )
+    private var tile: some View {
+        GeometryReader { proxy in
+            mediaLayer
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipped()
+                .contentShape(Rectangle())
+                .onTapGesture { playback.toggle(item) }
+                // The UI-test screenshot harness waits on this label to prove the
+                // thumbnail fallback actually engaged.
+                .accessibilityLabel(
+                    thumbnail == nil && !isActive
+                        ? "Thumbnail placeholder"
+                        : (playback.isPlaying && isActive ? "Pause clip" : "Play clip"))
+                .accessibilityAddTraits(.isButton)
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(alignment: .topLeading) { expandButton }
+        .overlay(alignment: .topTrailing) { keepButton }
+        .overlay(alignment: .bottom) { trimOverlay }
     }
 
     @ViewBuilder
-    private var thumbnailView: some View {
-        if let image = thumbnail {
+    private var mediaLayer: some View {
+        if isActive, let player = playback.player {
+            BareVideoPlayerView(player: player, videoGravity: .resizeAspectFill)
+        } else if let thumbnail {
             // The generator hands back the displayed (upright) frame, so `.up` is exact —
             // no UIKit bridge needed.
-            Image(decorative: image, scale: 1.0, orientation: .up)
+            Image(decorative: thumbnail, scale: 1.0, orientation: .up)
                 .resizable()
-                .scaledToFit()
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .scaledToFill()
         } else {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.quaternary)
-                .aspectRatio(placeholderRatio ?? encodedSpaceRatio, contentMode: .fit)
+            Color(.quaternarySystemFill)
                 .overlay { ProgressView() }
         }
     }
 
-    /// The crop rect's own ratio (encoded space): the best guess before the track
-    /// geometry loads. The view model replaces it with the displayed-space ratio —
-    /// the space the decoded thumbnail renders in — as soon as the track's
-    /// `preferredTransform` is known, so cards don't reflow when thumbnails land.
-    private var encodedSpaceRatio: CGFloat {
-        let width = CGFloat(item.cropRect.width), height = CGFloat(item.cropRect.height)
-        guard width > 0, height > 0 else { return 9.0 / 16.0 }
-        return width / height
+    /// The diameter every top-corner icon circle renders at, kept/discarded or not —
+    /// a fixed frame rather than content-driven padding, so swapping the keep button's
+    /// icon (or hiding it entirely for the unselected state) can never change its size
+    /// relative to the expand button's.
+    private static let iconButtonDiameter: CGFloat = 28
+
+    private var expandButton: some View {
+        tileButton(systemImage: "arrow.up.left.and.arrow.down.right", action: onExpand)
+            .accessibilityLabel("Expand clip")
     }
-}
 
-/// Full-screen playback for one clip, presented from the card's thumbnail tap
-/// (`docs/UIUX.md` § "Clip List (triage)").
-///
-/// Seeks to the window's start on appear, plays, and pauses at the window's end via a
-/// boundary-time observer; the close button dismisses. The player is torn down on
-/// disappear so no audio keeps running behind the list.
-private struct ClipPlayerView: View {
-    let window: TrickWindow
-    let asset: AVAsset
-    @Environment(\.dismiss) private var dismiss
-    @State private var player: AVPlayer?
-    @State private var endObserver: Any?
+    /// Photos-style selection marker: a solid blue circle with a white checkmark when
+    /// kept, the same semi-transparent grey circle the other tile buttons use —
+    /// but empty — when discarded. Custom rather than `tileButton`, since only this one
+    /// needs a background color that changes with state.
+    private var keepButton: some View {
+        Button(action: toggleKeep) {
+            ZStack {
+                Circle().fill(item.isKept ? Color.accentColor : Color.black.opacity(0.4))
+                if item.isKept {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: Self.iconButtonDiameter, height: Self.iconButtonDiameter)
+        }
+        .buttonStyle(.plain)
+        .padding(6)
+        .accessibilityLabel(item.isKept ? "Discard clip" : "Keep clip")
+    }
 
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            Color.black.ignoresSafeArea()
-            if let player {
-                VideoPlayer(player: player)
-                    .ignoresSafeArea()
-            } else {
-                ProgressView()
-                    .tint(.white)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.title2)
-                    .foregroundStyle(.white)
-                    .padding()
-            }
-            .accessibilityLabel("Close player")
+    private func toggleKeep() {
+        viewModel.toggleKeep(item)
+    }
+
+    private func tileButton(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: Self.iconButtonDiameter, height: Self.iconButtonDiameter)
+                .background(.black.opacity(0.4), in: Circle())
         }
-        .task {
-            let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-            self.player = player
-            player.seek(
-                to: CMTime(seconds: window.startTime, preferredTimescale: 600),
-                toleranceBefore: .zero,
-                toleranceAfter: .zero)
-            endObserver = player.addBoundaryTimeObserver(
-                forTimes: [NSValue(
-                    time: CMTime(seconds: window.endTime, preferredTimescale: 600))],
-                queue: .main
-            ) { [weak player] in
-                player?.pause()
-            }
-            player.play()
-        }
-        .onDisappear {
-            if let endObserver, let player {
-                player.removeTimeObserver(endObserver)
-            }
-            player?.pause()
-            self.endObserver = nil
+        .buttonStyle(.plain)
+        .padding(6)
+    }
+
+    @ViewBuilder
+    private var trimOverlay: some View {
+        if let duration {
+            ClipRangeTimelineView(window: item.window, duration: duration)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.35))
         }
     }
 }

@@ -1,14 +1,14 @@
 import AVFoundation
-import AVKit
 import SwiftUI
 
 /// The pipeline progress screen (`docs/UIUX.md` § "Processing").
 ///
 /// Pushed onto the flow's shared `NavigationStack` when a video is picked. It does *not*
-/// start the pipeline on appear: the idle state shows the picked video with native
-/// playback controls and a manual "Start analysis" button — black background, no title,
-/// Photos-app look. Once started it shows real per-frame progress ("Analyzing frame 400
-/// of 1,200"), and on success navigates to `destination` with the detected clips. Empty
+/// start the pipeline on appear: the idle state fills the screen with the picked video
+/// (no native playback chrome — a thin scrub bar draws over the bottom) and a manual
+/// "Start analysis" button — black background, no title, Photos-app look. Once started
+/// it shows real per-frame progress ("Analyzing frame 400 of 1,200"), and on success
+/// navigates to `destination` with the detected clips. Empty
 /// and error states stay on this screen with a way back. Like the other pushed screens,
 /// it declares no `NavigationStack` of its own.
 ///
@@ -81,7 +81,7 @@ struct ProcessingView<Destination: View>: View {
         }
         .task {
             if player == nil {
-                player = AVPlayer(playerItem: AVPlayerItem(asset: video.asset))
+                player = AVPlayer(playerItem: AVPlayerItem(sdrAsset: video.asset))
             }
             if autostart {
                 viewModel.start(video: video)
@@ -101,37 +101,37 @@ struct ProcessingView<Destination: View>: View {
         return false
     }
 
-    /// The resting state: the picked video, large, with native playback controls, and a
-    /// manual "Start analysis" button below it. Black background, no title — the Photos
-    /// app look; the back chevron (to Home) is the only chrome.
+    /// The resting state: the picked video fills the screen with no native playback
+    /// chrome (`BareVideoPlayerView`) — Photos-app look, black background, no title, no
+    /// caption. A thin scrub bar and the manual "Start analysis" button sit over the
+    /// bottom of the video rather than pushing it into a boxed player.
     private var idleState: some View {
-        VStack(spacing: 20) {
+        ZStack {
+            Color.black.ignoresSafeArea()
             if let player {
-                VideoPlayer(player: player)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                BareVideoPlayerView(player: player)
+                    .ignoresSafeArea()
             } else {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(.quaternary)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .overlay { ProgressView() }
+                ProgressView().tint(.white)
             }
-            Text("Play the video, or start analysis when ready.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            // Pause the idle player before the `VideoPlayer` leaves the hierarchy:
-            // nothing would call `pause()` on it afterwards, so its audio would
-            // keep playing behind the progress UI and the clip list.
-            Button("Start analysis") {
-                player?.pause()
-                viewModel.start(video: video)
-            }
-            .buttonStyle(.borderedProminent)
-            Spacer()
         }
-        .padding()
-        .background(Color.black.ignoresSafeArea())
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 12) {
+                if let player {
+                    VideoScrubBar(player: player)
+                }
+                // Pause the idle player before this state leaves the hierarchy:
+                // nothing would call `pause()` on it afterwards, so its audio would
+                // keep playing behind the progress UI and the clip list.
+                Button("Start analysis") {
+                    player?.pause()
+                    viewModel.start(video: video)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 24)
+        }
     }
 
     private func processingState(_ progress: ProcessingProgress) -> some View {

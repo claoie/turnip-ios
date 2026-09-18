@@ -36,9 +36,8 @@ flowchart TD
     B -->|cancel| A
     E1 -->|back to Home| A
     E2 -->|retry / back to Home| A
-    C -->|tap a clip's thumbnail| P[Clip Player]
-    P -->|close| C
-    C -->|tap a clip's Edit button| D[Clip Detail / Editor]
+    C -->|tap a tile| C
+    C -->|tap a tile's expand button| D[Clip Detail / Editor]
     D -->|save changes| C
     D -->|discard| C
     C -->|export kept clips| F[Export Confirmation]
@@ -71,10 +70,11 @@ flowchart TD
 
 ### 2. Processing
 
-- Does not auto-start. The screen shows the picked video large with native
-  playback controls and a "Start analysis" button — black background, no title,
-  Photos-app look, back chevron to Home. The user plays the video, or starts
-  analysis when ready.
+- Does not auto-start. The screen fills with the picked video (fit to the
+  screen, no native playback chrome) and a thin scrub bar (play/pause, seek,
+  mute) draws over the bottom, with a "Start analysis" button below it —
+  black background, no title, no caption text, Photos-app look, back chevron
+  to Home. The user plays the video, or starts analysis when ready.
 - Once started, shows the full pipeline run: frame sampling → pose inference →
   motion signal → peak detection → crop rect (per issues
   [#8](https://github.com/hoiekim/turnip-ios/issues/8)–[#9](https://github.com/hoiekim/turnip-ios/issues/9)).
@@ -88,14 +88,22 @@ flowchart TD
 
 ### 3. Clip List (triage)
 
-- One card per detected trick window: thumbnail (frame at the window's
-  midpoint, per the computed crop rect), an inline trim timeline with draggable
-  start/end handles bound to the clip's window (same visual language as the
-  editor's scrub bar), duration, keep/discard toggle.
-- Tapping a card's thumbnail plays the clip full-screen (plays the window, stops
-  at its end); the keep/discard toggle itself is a quick action that doesn't
-  start playback. A per-card Edit button opens Clip Detail — the editor still
-  owns crop.
+- A grid of square tiles, one per detected trick window, plus a trailing "+"
+  tile (grey square, centered plus sign) that appends a new full-frame clip at
+  the start of the asset for the user to trim.
+- Each tile shows the clip's thumbnail; tapping the tile plays it inline (loops
+  the window, stops at its end) rather than navigating anywhere or opening a
+  full-screen player. A thin, read-only timeline overlays the bottom edge of
+  the tile: it spans the whole source video with the clip's window drawn as a
+  highlighted segment, so a glance at the grid shows roughly which part of the
+  video each clip is from. It isn't draggable — trimming happens in the editor
+  (§4).
+- Two small controls overlay the tile's top corners: an expand button
+  (top-leading) and the keep/discard toggle (top-trailing) — a quick action
+  that doesn't start playback.
+- The expand button opens the full Clip Detail / Editor (§4) directly — the
+  single entry point into "view large" and "edit," merged rather than a
+  separate pencil icon on the tile.
 - A "Select All" / "Deselect All" toolbar button at the top marks every clip
   kept or clears every keep flag.
 - A visible "Export N clips" action, enabled once at least one clip is kept.
@@ -105,16 +113,22 @@ flowchart TD
 
 ### 4. Clip Detail / Editor
 
-- The piece missing from #11 as currently scoped. Full-screen, one clip at a
-  time:
+- Reached from Clip List's expand button (§3) — the tile's single detail entry
+  point, not a separate pencil icon. Full-screen, one clip at a time:
   - Video player showing the trimmed clip looping, cropped to the 9:16 export framing
     by default — what the user sees is what the export produces (issue #88). A "Show
     full frame" toggle switches to the whole landscape frame with the live crop rect
     drawn over it; the dimmed surround marks what export cuts away, for surrounding
     context while trimming.
-  - Scrub bar with drag handles on start/end (adjusts the trick window from
+  - Scrub bar spanning the whole source video (not a zoomed range around the
+    window) with drag handles on start/end — adjusts the trick window from
     issue #8's output; live-updates the crop rect per issue #9 if the window
-    changes, since the crop rect is a function of which frames are in play).
+    changes, since the crop rect is a function of which frames are in play.
+    Full-video handles are naturally imprecise on a long clip, so dragging
+    farther vertically from the track slows the handle down (common
+    photo/video trim gesture): near the track it tracks the touch 1:1; drag
+    away and the same finger movement moves it a smaller fraction of the way,
+    for fine control. Moving back to the track snaps to full speed again.
   - Keep/discard toggle (mirrors the list's toggle — editing a clip you're
     about to discard should still be possible, just not required).
   - Back to Clip List commits the edits; no separate "save" step needed if

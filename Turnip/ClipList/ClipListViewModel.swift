@@ -18,13 +18,6 @@ final class ClipListViewModel: ObservableObject {
     private let loader: ClipThumbnailLoader
     private var inFlight: [UUID: Task<CGImage?, Never>] = [:]
 
-    /// The video track's geometry, loaded once per asset and shared by every card's
-    /// placeholder-ratio math. `nil` when the asset has no video track or can't be
-    /// read — cards then fall back to the crop rect's own (encoded-space) ratio.
-    private var trackGeometryTask: Task<
-        (naturalSize: CGSize, preferredTransform: CGAffineTransform)?, Never
-    >?
-
     /// The asset's duration in seconds, loaded once per asset and shared by every
     /// card's inline trim timeline. `nil` when the asset can't be read — the timeline
     /// then hides itself rather than guessing a scale.
@@ -130,20 +123,6 @@ final class ClipListViewModel: ObservableObject {
         }
     }
 
-    /// Replaces the window of the item with the given id — the card's inline trim
-    /// timeline writes through this. The crop rect and keep/discard decision are
-    /// preserved; only the window moves. A no-op for unknown ids, same convention as
-    /// `toggleKeep`.
-    func setWindow(_ window: TrickWindow, for id: UUID) {
-        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
-        let current = items[index]
-        items[index] = ClipListItem(
-            id: id,
-            window: window,
-            cropRect: current.cropRect,
-            isKept: current.isKept)
-    }
-
     /// A write-through binding to one item, for a destination that edits a clip in place.
     /// Keyed by id on both ends rather than closing over an index: get and set resolve
     /// the item from the current list. `nil` when the id is no longer in the list.
@@ -158,41 +137,18 @@ final class ClipListViewModel: ObservableObject {
         )
     }
 
-    /// The placeholder tile's aspect ratio for `item`, computed in the displayed
-    /// frame's space — the space the decoded thumbnail renders in — so cards don't
-    /// reflow when thumbnails land. Falls back to the crop rect's own ratio
-    /// (encoded space, the previous behavior) when the track geometry can't be
-    /// loaded, and to 9:16 for a degenerate crop rect.
-    func placeholderAspectRatio(for item: ClipListItem) async -> CGFloat {
-        if let (naturalSize, preferredTransform) = await trackGeometry() {
-            return ClipThumbnailLoader.displayedAspectRatio(
-                cropRect: item.cropRect,
-                naturalSize: naturalSize,
-                preferredTransform: preferredTransform)
-        }
-        let width = CGFloat(item.cropRect.width), height = CGFloat(item.cropRect.height)
-        guard width > 0, height > 0 else { return 9.0 / 16.0 }
-        return width / height
+    /// The "+" tile's action: appends a new clip covering the first few seconds of the
+    /// asset (or its full duration if shorter), full-frame crop. The user trims it with
+    /// the same inline timeline every other card uses; there's no separate creation UI.
+    func addClip() async {
+        let duration = await assetDuration() ?? Self.defaultNewClipDuration
+        let end = max(min(Self.defaultNewClipDuration, duration), ClipEditorViewModel.minimumClipDuration)
+        items.append(ClipListItem(
+            window: TrickWindow(startTime: 0, endTime: end),
+            cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1)))
     }
 
-    /// Loads the video track's geometry once per asset; concurrent callers share the
-    /// single in-flight task. `@MainActor`-serialized, so the check-then-set is
-    /// race-free (same pattern as `inFlight` above).
-    private func trackGeometry() async -> (
-        naturalSize: CGSize, preferredTransform: CGAffineTransform
-    )? {
-        if trackGeometryTask == nil {
-            trackGeometryTask = Task { [asset] in
-                guard let track = try? await asset.loadTracks(withMediaType: .video).first,
-                      let naturalSize = try? await track.load(.naturalSize),
-                      let preferredTransform = try? await track.load(.preferredTransform)
-                else { return nil }
-                return (naturalSize, preferredTransform)
-            }
-        }
-        guard let task = trackGeometryTask else { return nil }
-        return await task.value
-    }
+    private static let defaultNewClipDuration: TimeInterval = 3
 
     /// Loads the asset's duration once per asset; concurrent callers share the single
     /// in-flight task. `@MainActor`-serialized, so the check-then-set is race-free

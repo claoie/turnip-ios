@@ -82,15 +82,14 @@ final class ClipEditorViewModel: ObservableObject {
         ClipDurationFormatter.string(from: window.endTime - window.startTime)
     }
 
-    /// The timeline's visible range: the draft window plus context on both sides, so the
-    /// handles stay draggable on a multi-minute video. Nil until the duration loads.
+    /// The timeline's visible range: the whole source video, so its position always
+    /// reads as "roughly this part of the video," matching the clip list's tiles
+    /// (`docs/UIUX.md` § "Clip Detail / Editor"). This trades away handle precision on
+    /// a long video — `TrimSliderView`'s vertical drag-to-slow gesture is the mitigation.
+    /// Nil until the duration loads.
     var visibleRange: ClosedRange<TimeInterval>? {
         guard let duration, duration > 0 else { return nil }
-        let padding = max(window.endTime - window.startTime, 2.0)
-        let lower = max(window.startTime - padding, 0)
-        let upper = min(window.endTime + padding, duration)
-        guard lower < upper else { return nil }
-        return lower...upper
+        return 0...duration
     }
 
     /// The overlay geometry in one value: the displayed (upright) frame size plus the crop
@@ -212,10 +211,8 @@ final class ClipEditorViewModel: ObservableObject {
     }
 
     /// Drags the start handle of `window` to `time`, clamped into `[0, end -
-    /// minimumClipDuration]`. Pure so the trim rule is shared with the clip list's
-    /// inline trim timeline (`ClipWindowTrimView`) and unit-testable from both
-    /// surfaces — the two used to reimplement this rule separately, and a rule
-    /// fixed in one place would silently diverge from the other.
+    /// minimumClipDuration]`. Pure (and `static`) so the clamp rule is unit-testable
+    /// without a player or an asset.
     nonisolated static func trimmedStart(
         _ window: TrickWindow, to time: TimeInterval
     ) -> TrickWindow {
@@ -309,7 +306,7 @@ final class ClipEditorViewModel: ObservableObject {
     private func startPreview() {
         isTrimming = false
         if player.currentItem == nil {
-            player.replaceCurrentItem(with: AVPlayerItem(asset: source.asset))
+            player.replaceCurrentItem(with: AVPlayerItem(sdrAsset: source.asset))
         }
         if timeObserver == nil {
             let interval = CMTime(seconds: 1.0 / 15.0, preferredTimescale: 600)

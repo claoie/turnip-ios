@@ -70,7 +70,7 @@ let exportDirectoryNamePrefix = "turnip-export-"
 /// app's temp directory, so repeated visits never share outputs. The screen deletes it
 /// in `tearDown()`. Internal so tests can pass their own directory and assert on the
 /// lifecycle without touching the real tmp dir.
-func defaultExportDirectory() -> URL {
+@Sendable func defaultExportDirectory() -> URL {
     FileManager.default.temporaryDirectory
         .appendingPathComponent("\(exportDirectoryNamePrefix)\(UUID().uuidString)", isDirectory: true)
 }

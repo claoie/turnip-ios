@@ -89,6 +89,39 @@ final class ScreenshotTests: XCTestCase {
         addScreenshot(named: "clip-list-triage")
     }
 
+    /// Clip list over real media: the `/dev/null` asset in `testClipListTriage` never
+    /// loads a duration, so its tiles' read-only range timeline stays hidden behind its
+    /// `if let duration` guard — this proves the timeline actually renders once the
+    /// asset loads for real.
+    func testClipListMedia() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotClipListMedia"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Clips"].waitForExistence(timeout: 15))
+        let rangeTimeline = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH 'Clip from'"))
+            .firstMatch
+        XCTAssertTrue(rangeTimeline.waitForExistence(timeout: 15))
+        addScreenshot(named: "clip-list-media")
+    }
+
+    /// Tapping a tile's expand button opens the full `ClipEditorView` directly —
+    /// expand is the single entry point into detail/editing, not a separate pencil
+    /// icon and not an intermediate full-screen viewer.
+    func testClipListExpandOpensEditor() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotClipListMedia"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Clips"].waitForExistence(timeout: 15))
+        let expandButton = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == 'Expand clip'"))
+            .firstMatch
+        XCTAssertTrue(expandButton.waitForExistence(timeout: 15))
+        expandButton.tap()
+        XCTAssertTrue(app.navigationBars["Edit clip"].waitForExistence(timeout: 15))
+        addScreenshot(named: "clip-list-expand-to-editor")
+    }
+
     /// Clip editor over a generated sample movie: the preview with the live crop
     /// rect, the trim slider, and the keep toggle. The trim range's accessibility
     /// label ("Trim range 2.0s to 5.0s") only appears once the movie's duration
@@ -116,6 +149,17 @@ final class ScreenshotTests: XCTestCase {
             .firstMatch
         XCTAssertTrue(progress.waitForExistence(timeout: 15))
         addScreenshot(named: "processing-progress")
+    }
+
+    /// Processing's resting state: the picked video full-screen with the custom scrub
+    /// bar and the "Start analysis" button — no native `VideoPlayer` chrome and no
+    /// caption text.
+    func testProcessingIdle() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotProcessingIdle"]
+        app.launch()
+        XCTAssertTrue(app.buttons["Start analysis"].waitForExistence(timeout: 15))
+        addScreenshot(named: "processing-idle")
     }
 
     /// Pose diagnostic before a run: the video length and the "Run diagnostic"
