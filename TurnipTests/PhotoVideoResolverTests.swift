@@ -37,6 +37,42 @@ private final class SilentImageManager: PHImageManager, @unchecked Sendable {
     }
 }
 
+/// A `PHImageManager` that answers the video request synchronously with a scripted
+/// `(AVAsset?, info)` pair, optionally preceded by iCloud download ticks. The silent stub above
+/// never calls back at all, which is why nothing else exercises what the resolver makes of a
+/// request that actually *finishes*.
+private final class CallbackImageManager: PHImageManager, @unchecked Sendable {
+    private let avAsset: AVAsset?
+    private let info: [AnyHashable: Any]?
+    private let downloadTicks: [Double]
+
+    init(avAsset: AVAsset? = nil, info: [AnyHashable: Any]? = nil, downloadTicks: [Double] = []) {
+        self.avAsset = avAsset
+        self.info = info
+        self.downloadTicks = downloadTicks
+        super.init()
+    }
+
+    /// PhotoKit reports a failure through the info dictionary, not by withholding a callback, so
+    /// every failure case is "no asset, plus this error under `PHImageErrorKey`".
+    static func failing(with error: Error, downloadTicks: [Double] = []) -> CallbackImageManager {
+        CallbackImageManager(info: [PHImageErrorKey: error], downloadTicks: downloadTicks)
+    }
+
+    override func requestAVAsset(
+        forVideo asset: PHAsset,
+        options: PHVideoRequestOptions?,
+        resultHandler: @escaping (AVAsset?, AVAudioMix?, [AnyHashable: Any]?) -> Void
+    ) -> PHImageRequestID {
+        for tick in downloadTicks {
+            var stop = ObjCBool(false)
+            options?.progressHandler?(tick, nil, &stop, nil)
+        }
+        resultHandler(avAsset, nil, info)
+        return 1
+    }
+}
+
 /// A `PHImageManager` that behaves like PhotoKit for an iCloud-only slow-mo clip: one download
 /// tick, then an `AVComposition` (no URL to hand back), then a failed export session — so the
 /// test observes the full `.downloading` → `.exporting` event sequence on the failure path.
@@ -162,6 +198,128 @@ final class PhotoVideoResolverTests: XCTestCase {
         }
         XCTAssertTrue(error is CancellationError, "expected CancellationError, got \(error)")
         XCTAssertEqual(manager.cancelledIDs, [SilentImageManager.requestID])
+    }
+
+    // MARK: - Resolving a request that finishes
+
+    /// The contract is that PhotoKit's own `AVURLAsset` is handed on, not rebuilt from its URL:
+    /// that object is what carries read access to a file inside the Photos container.
+    func testResolveReturnsPhotoKitsURLAssetItselfRatherThanACopy() async throws {
+        let photoKitAsset = AVURLAsset(url: URL(filePath: "/tmp/turnip-resolve-identity.mov"))
+        let resolver = PhotoVideoResolver(imageManager: CallbackImageManager(avAsset: photoKitAsset))
+
+        let resolved = try await resolver.resolve(PHAsset()) { _ in }
+
+        XCTAssertTrue(resolved === photoKitAsset, "the asset must not be rebuilt from its URL")
+    }
+
+    /// PhotoKit flags a cancelled request in its info dictionary rather than as an error. That has
+    /// to stay a `CancellationError`: as a `VideoResolutionError` it would put an error banner in
+    /// front of a user who backed out on purpose.
+    func testResolveThrowsCancellationWhenPhotoKitFlagsTheRequestCancelled() async {
+        let manager = CallbackImageManager(info: [PHImageCancelledKey: true])
+        let resolver = PhotoVideoResolver(imageManager: manager)
+
+        do {
+            _ = try await resolver.resolve(PHAsset()) { _ in }
+            XCTFail("expected the resolve to throw")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "expected CancellationError, got \(error)")
+        }
+    }
+
+    // MARK: - Failure classification
+
+    /// A URL-loading failure is the shape a dead connection takes, and it names iCloud even when
+    /// PhotoKit never got far enough to report a single download tick.
+    func testAURLLoadingFailureIsAnICloudDownloadFailure() async throws {
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        let outcome = await classifyFailure(of: CallbackImageManager.failing(with: error))
+        let failure = try XCTUnwrap(outcome)
+
+        XCTAssertEqual(failure.classification, .iCloudDownloadFailed)
+        XCTAssertEqual((failure.underlying as? NSError)?.domain, NSURLErrorDomain)
+        XCTAssertEqual((failure.underlying as? NSError)?.code, NSURLErrorNotConnectedToInternet)
+    }
+
+    /// Photos reports a failed iCloud fetch under its own domain too, with two distinct codes.
+    /// Both mean the download failed; any other code under the same domain does not, which is the
+    /// half of the check a domain-only test would leave free to regress.
+    func testOnlyPhotosOwnNetworkCodesCountAsICloudDownloadFailures() async throws {
+        let cases: [(Int, Classification)] = [
+            (PHPhotosError.Code.networkAccessRequired.rawValue, .iCloudDownloadFailed),
+            (PHPhotosError.Code.networkError.rawValue, .iCloudDownloadFailed),
+            (PHPhotosError.Code.invalidResource.rawValue, .unavailable)
+        ]
+
+        for (code, expected) in cases {
+            let error = NSError(domain: PHPhotosErrorDomain, code: code)
+            let manager = CallbackImageManager.failing(with: error)
+            let outcome = await classifyFailure(of: manager)
+            let failure = try XCTUnwrap(outcome)
+            XCTAssertEqual(failure.classification, expected, "PHPhotosError code \(code)")
+        }
+    }
+
+    /// A local read failure with no download in sight is not a connectivity problem: telling the
+    /// user to check their connection would send them chasing the wrong thing.
+    func testALocalFailureWithNoDownloadInSightIsUnavailable() async throws {
+        let error = NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoSuchFileError)
+        let outcome = await classifyFailure(of: CallbackImageManager.failing(with: error))
+        let failure = try XCTUnwrap(outcome)
+
+        XCTAssertEqual(failure.classification, .unavailable)
+    }
+
+    /// The very same error, once PhotoKit has reported download progress, *is* a download failure.
+    /// The download flag is the only thing separating this from the case above, so the two only
+    /// mean anything as a pair.
+    func testTheSameFailureAfterADownloadTickBlamesICloud() async throws {
+        let error = NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoSuchFileError)
+        let manager = CallbackImageManager.failing(with: error, downloadTicks: [0.3])
+        let outcome = await classifyFailure(of: manager)
+        let failure = try XCTUnwrap(outcome)
+
+        XCTAssertEqual(failure.classification, .iCloudDownloadFailed)
+    }
+
+    /// Photos can return nothing and say nothing — an asset deleted mid-flight, an unsupported
+    /// format. There is no underlying error to carry and nothing to blame on the network.
+    func testAFailureWithNoInfoAtAllIsUnavailableWithNoUnderlyingError() async throws {
+        let outcome = await classifyFailure(of: CallbackImageManager())
+        let failure = try XCTUnwrap(outcome)
+
+        XCTAssertEqual(failure.classification, .unavailable)
+        XCTAssertNil(failure.underlying)
+    }
+
+    // MARK: - Error copy
+
+    /// Three cases because there are three different things the user can do about a failure: retry
+    /// on a better connection, retry at all, or give up on this video.
+    func testEachResolutionErrorCarriesItsOwnMessage() {
+        XCTAssertEqual(
+            VideoResolutionError.iCloudDownloadFailed(underlying: nil).errorDescription,
+            "Couldn't download this video from iCloud. Check your connection and try again.")
+        XCTAssertEqual(
+            VideoResolutionError.exportFailed(underlying: nil).errorDescription,
+            "Couldn't prepare this video for analysis.")
+        XCTAssertEqual(
+            VideoResolutionError.unavailable(underlying: nil).errorDescription,
+            "This video isn't available.")
+    }
+
+    /// An underlying error is appended, never substituted: the system's own copy ("the operation
+    /// couldn't be completed") is the part that tells the user nothing.
+    func testAnUnderlyingErrorIsAppendedToTheMessageRatherThanReplacingIt() throws {
+        let underlying = NSError(
+            domain: NSURLErrorDomain, code: NSURLErrorTimedOut,
+            userInfo: [NSLocalizedDescriptionKey: "The request timed out."])
+        let plain = try XCTUnwrap(VideoResolutionError.unavailable(underlying: nil).errorDescription)
+        let annotated = try XCTUnwrap(
+            VideoResolutionError.unavailable(underlying: underlying).errorDescription)
+
+        XCTAssertEqual(annotated, "\(plain) (The request timed out.)")
     }
 
     // MARK: - Resolution progress phases
@@ -319,6 +477,40 @@ final class PhotoVideoResolverTests: XCTestCase {
         XCTAssertTrue(
             fileManager.fileExists(atPath: inFlight.path),
             "an export written after launch must survive the sweep")
+    }
+
+    /// Which `VideoResolutionError` case came back. The error itself can't be `Equatable` — it
+    /// carries an arbitrary underlying `Error` — so the case is compared on its own.
+    private enum Classification: Equatable {
+        case iCloudDownloadFailed, exportFailed, unavailable
+    }
+
+    private struct Failure {
+        let classification: Classification
+        let underlying: Error?
+    }
+
+    /// Resolves against `manager` and reports how the failure was classified, failing the test if
+    /// the resolve unexpectedly succeeds or throws something other than a `VideoResolutionError`.
+    private func classifyFailure(
+        of manager: PHImageManager, file: StaticString = #filePath, line: UInt = #line
+    ) async -> Failure? {
+        do {
+            _ = try await PhotoVideoResolver(imageManager: manager).resolve(PHAsset()) { _ in }
+            XCTFail("expected the resolve to throw", file: file, line: line)
+        } catch let error as VideoResolutionError {
+            switch error {
+            case .iCloudDownloadFailed(let underlying):
+                return Failure(classification: .iCloudDownloadFailed, underlying: underlying)
+            case .exportFailed(let underlying):
+                return Failure(classification: .exportFailed, underlying: underlying)
+            case .unavailable(let underlying):
+                return Failure(classification: .unavailable, underlying: underlying)
+            }
+        } catch {
+            XCTFail("expected VideoResolutionError, got \(error)", file: file, line: line)
+        }
+        return nil
     }
 
     /// Races `task` against a timeout so a leaked continuation fails the test instead of hanging it.
