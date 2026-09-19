@@ -22,18 +22,27 @@ struct TrickWindowDetector: Sendable {
     let minimumSustainedSamples: Int
     /// Unbroken quiet samples needed to call two peaks separate tricks.
     let minimumQuietSamples: Int
-    let bufferSeconds: TimeInterval
+    /// Seconds of buffer added before the detected motion starts.
+    let leadingBufferSeconds: TimeInterval
+    /// Seconds of buffer added after the detected motion ends. Larger than
+    /// `leadingBufferSeconds`: the motion signal reads "quiet" as soon as the athlete's
+    /// translation slows on landing, which is consistently earlier than the trick visually
+    /// reads as complete — absorbing the landing and any follow-through still takes another
+    /// beat. A short trailing buffer cuts clips before the landing lands.
+    let trailingBufferSeconds: TimeInterval
 
     init(
         displacementThreshold: Float = 0.05,
         minimumSustainedSamples: Int = 3,
         minimumQuietSamples: Int = 10,
-        bufferSeconds: TimeInterval = 1
+        leadingBufferSeconds: TimeInterval = 1,
+        trailingBufferSeconds: TimeInterval = 3
     ) {
         self.displacementThreshold = displacementThreshold
         self.minimumSustainedSamples = minimumSustainedSamples
         self.minimumQuietSamples = minimumQuietSamples
-        self.bufferSeconds = bufferSeconds
+        self.leadingBufferSeconds = leadingBufferSeconds
+        self.trailingBufferSeconds = trailingBufferSeconds
     }
 
     func detectWindows(in samples: [MotionSample]) -> [TrickWindow] {
@@ -42,8 +51,8 @@ struct TrickWindowDetector: Sendable {
 
         return merging(sustained, separatedBy: states).map { peak in
             TrickWindow(
-                startTime: max(0, samples[peak.lowerBound].startTime - bufferSeconds),
-                endTime: samples[peak.upperBound].endTime + bufferSeconds
+                startTime: max(0, samples[peak.lowerBound].startTime - leadingBufferSeconds),
+                endTime: samples[peak.upperBound].endTime + trailingBufferSeconds
             )
         }
     }

@@ -13,12 +13,13 @@ import SwiftUI
 /// concurrency checker won't treat as `@Sendable` even when the function itself captures
 /// nothing.
 private func exportOneClip(
-    _ window: TrickWindow, _ cropRect: NormalizedRect, _ asset: AVAsset, _ directory: URL,
+    _ window: TrickWindow, _ cropRect: NormalizedRect, _ cropAdjustment: CropAdjustment,
+    _ asset: AVAsset, _ directory: URL,
     _ progress: @escaping @Sendable (Double) -> Void
 ) async throws -> URL {
     do {
         let exported = try await ClipExporter().export(
-            ClipSpec(window: window, cropRect: cropRect),
+            ClipSpec(window: window, cropRect: cropRect, cropAdjustment: cropAdjustment),
             from: asset,
             to: directory,
             progress: progress)
@@ -101,6 +102,8 @@ struct ClipListView: View {
                     popToRoot()
                 } label: {
                     Image(systemName: "chevron.backward")
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel("Back to Home")
             }
@@ -143,24 +146,17 @@ struct ClipListView: View {
     /// The expand button's destination: the full `ClipEditorView` (crop + trim) —
     /// expand goes directly to the editor rather than through an intermediate
     /// full-screen viewer, merging "view large" and "edit" into one entry point.
+    /// The editor owns its own back/Delete toolbar and closes itself via
+    /// `@Environment(\.dismiss)`, which resets `expandTarget` to `nil`.
     @ViewBuilder
     private func editor(for target: ExpandTarget) -> some View {
         if let itemBinding = viewModel.binding(for: target.id) {
             NavigationStack {
                 ClipEditorView(
                     source: viewModel.editorSource(for: itemBinding.wrappedValue),
-                    onCommit: { result in viewModel.applyEditorResult(result, to: target.id) }
+                    onCommit: { result in viewModel.applyEditorResult(result, to: target.id) },
+                    onDelete: { viewModel.delete(target.id) }
                 )
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button {
-                            expandTarget = nil
-                        } label: {
-                            Image(systemName: "chevron.backward")
-                        }
-                        .accessibilityLabel("Back to clips")
-                    }
-                }
             }
         }
     }

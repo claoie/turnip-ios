@@ -4,9 +4,9 @@ import Foundation
 
 /// The clip editor's state (`docs/UIUX.md` § "Clip Detail / Editor").
 ///
-/// Holds the draft trim window, the live crop rect, the keep/discard decision, and the
-/// preview framing (cropped export framing vs. full frame); the view commits `result`
-/// on back-navigation — no separate save step, per the design doc.
+/// Holds the draft trim window, the live crop rect, and the user's manual crop
+/// adjustment (pinch/rotate/drag on top of the algorithmic crop rect); the view commits
+/// `result` on back-navigation or Delete — no separate save step, per the design doc.
 /// Trimming re-derives the crop rect from the pose frames in play via `CropRectCalculator`:
 /// the rect is a function of the window, so it has to follow the handles. Playback loops
 /// the draft window; dragging a handle pauses and seeks to the handle so the preview shows
@@ -24,14 +24,14 @@ final class ClipEditorViewModel: ObservableObject {
 
     @Published private(set) var window: TrickWindow
     @Published private(set) var cropRect: NormalizedRect
-    @Published var isKept: Bool
-    /// Whether the preview shows the cropped export framing (default) or the full
-    /// landscape frame with the crop rect overlaid. `docs/UIUX.md` § "Clip Detail /
-    /// Editor" records the decision (issue #88): what the user sees by default is what
-    /// the export produces.
-    @Published var showsCroppedPreview = true
+    /// The user's pinch/rotate/drag adjustment on top of `cropRect`, applied to the
+    /// video while the crop rect's on-screen marker stays fixed. Independent of
+    /// trimming: re-deriving `cropRect` from a handle drag never resets this.
+    @Published private(set) var cropAdjustment: CropAdjustment
     @Published private(set) var duration: TimeInterval?
     @Published private(set) var playbackTime: TimeInterval = 0
+    @Published private(set) var isPlaying = false
+    @Published private(set) var isMuted = false
 
     /// Set when `prepare()` can't load the asset: the view swaps the loading
     /// spinner for an error message instead of spinning forever.
@@ -67,12 +67,12 @@ final class ClipEditorViewModel: ObservableObject {
         self.calculator = calculator
         self.window = source.window
         self.cropRect = source.cropRect
-        self.isKept = source.isKept
+        self.cropAdjustment = source.cropAdjustment
     }
 
     /// The committed edits, in the shape the clip list applies to its item.
     var result: ClipEditorResult {
-        ClipEditorResult(window: window, cropRect: cropRect, isKept: isKept)
+        ClipEditorResult(window: window, cropRect: cropRect, cropAdjustment: cropAdjustment)
     }
 
     /// "2.4s"-style duration of the draft window, via the one shared clip-duration
@@ -144,15 +144,51 @@ final class ClipEditorViewModel: ObservableObject {
         player.pause()
     }
 
-    /// The keep/discard toggle, mirroring the clip list's quick action.
-    func toggleKeep() {
-        isKept.toggle()
+    /// Applies a pinch's cumulative magnification since the gesture started: `delta`
+    /// multiplies onto the committed scale (standard iOS pinch-to-zoom — spreading
+    /// fingers zooms in), clamped so the video can't shrink to a sliver or blow up past
+    /// usefulness.
+    func applyCropScale(_ delta: CGFloat) {
+        guard delta.isFinite, delta > 0 else { return }
+        cropAdjustment.scale = min(max(cropAdjustment.scale * delta, 0.2), 8)
     }
 
-    /// Flips the preview between the cropped export framing and the full frame with
-    /// the crop rect overlaid (issue #88).
-    func togglePreviewFraming() {
-        showsCroppedPreview.toggle()
+    /// Applies a two-finger rotation's cumulative angle since the gesture started.
+    func applyCropRotation(_ deltaRadians: Double) {
+        guard deltaRadians.isFinite else { return }
+        cropAdjustment.rotationRadians += deltaRadians
+    }
+
+    /// Applies a drag's cumulative translation since the gesture started, in the
+    /// preview's displayed-pixel space (the view converts from its own screen points).
+    func applyCropOffset(_ delta: CGSize) {
+        guard delta.width.isFinite, delta.height.isFinite else { return }
+        cropAdjustment.offset.width += delta.width
+        cropAdjustment.offset.height += delta.height
+    }
+
+    /// The "Reset crop area" action: discards the manual adjustment and returns to the
+    /// algorithm's own framing.
+    func resetCropAdjustment() {
+        cropAdjustment = .identity
+    }
+
+    /// The custom play/pause control, standing in for the default player chrome this
+    /// editor doesn't show.
+    func togglePlayback() {
+        if isPlaying {
+            player.pause()
+        } else {
+            player.play()
+        }
+        isPlaying.toggle()
+    }
+
+    /// The custom mute control, standing in for the default player chrome this editor
+    /// doesn't show.
+    func toggleMute() {
+        isMuted.toggle()
+        player.isMuted = isMuted
     }
 
     /// Drags the start handle to `time`, clamped into `[0, end - minimumClipDuration]`.
@@ -182,11 +218,14 @@ final class ClipEditorViewModel: ObservableObject {
         recomputeCropRect()
     }
 
-    /// Called when a handle drag ends: resumes the preview loop from the new start.
+    /// Called when a handle drag ends: resumes the preview loop from the new start,
+    /// unless the user had manually paused — dragging a handle must not overrule Pause.
     func finishTrim() {
         isTrimming = false
         seek(to: window.startTime)
-        player.play()
+        if isPlaying {
+            player.play()
+        }
     }
 
     /// Applies loaded media info: clamps the draft window into the asset — the detected
@@ -254,22 +293,6 @@ final class ClipEditorViewModel: ObservableObject {
         return displayed
     }
 
-    /// The zoom-and-shift that renders the cropped preview from the full-frame layout:
-    /// scale the frame (laid out at `containerWidth` wide, `hole` in the same points)
-    /// so the crop hole fills the container's width, then shift the hole's top-left to
-    /// the container's origin. The view applies the zoom about the top-leading corner,
-    /// so the shift is the hole's scaled origin negated. Pure so the layout math is
-    /// unit-testable.
-    nonisolated static func croppedPreviewLayout(
-        hole: CGRect, containerWidth: CGFloat
-    ) -> (zoom: CGFloat, offset: CGSize) {
-        guard hole.width > 0 else { return (zoom: 1, offset: .zero) }
-        let zoom = containerWidth / hole.width
-        return (
-            zoom: zoom,
-            offset: CGSize(width: -hole.minX * zoom, height: -hole.minY * zoom))
-    }
-
     /// The frame size as the player shows it: the encoded frame's corners through
     /// `preferredTransform`, so a 90°-rotated track reports portrait dimensions.
     nonisolated static func displayedSize(
@@ -318,6 +341,7 @@ final class ClipEditorViewModel: ObservableObject {
         }
         seek(to: window.startTime)
         player.play()
+        isPlaying = true
     }
 
     /// One preview tick: follows the playhead and loops the draft window. The loop-back

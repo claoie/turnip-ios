@@ -12,6 +12,13 @@ import Foundation
 struct ClipSpec: Equatable, Sendable {
     let window: TrickWindow
     let cropRect: NormalizedRect
+    let cropAdjustment: CropAdjustment
+
+    init(window: TrickWindow, cropRect: NormalizedRect, cropAdjustment: CropAdjustment = .identity) {
+        self.window = window
+        self.cropRect = cropRect
+        self.cropAdjustment = cropAdjustment
+    }
 }
 
 /// A successfully exported clip.
@@ -58,10 +65,17 @@ struct ClipExportTransform {
     ///
     /// `nil` when the source dimensions are unknown or the crop rect is degenerate — in
     /// either case there is no frame to render into.
+    ///
+    /// `cropAdjustment` is the editor's manual pinch/rotate/drag on top of `cropRect`: the
+    /// crop rect's on-screen marker stays fixed, so the adjustment transforms the *video*
+    /// around the rect's center, and the export has to reproduce that exactly — the
+    /// render frame stays `cropRect`'s own size, only the source content landing inside it
+    /// changes. At `.identity` this reduces to the un-adjusted crop translation.
     static func make(
         cropRect: NormalizedRect,
         naturalSize: CGSize,
-        preferredTransform: CGAffineTransform
+        preferredTransform: CGAffineTransform,
+        cropAdjustment: CropAdjustment = .identity
     ) -> ClipExportTransform? {
         guard naturalSize.width > 0, naturalSize.height > 0 else { return nil }
 
@@ -80,8 +94,21 @@ struct ClipExportTransform {
         // top-left subtracts directly — no second trip through preferredTransform.
         let uprightTransform = preferredTransform.concatenating(CGAffineTransform(
             translationX: -displayedFrame.minX, y: -displayedFrame.minY))
-        let layerTransform = uprightTransform.concatenating(CGAffineTransform(
-            translationX: -crop.minX, y: -crop.minY))
+        // Maps upright displayed-space points into the crop's render space, anchored on
+        // the crop rect's own center so the preview's fixed marker rectangle and this
+        // export transform agree: un-anchor, apply the user's scale/rotation about the
+        // origin (they commute — both are uniform/linear), then re-anchor and land the
+        // crop's top-left at the render origin. At identity (scale 1, no rotation, no
+        // offset) this is exactly `translate(-crop.minX, -crop.minY)`, the un-adjusted
+        // crop translation.
+        let anchor = CGPoint(x: crop.midX, y: crop.midY)
+        let cropTransform = CGAffineTransform(translationX: -anchor.x, y: -anchor.y)
+            .concatenating(CGAffineTransform(rotationAngle: cropAdjustment.rotationRadians))
+            .concatenating(CGAffineTransform(scaleX: cropAdjustment.scale, y: cropAdjustment.scale))
+            .concatenating(CGAffineTransform(
+                translationX: anchor.x + cropAdjustment.offset.width - crop.minX,
+                y: anchor.y + cropAdjustment.offset.height - crop.minY))
+        let layerTransform = uprightTransform.concatenating(cropTransform)
 
         // H.264 requires integral, even width and height, and the crop math above is
         // float — round here. The layer transform already pins the crop's displayed
@@ -220,7 +247,8 @@ actor ClipExporter {
         let naturalSize = try await videoTrack.load(.naturalSize)
         let preferredTransform = try await videoTrack.load(.preferredTransform)
         guard let transform = ClipExportTransform.make(
-            cropRect: spec.cropRect, naturalSize: naturalSize, preferredTransform: preferredTransform
+            cropRect: spec.cropRect, naturalSize: naturalSize, preferredTransform: preferredTransform,
+            cropAdjustment: spec.cropAdjustment
         ) else {
             throw ClipExportError.invalidCropRect(window: spec.window)
         }

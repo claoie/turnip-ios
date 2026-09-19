@@ -12,17 +12,22 @@ struct ClipListItem: Hashable, Identifiable, Sendable {
     let id: UUID
     let window: TrickWindow
     let cropRect: NormalizedRect
+    /// The editor's manual pinch/rotate/drag adjustment on top of `cropRect`, carried so
+    /// it survives a re-open of the editor and reaches export.
+    var cropAdjustment: CropAdjustment
     var isKept: Bool
 
     init(
         id: UUID = UUID(),
         window: TrickWindow,
         cropRect: NormalizedRect,
+        cropAdjustment: CropAdjustment = .identity,
         isKept: Bool = true
     ) {
         self.id = id
         self.window = window
         self.cropRect = cropRect
+        self.cropAdjustment = cropAdjustment
         self.isKept = isKept
     }
 

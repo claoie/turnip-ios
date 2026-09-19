@@ -25,7 +25,7 @@ struct ScreenshotHarness: View {
                         cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1))
                 ],
                 asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
-                exportClip: { _, _, _, directory, progress in
+                exportClip: { _, _, _, _, directory, progress in
                     if finishImmediately {
                         progress(1.0)
                     } else {
@@ -117,7 +117,7 @@ struct ScreenshotClipListMediaHarness: View {
 // MARK: - Clip editor
 
 /// Clip editor (`-screenshotClipEditor`): the trimmed clip looping with its live crop
-/// rect, the trim slider, and the keep toggle.
+/// rect and the trim slider.
 ///
 /// The editor needs real media — `/dev/null` isn't one, so `prepare()` takes the
 /// load-failure path and the screenshot would show "Couldn't load this clip", which
@@ -153,10 +153,10 @@ struct ScreenshotClipEditorHarness: View {
                 source: ClipEditorSource(
                     window: TrickWindow(startTime: 2, endTime: 5),
                     cropRect: NormalizedRect(minX: 0.25, maxX: 0.75, minY: 0.25, maxY: 0.75),
-                    isKept: true,
                     asset: AVURLAsset(url: Self.sampleMovieURL),
                     poseFrames: []),
-                onCommit: { _ in })
+                onCommit: { _ in },
+                onDelete: {})
         }
     }
 }

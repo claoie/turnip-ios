@@ -98,7 +98,7 @@ Pose detection gives us, per processed frame, 17 keypoints — each `{x, y, conf
 - Threshold at ≈ 0.05 normalized units per sample
 - Require ≥ 3 consecutive samples above threshold (≥ 300 ms of sustained motion — filters out one-frame anomalies)
 - Require ≥ 10 samples of quiet between peaks (≥ 1 s — prevents splitting one trick into two)
-- Merge peaks within the minimum gap; expand each window by ±1 s of buffer
+- Merge peaks within the minimum gap; expand each window by a 1 s leading buffer and a 3 s trailing buffer — the motion signal reads quiet as soon as the athlete's translation slows on landing, which is consistently earlier than the trick visually reads as complete, so the trailing edge needs more room than the leading edge
 
 Output: list of `(start_time, end_time)` in seconds.
 

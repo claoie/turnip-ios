@@ -66,6 +66,8 @@ struct ExportConfirmationView: View {
                         popToRoot()
                     } label: {
                         Image(systemName: "chevron.backward")
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Back to Home")
                 }
@@ -233,7 +235,7 @@ private struct ClipStatusRow: View {
             // and ScreenshotHarness). Previews don't execute in CI, but the safe
             // form avoids anyone copy-pasting the crashing one into a test.
             asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
-            exportClip: { _, _, _, directory, progress in
+            exportClip: { _, _, _, _, directory, progress in
                 progress(0.5)
                 progress(1.0)
                 // A real (empty) file: the Share action disables itself for a URL

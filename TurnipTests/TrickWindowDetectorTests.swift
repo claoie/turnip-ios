@@ -12,7 +12,7 @@ final class TrickWindowDetectorTests: XCTestCase {
         let windows = detector.detectWindows(in: MotionSignalBuilder.buildSignal(from: frames))
 
         XCTAssertEqual(windows.count, 1)
-        assertWindow(windows.first, startsAt: 0.4, endsAt: 3.0)
+        assertWindow(windows.first, startsAt: 0.4, endsAt: 5.0)
     }
 
     func testMergesTwoPeaksSeparatedByLessThanTheQuietMinimum() {
@@ -21,7 +21,7 @@ final class TrickWindowDetectorTests: XCTestCase {
         let windows = detector.detectWindows(in: MotionSignalBuilder.buildSignal(from: frames))
 
         XCTAssertEqual(windows.count, 1, "two halves of one trick were reported as two tricks")
-        assertWindow(windows.first, startsAt: 0.9, endsAt: 4.2)
+        assertWindow(windows.first, startsAt: 0.9, endsAt: 6.2)
     }
 
     func testSeparatesTwoPeaksWithEnoughQuietBetweenThem() {
@@ -30,8 +30,8 @@ final class TrickWindowDetectorTests: XCTestCase {
         let windows = detector.detectWindows(in: MotionSignalBuilder.buildSignal(from: frames))
 
         XCTAssertEqual(windows.count, 2)
-        assertWindow(windows.first, startsAt: 0.9, endsAt: 3.3)
-        assertWindow(windows.last, startsAt: 2.8, endsAt: 5.2)
+        assertWindow(windows.first, startsAt: 0.9, endsAt: 5.3)
+        assertWindow(windows.last, startsAt: 2.8, endsAt: 7.2)
     }
 
     /// The frame in the middle of the peak loses every keypoint to blur. Interpolating its anchor
@@ -43,7 +43,7 @@ final class TrickWindowDetectorTests: XCTestCase {
         let windows = detector.detectWindows(in: MotionSignalBuilder.buildSignal(from: frames))
 
         XCTAssertEqual(windows.count, 1)
-        assertWindow(windows.first, startsAt: 0.4, endsAt: 3.0)
+        assertWindow(windows.first, startsAt: 0.4, endsAt: 5.0)
     }
 
     /// A one-hip dropout in the middle of the quiet stretch must not merge two tricks: the
@@ -105,7 +105,7 @@ final class TrickWindowDetectorTests: XCTestCase {
         let windows = detector.detectWindows(in: MotionSignalBuilder.buildSignal(from: frames))
 
         XCTAssertEqual(windows.count, 1, "the identity seam split the burst below the sustained minimum")
-        assertWindow(windows.first, startsAt: 0, endsAt: 2.0)
+        assertWindow(windows.first, startsAt: 0, endsAt: 4.0)
     }
 
     // MARK: - Peak rules
@@ -148,20 +148,25 @@ final class TrickWindowDetectorTests: XCTestCase {
 
     // MARK: - Window bounds
 
-    func testExpandsEachWindowByTheBuffer() {
+    func testExpandsEachWindowByItsOwnLeadingAndTrailingBuffer() {
         let samples = signal(quiet(20) + moving(3) + quiet(10))
 
-        let unbuffered = TrickWindowDetector(bufferSeconds: 0).detectWindows(in: samples)
+        let unbuffered = TrickWindowDetector(
+            leadingBufferSeconds: 0, trailingBufferSeconds: 0
+        ).detectWindows(in: samples)
         let buffered = detector.detectWindows(in: samples)
 
         assertWindow(unbuffered.first, startsAt: 2.0, endsAt: 2.3)
-        assertWindow(buffered.first, startsAt: 1.0, endsAt: 3.3)
+        // Discriminating: the leading and trailing edges move by different amounts —
+        // the trailing buffer is larger, so a detected trick keeps playing well past
+        // the moment its motion signal goes quiet instead of cutting at the landing.
+        assertWindow(buffered.first, startsAt: 1.0, endsAt: 5.3)
     }
 
     func testClampsTheLeadingBufferAtTheStartOfTheVideo() {
         let windows = detector.detectWindows(in: signal(moving(3) + quiet(10)))
 
-        assertWindow(windows.first, startsAt: 0, endsAt: 1.3)
+        assertWindow(windows.first, startsAt: 0, endsAt: 3.3)
     }
 
     func testAnEmptySignalProducesNoWindows() {

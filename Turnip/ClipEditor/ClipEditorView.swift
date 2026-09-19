@@ -1,60 +1,95 @@
 import AVFoundation
-import AVKit
 import CoreVideo
 import SwiftUI
 
 /// The per-clip editor (`docs/UIUX.md` § "Clip Detail / Editor"): full-screen,
-/// one clip at a time — the trimmed clip looping in its cropped export framing
-/// (toggleable to the full frame with the live crop rect drawn over it), a
-/// scrub bar with start/end drag handles, and the keep/discard toggle.
+/// one clip at a time — the trimmed clip looping inside its full frame with the crop
+/// area marked over it (pinch to zoom, rotate with two fingers, drag to reposition the
+/// video under the fixed crop marker) and a scrub bar with start/end drag handles.
 ///
-/// Back-navigation commits the edits: `onCommit` fires with the final state when the view
-/// disappears — no separate save step, per the design doc.
+/// Back-navigation and Delete both close the editor via the toolbar's own actions —
+/// `onCommit`/`onDelete` fire synchronously from those taps, before the enclosing
+/// presentation dismisses, rather than from `onDisappear`: mutating the presenting
+/// screen's state while the dismiss transition is still animating is what made the
+/// back chevron need repeated taps to register.
 struct ClipEditorView: View {
     @StateObject private var viewModel: ClipEditorViewModel
-    /// The final editor state, committed when the view disappears. Note: `onDisappear`
-    /// fires for *any* disappearance — including a sheet presented over the editor —
-    /// so this view must not present sheets, or a sheet would commit a half-edited
-    /// draft and tear down the preview mid-edit.
+    /// The final editor state, committed on back-navigation — no separate save step,
+    /// per the design doc.
     let onCommit: (ClipEditorResult) -> Void
+    /// The Delete action: removes the clip from the list entirely, distinct from
+    /// keep/discard (which the list's own toggle still owns).
+    let onDelete: () -> Void
 
-    init(source: ClipEditorSource, onCommit: @escaping (ClipEditorResult) -> Void) {
+    @Environment(\.dismiss) private var dismiss
+    @GestureState private var gestureScale: CGFloat = 1
+    @GestureState private var gestureRotation: Angle = .zero
+    @GestureState private var gestureOffset: CGSize = .zero
+
+    init(
+        source: ClipEditorSource,
+        onCommit: @escaping (ClipEditorResult) -> Void,
+        onDelete: @escaping () -> Void
+    ) {
         _viewModel = StateObject(wrappedValue: ClipEditorViewModel(source: source))
         self.onCommit = onCommit
+        self.onDelete = onDelete
     }
 
     var body: some View {
         VStack(spacing: 16) {
             previewSection
-            previewFramingToggle
+            resetCropButton
             TrimSliderView(viewModel: viewModel)
-            keepToggle
             Spacer(minLength: 0)
         }
         .padding()
         .navigationTitle("Edit clip")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) { backButton }
+            ToolbarItem(placement: .navigationBarTrailing) { deleteButton }
+        }
         .task {
             await viewModel.prepare()
         }
         .onDisappear {
-            onCommit(viewModel.result)
             viewModel.teardown()
         }
     }
 
-    /// The trimmed clip, looping. Cropped to the export framing by default — what the
-    /// user sees is what the export produces — with a toggle below for the full frame
-    /// with the live crop rect drawn over it. See `docs/UIUX.md` § "Clip Detail /
-    /// Editor" and the preview-framing decision (issue #88).
+    /// Commits the current edits and closes — the back chevron's action. Runs
+    /// synchronously with the tap, before `dismiss()` starts the cover's transition, so
+    /// the presenting screen's state settles before the animation begins instead of
+    /// racing it.
+    private var backButton: some View {
+        Button {
+            onCommit(viewModel.result)
+            dismiss()
+        } label: {
+            Image(systemName: "chevron.backward")
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Back to clips")
+    }
+
+    private var deleteButton: some View {
+        Button(role: .destructive) {
+            onDelete()
+            dismiss()
+        } label: {
+            Text("Delete")
+        }
+        .accessibilityLabel("Delete clip")
+    }
+
+    /// The trimmed clip, looping, full frame with the crop area's fixed marker drawn
+    /// over it — pinch/rotate/drag the video underneath to adjust what lands inside it.
     private var previewSection: some View {
         Group {
             if let overlay = viewModel.previewOverlay, overlay.videoSize.width > 0 {
-                if viewModel.showsCroppedPreview {
-                    croppedPreview(overlay: overlay)
-                } else {
-                    fullFramePreview(overlay: overlay)
-                }
+                fullFramePreview(overlay: overlay)
             } else if viewModel.failedToLoad {
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle")
@@ -78,40 +113,11 @@ struct ClipEditorView: View {
         }
     }
 
-    /// The cropped export framing: the video zoomed so the crop rect exactly fills the
-    /// preview — this is the frame the export writes, with no dimmed surround. The zoom
-    /// is applied about the top-leading corner and the crop hole shifted to the
-    /// container's origin, per `ClipEditorViewModel.croppedPreviewLayout`.
-    private func croppedPreview(overlay: (videoSize: CGSize, cropRect: CGRect)) -> some View {
-        let aspect = overlay.cropRect.width / overlay.cropRect.height
-        return GeometryReader { proxy in
-            let containerWidth = proxy.size.width
-            let scale = containerWidth / overlay.videoSize.width
-            let hole = CGRect(
-                x: overlay.cropRect.minX * scale,
-                y: overlay.cropRect.minY * scale,
-                width: overlay.cropRect.width * scale,
-                height: overlay.cropRect.height * scale)
-            let layout = ClipEditorViewModel.croppedPreviewLayout(
-                hole: hole, containerWidth: containerWidth)
-            ZStack {
-                VideoPlayer(player: viewModel.player)
-            }
-            .frame(width: containerWidth, height: overlay.videoSize.height * scale)
-            .scaleEffect(layout.zoom, anchor: .topLeading)
-            .offset(layout.offset)
-            .frame(
-                width: containerWidth, height: containerWidth / aspect,
-                alignment: .topLeading)
-            .clipped()
-        }
-        .aspectRatio(aspect, contentMode: .fit)
-        .accessibilityLabel("Clip preview, cropped to the export framing")
-    }
-
-    /// The full landscape frame with the live crop rect drawn over it: the dimmed
-    /// surround marks what export cuts away. Sized to the displayed frame's aspect ratio
-    /// so the overlay maps 1:1 onto the video.
+    /// The full frame with the crop area's fixed marker drawn over it: the dimmed
+    /// surround marks what export cuts away. The video underneath carries the pinch/
+    /// rotate/drag gesture — the marker rectangle itself never moves, matching what the
+    /// export composes (`ClipExportTransform.make`'s `cropAdjustment`). Sized to the
+    /// displayed frame's aspect ratio so the overlay maps 1:1 onto the video.
     private func fullFramePreview(overlay: (videoSize: CGSize, cropRect: CGRect)) -> some View {
         GeometryReader { proxy in
             let scale = proxy.size.width / overlay.videoSize.width
@@ -120,45 +126,105 @@ struct ClipEditorView: View {
                 y: overlay.cropRect.minY * scale,
                 width: overlay.cropRect.width * scale,
                 height: overlay.cropRect.height * scale)
+            // Resolution-independent: a fraction of the video's own bounds, so the
+            // gesture's anchor matches `ClipExportTransform.make`'s anchor (the crop
+            // rect's center) regardless of the on-screen container's point size.
+            let anchor = UnitPoint(
+                x: overlay.cropRect.midX / overlay.videoSize.width,
+                y: overlay.cropRect.midY / overlay.videoSize.height)
+            let liveScale = viewModel.cropAdjustment.scale * gestureScale
+            let liveRotation = Angle(radians: viewModel.cropAdjustment.rotationRadians) + gestureRotation
+            let liveOffset = CGSize(
+                width: viewModel.cropAdjustment.offset.width + gestureOffset.width,
+                height: viewModel.cropAdjustment.offset.height + gestureOffset.height)
             ZStack {
-                VideoPlayer(player: viewModel.player)
+                BareVideoPlayerView(player: viewModel.player)
+                    .scaleEffect(liveScale, anchor: anchor)
+                    .rotationEffect(liveRotation, anchor: anchor)
+                    .offset(liveOffset)
+                    .clipped()
                 CropOverlayShape(hole: hole)
                     .fill(.black.opacity(0.55), style: FillStyle(eoFill: true))
+                    .allowsHitTesting(false)
                 Rectangle()
                     .stroke(.white, lineWidth: 2)
                     .frame(width: hole.width, height: hole.height)
                     .position(x: hole.midX, y: hole.midY)
+                    .allowsHitTesting(false)
             }
+            .contentShape(Rectangle())
+            .gesture(cropGesture)
         }
         .aspectRatio(overlay.videoSize, contentMode: .fit)
+        .clipped()
         .accessibilityLabel("Clip preview with crop area")
+        .accessibilityHint("Pinch to zoom, rotate with two fingers, or drag to reposition")
+        .overlay(alignment: .bottom) { playbackControls }
     }
 
-    /// Switches the preview between the cropped export framing and the full frame with
-    /// the crop rect overlaid (issue #88).
-    private var previewFramingToggle: some View {
-        Button {
-            viewModel.togglePreviewFraming()
-        } label: {
-            Label(
-                viewModel.showsCroppedPreview ? "Show full frame" : "Show cropped preview",
-                systemImage: viewModel.showsCroppedPreview
-                    ? "arrow.up.left.and.arrow.down.right" : "crop")
-        }
-        .buttonStyle(.bordered)
-        .accessibilityHint("Switches the preview between the exported crop and the full frame")
+    /// The pinch (zoom), two-finger rotate, and one-finger drag gestures, composed so
+    /// all three can run at once. Each commits its cumulative delta into the view model
+    /// on end; `@GestureState` supplies the live in-flight delta for rendering.
+    private var cropGesture: some Gesture {
+        SimultaneousGesture(
+            SimultaneousGesture(magnificationGesture, rotationGesture),
+            dragGesture)
     }
 
-    private var keepToggle: some View {
+    private var magnificationGesture: some Gesture {
+        MagnificationGesture()
+            .updating($gestureScale) { value, state, _ in state = value }
+            .onEnded { value in viewModel.applyCropScale(value) }
+    }
+
+    private var rotationGesture: some Gesture {
+        RotationGesture()
+            .updating($gestureRotation) { value, state, _ in state = value }
+            .onEnded { value in viewModel.applyCropRotation(value.radians) }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture()
+            .updating($gestureOffset) { value, state, _ in state = value.translation }
+            .onEnded { value in viewModel.applyCropOffset(value.translation) }
+    }
+
+    /// Stands in for the default player chrome this editor doesn't show: play/pause and
+    /// mute, alongside `TrimSliderView`'s own timeline below — the three controls this
+    /// screen needs, no more.
+    private var playbackControls: some View {
+        HStack(spacing: 20) {
+            Button(action: viewModel.togglePlayback) {
+                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                    .foregroundStyle(.white)
+            }
+            .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
+
+            Button(action: viewModel.toggleMute) {
+                Image(systemName: viewModel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .foregroundStyle(.white)
+            }
+            .accessibilityLabel(viewModel.isMuted ? "Unmute" : "Mute")
+        }
+        .font(.body)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Capsule().fill(.black.opacity(0.4)))
+        .padding(.bottom, 12)
+        .allowsHitTesting(true)
+    }
+
+    /// Discards the manual crop adjustment and returns to the algorithm's own framing —
+    /// replaces the old full-frame/cropped-preview toggle now that the crop area is
+    /// directly editable.
+    private var resetCropButton: some View {
         Button {
-            viewModel.toggleKeep()
+            viewModel.resetCropAdjustment()
         } label: {
-            Label(
-                viewModel.isKept ? "Clip kept" : "Clip discarded",
-                systemImage: viewModel.isKept ? "checkmark.circle.fill" : "circle")
+            Label("Reset crop area", systemImage: "arrow.counterclockwise")
         }
         .buttonStyle(.bordered)
-        .accessibilityLabel(viewModel.isKept ? "Discard clip" : "Keep clip")
+        .disabled(viewModel.cropAdjustment == .identity)
     }
 }
 
@@ -180,10 +246,10 @@ private struct CropOverlayShape: Shape {
             source: ClipEditorSource(
                 window: TrickWindow(startTime: 2, endTime: 5),
                 cropRect: NormalizedRect(minX: 0.25, maxX: 0.75, minY: 0.25, maxY: 0.75),
-                isKept: true,
                 asset: AVURLAsset(url: makeClipEditorPreviewAsset()),
                 poseFrames: []),
-            onCommit: { _ in })
+            onCommit: { _ in },
+            onDelete: {})
     }
 }
 

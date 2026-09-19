@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import UIKit
 
 /// Drives inline clip playback for one context — the grid's tiles, or the expanded
 /// full-screen pager — over a single shared `AVPlayer`. At most one clip plays at a
@@ -14,6 +15,9 @@ final class ClipPlaybackController: ObservableObject {
     private let asset: AVAsset
     private(set) var player: AVPlayer?
     private var endObserver: Any?
+    /// The active clip's window, so the end-boundary observer knows where to loop back
+    /// to. `nil` when nothing is playing.
+    private var activeWindow: TrickWindow?
     /// True while an exact seek is in flight. AVFoundation queues overlapping exact
     /// seeks internally, so issuing one per drag update makes the preview lag well
     /// behind the finger; coalescing (below) keeps every seek exact while staying
@@ -76,6 +80,7 @@ final class ClipPlaybackController: ObservableObject {
         self.player = player
         player.replaceCurrentItem(with: AVPlayerItem(sdrAsset: asset))
         activeItemID = item.id
+        activeWindow = item.window
         seek(to: item.window.startTime)
         armBoundary(at: item.window.endTime)
         player.play()
@@ -84,6 +89,7 @@ final class ClipPlaybackController: ObservableObject {
 
     private func resume(_ item: ClipListItem) {
         guard let player else { return }
+        activeWindow = item.window
         if player.currentTime().seconds >= item.window.endTime {
             seek(to: item.window.startTime)
         }
@@ -135,6 +141,9 @@ final class ClipPlaybackController: ObservableObject {
         }
     }
 
+    /// Arms the loop-back boundary at the window's end: each crossing seeks back to the
+    /// window's start rather than pausing, so a tapped tile keeps playing the trick on
+    /// repeat instead of stopping after one pass.
     private func armBoundary(at endTime: TimeInterval) {
         clearBoundary()
         guard let player else { return }
@@ -144,8 +153,20 @@ final class ClipPlaybackController: ObservableObject {
         ) { [weak self] in
             // The callback is a plain (non-isolated) closure even though it always
             // fires on the main queue, so `self` — `@MainActor` — needs the hop.
-            Task { @MainActor in self?.pause() }
+            Task { @MainActor in self?.loopBack() }
         }
+    }
+
+    /// Loops back to the window's start, unless the system's video-autoplay setting is
+    /// off — `docs/ACCESSIBILITY.md`'s Clip List checklist rules out auto-playing loops
+    /// in that case, so this falls back to the old pause-at-end behavior instead.
+    private func loopBack() {
+        guard let activeWindow else { return }
+        guard UIAccessibility.isVideoAutoplayEnabled else {
+            pause()
+            return
+        }
+        seek(to: activeWindow.startTime)
     }
 
     private func clearBoundary() {

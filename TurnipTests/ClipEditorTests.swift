@@ -25,7 +25,6 @@ final class ClipEditorTests: XCTestCase {
         ClipEditorSource(
             window: window,
             cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1),
-            isKept: true,
             // AVAsset is abstract; these tests inject media info directly and never load it.
             asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
             poseFrames: frames)
@@ -255,28 +254,108 @@ final class ClipEditorTests: XCTestCase {
         XCTAssertFalse(viewModel.isTrimming)
     }
 
-    // MARK: - Keep toggle and commit
+    // MARK: - Crop adjustment
 
     @MainActor
-    func testToggleKeepFlips() {
+    func testApplyCropScaleMultipliesOntoTheCommittedScale() {
         let viewModel = makeViewModel()
 
-        XCTAssertTrue(viewModel.isKept)
-        viewModel.toggleKeep()
-        XCTAssertFalse(viewModel.isKept)
+        viewModel.applyCropScale(2)
+        viewModel.applyCropScale(1.5)
+
+        XCTAssertEqual(viewModel.cropAdjustment.scale, 3, accuracy: 0.0001)
     }
+
+    @MainActor
+    func testApplyCropScaleClampsToASaneRange() {
+        let viewModel = makeViewModel()
+
+        viewModel.applyCropScale(0.001)
+        XCTAssertEqual(viewModel.cropAdjustment.scale, 0.2, accuracy: 0.0001)
+
+        viewModel.applyCropScale(1000)
+        XCTAssertEqual(viewModel.cropAdjustment.scale, 8, accuracy: 0.0001)
+    }
+
+    @MainActor
+    func testApplyCropRotationAccumulates() {
+        let viewModel = makeViewModel()
+
+        viewModel.applyCropRotation(.pi / 4)
+        viewModel.applyCropRotation(.pi / 4)
+
+        XCTAssertEqual(viewModel.cropAdjustment.rotationRadians, .pi / 2, accuracy: 0.0001)
+    }
+
+    @MainActor
+    func testApplyCropOffsetAccumulates() {
+        let viewModel = makeViewModel()
+
+        viewModel.applyCropOffset(CGSize(width: 10, height: -4))
+        viewModel.applyCropOffset(CGSize(width: 5, height: 1))
+
+        XCTAssertEqual(viewModel.cropAdjustment.offset, CGSize(width: 15, height: -3))
+    }
+
+    @MainActor
+    func testResetCropAdjustmentReturnsToIdentity() {
+        let viewModel = makeViewModel()
+
+        viewModel.applyCropScale(2)
+        viewModel.applyCropRotation(.pi)
+        viewModel.applyCropOffset(CGSize(width: 10, height: 10))
+        viewModel.resetCropAdjustment()
+
+        XCTAssertEqual(viewModel.cropAdjustment, .identity)
+    }
+
+    @MainActor
+    func testTrimmingNeverResetsTheCropAdjustment() {
+        // The adjustment is orthogonal to trimming: re-deriving `cropRect` from a
+        // handle drag must not stomp a manual pinch/rotate/drag the user already made.
+        let viewModel = makeViewModel()
+
+        viewModel.applyCropScale(2)
+        viewModel.trimStart(to: 3)
+
+        XCTAssertEqual(viewModel.cropAdjustment.scale, 2, accuracy: 0.0001)
+    }
+
+    // MARK: - Playback and mute
+
+    @MainActor
+    func testTogglePlaybackFlips() {
+        let viewModel = makeViewModel()
+
+        XCTAssertFalse(viewModel.isPlaying)
+        viewModel.togglePlayback()
+        XCTAssertTrue(viewModel.isPlaying)
+        viewModel.togglePlayback()
+        XCTAssertFalse(viewModel.isPlaying)
+    }
+
+    @MainActor
+    func testToggleMuteFlips() {
+        let viewModel = makeViewModel()
+
+        XCTAssertFalse(viewModel.isMuted)
+        viewModel.toggleMute()
+        XCTAssertTrue(viewModel.isMuted)
+    }
+
+    // MARK: - Commit
 
     @MainActor
     func testResultReflectsTheEdits() {
         let viewModel = makeViewModel()
 
-        viewModel.toggleKeep()
+        viewModel.applyCropScale(2)
         viewModel.trimStart(to: 3)
 
         let result = viewModel.result
-        XCTAssertFalse(result.isKept)
         XCTAssertEqual(result.window.startTime, 3, accuracy: 0.0001)
         XCTAssertEqual(result.cropRect, viewModel.cropRect)
+        XCTAssertEqual(result.cropAdjustment.scale, 2, accuracy: 0.0001)
     }
 
     // MARK: - Overlay geometry
@@ -365,46 +444,6 @@ final class ClipEditorTests: XCTestCase {
             cropRect: empty,
             naturalSize: CGSize(width: 100, height: 100),
             preferredTransform: .identity))
-    }
-
-    // MARK: - Preview framing
-
-    @MainActor
-    func testPreviewDefaultsToCroppedFraming() {
-        let viewModel = makeViewModel()
-
-        // Issue #88: the orientation note asked for the cropped export framing by
-        // default, so the user judges what the export will actually produce.
-        XCTAssertTrue(viewModel.showsCroppedPreview)
-    }
-
-    @MainActor
-    func testTogglePreviewFramingFlips() {
-        let viewModel = makeViewModel()
-
-        viewModel.togglePreviewFraming()
-        XCTAssertFalse(viewModel.showsCroppedPreview)
-        viewModel.togglePreviewFraming()
-        XCTAssertTrue(viewModel.showsCroppedPreview)
-    }
-
-    func testCroppedPreviewLayoutFillsContainerWithHole() {
-        // 200x100 landscape source; the crop hole sits at (50, 25, 100x50) in the
-        // container's points. Zooming 2x about the top-leading corner and shifting the
-        // hole's scaled origin back puts the hole exactly over a 200x100 container.
-        let layout = ClipEditorViewModel.croppedPreviewLayout(
-            hole: CGRect(x: 50, y: 25, width: 100, height: 50), containerWidth: 200)
-
-        XCTAssertEqual(layout.zoom, 2)
-        XCTAssertEqual(layout.offset, CGSize(width: -100, height: -50))
-    }
-
-    func testCroppedPreviewLayoutDegenerateHoleIsIdentity() {
-        let layout = ClipEditorViewModel.croppedPreviewLayout(
-            hole: .zero, containerWidth: 200)
-
-        XCTAssertEqual(layout.zoom, 1)
-        XCTAssertEqual(layout.offset, .zero)
     }
 
     // MARK: - Load failure

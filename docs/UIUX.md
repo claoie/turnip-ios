@@ -115,22 +115,27 @@ flowchart TD
 
 - Reached from Clip List's expand button (§3) — the tile's single detail entry
   point, not a separate pencil icon. Full-screen, one clip at a time:
-  - Video player showing the trimmed clip looping, cropped to the 9:16 export framing
-    by default — what the user sees is what the export produces (issue #88). A "Show
-    full frame" toggle switches to the whole landscape frame with the live crop rect
-    drawn over it; the dimmed surround marks what export cuts away, for surrounding
-    context while trimming.
+  - Video player showing the trimmed clip looping, full frame, with the crop area's
+    marker rectangle drawn over it at a fixed position — the dimmed surround marks
+    what export cuts away. No default AVKit playback chrome; the only controls this
+    screen shows are the custom play/pause and mute buttons and the scrub bar below.
+  - The crop area is directly editable: pinch to zoom, rotate with two fingers, and
+    drag with one finger to reposition the video underneath the fixed marker
+    rectangle — the video zooms/rotates/moves, the marker never does. A "Reset crop
+    area" button discards the manual adjustment and returns to the algorithm's own
+    framing (issue #9).
   - Scrub bar spanning the whole source video (not a zoomed range around the
     window) with drag handles on start/end — adjusts the trick window from
     issue #8's output; live-updates the crop rect per issue #9 if the window
-    changes, since the crop rect is a function of which frames are in play.
+    changes, since the crop rect is a function of which frames are in play. The
+    manual crop adjustment above is independent of this and survives a trim.
     Full-video handles are naturally imprecise on a long clip, so dragging
     farther vertically from the track slows the handle down (common
     photo/video trim gesture): near the track it tracks the touch 1:1; drag
     away and the same finger movement moves it a smaller fraction of the way,
     for fine control. Moving back to the track snaps to full speed again.
-  - Keep/discard toggle (mirrors the list's toggle — editing a clip you're
-    about to discard should still be possible, just not required).
+  - A Delete button at the top-right corner removes the clip from the list
+    entirely — distinct from keep/discard, which stays the list's own toggle.
   - Back to Clip List commits the edits; no separate "save" step needed if
     edits are held in view state until back-navigation.
 
@@ -180,11 +185,13 @@ already reach:
 
 Resolved 2026-09-04.
 
-1. **Crop rect editing → No manual override in v1.** The crop rect is always
-   derived from the trim window per issue #9's algorithm; adjusting the trim
-   handles in Clip Detail re-derives it. Keeps Clip Detail to one gesture
-   surface. *Reopen if:* real-footage testing (#2) shows the auto-crop is
-   wrong often enough that users need to fix it by hand.
+1. **Crop rect editing → Manual override added.** Reopened: the auto-crop stopped
+   the trick's landing early often enough (and missed the frame often enough on
+   some angles) that users need to fix the crop by hand. Clip Detail now supports
+   pinch/rotate/drag directly on the crop area, on top of the algorithm's own
+   framing, with "Reset crop area" to undo it. The trim handles still re-derive
+   the base crop rect from the window; the manual adjustment composes with that
+   rather than replacing it.
 2. **Bulk keep/discard → Not in v1.** Every clip defaults to "kept"; a user
    discards by tapping individual cards. At ~10 clips per session that's a
    few taps. Add "discard all" only if feedback asks for it.
@@ -194,12 +201,9 @@ Resolved 2026-09-04.
    in #21), and users will background or leave the screen anyway — a clean
    cancel beats a stuck screen. The flow diagram's `Processing → Home` edge
    covers this path.
-4. **Preview framing → Cropped by default, with a full-frame toggle.** Recorded
-   2026-09-14 (issue #88), answering the orientation note on issue #18
-   (2026-09-05): the editor's player shows the cropped 9:16 framing by default,
-   since most v1 footage is landscape from tripod-mounted phones and judging the
-   export through the uncropped preview's narrow crop hole hid what the auto-crop
-   cut away. A toggle shows the full landscape frame with the crop rect overlaid
-   for surrounding context while trimming. *Reopen if:* real-footage testing (#2)
-   shows users trim more accurately with the full frame up front, or the extra
-   tap costs more certainty than it buys.
+4. **Preview framing → Superseded by direct crop editing.** Recorded 2026-09-14
+   (issue #88): the editor's player showed the cropped 9:16 framing by default
+   with a "Show full frame" toggle for context while trimming. Once the crop area
+   became directly editable (decision 1, above), the full frame with the crop
+   marker overlaid had to be the only view — the toggle and the cropped-only view
+   are both gone, replaced by "Reset crop area."

@@ -81,7 +81,11 @@ struct ProcessingView<Destination: View>: View {
         }
         .task {
             if player == nil {
-                player = AVPlayer(playerItem: AVPlayerItem(sdrAsset: video.asset))
+                let newPlayer = AVPlayer(playerItem: AVPlayerItem(sdrAsset: video.asset))
+                player = newPlayer
+                // Autoplay on arrival: opening this screen from a video tile is the
+                // user's play action, Photos-app style — no separate tap needed.
+                newPlayer.play()
             }
             if autostart {
                 viewModel.start(video: video)
@@ -115,7 +119,12 @@ struct ProcessingView<Destination: View>: View {
                 ProgressView().tint(.white)
             }
         }
-        .overlay(alignment: .bottom) {
+        // `.safeAreaInset`, not `.overlay`: an overlay sizes its content at its own
+        // ideal width and aligns it, so a `.frame(maxWidth: .infinity)` button inside
+        // has no wider proposal to expand into and stays text-hugging. A safe-area
+        // inset reserves real full-width space instead — the same pattern the clip
+        // list's "Export N clips" button uses.
+        .safeAreaInset(edge: .bottom) {
             VStack(spacing: 12) {
                 if let player {
                     VideoScrubBar(player: player)
@@ -123,11 +132,18 @@ struct ProcessingView<Destination: View>: View {
                 // Pause the idle player before this state leaves the hierarchy:
                 // nothing would call `pause()` on it afterwards, so its audio would
                 // keep playing behind the progress UI and the clip list.
-                Button("Start analysis") {
+                Button {
                     player?.pause()
                     viewModel.start(video: video)
+                } label: {
+                    // `.borderedProminent` sizes itself to the label, ignoring a
+                    // `.frame(maxWidth:)` applied to the button from outside — the
+                    // frame has to be on the label content to actually stretch it.
+                    Text("Start analysis")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
             .padding(.horizontal)
             .padding(.bottom, 24)

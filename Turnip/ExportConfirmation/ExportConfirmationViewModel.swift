@@ -11,11 +11,16 @@ struct ExportConfirmationItem: Identifiable, Sendable {
     let id: UUID
     let window: TrickWindow
     let cropRect: NormalizedRect
+    let cropAdjustment: CropAdjustment
 
-    init(id: UUID = UUID(), window: TrickWindow, cropRect: NormalizedRect) {
+    init(
+        id: UUID = UUID(), window: TrickWindow, cropRect: NormalizedRect,
+        cropAdjustment: CropAdjustment = .identity
+    ) {
         self.id = id
         self.window = window
         self.cropRect = cropRect
+        self.cropAdjustment = cropAdjustment
     }
 }
 
@@ -47,6 +52,7 @@ enum ExportConfirmationError: Error, Equatable {
 typealias ExportOneClip = @Sendable (
     _ window: TrickWindow,
     _ cropRect: NormalizedRect,
+    _ cropAdjustment: CropAdjustment,
     _ asset: AVAsset,
     _ directory: URL,
     _ progress: @escaping @Sendable (Double) -> Void
@@ -345,7 +351,7 @@ final class ExportConfirmationViewModel: ObservableObject {
         setPhase(at: index, to: .exporting(fraction: 0))
         do {
             let fileURL = try await exportClip(
-                item.window, item.cropRect, asset, directory
+                item.window, item.cropRect, item.cropAdjustment, asset, directory
             ) { [weak self] fraction in
                 Task { [weak self] in
                     await self?.reportExportProgress(index: index, fraction: fraction)

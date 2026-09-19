@@ -58,41 +58,52 @@ final class ClipListViewModel: ObservableObject {
     /// per kept clip, carrying the id, window, and crop rect it exports with.
     var exportConfirmationItems: [ExportConfirmationItem] {
         keptItems.map {
-            ExportConfirmationItem(id: $0.id, window: $0.window, cropRect: $0.cropRect)
+            ExportConfirmationItem(
+                id: $0.id, window: $0.window, cropRect: $0.cropRect,
+                cropAdjustment: $0.cropAdjustment)
         }
     }
 
-    /// Builds the editor's input for one list item: its window, crop rect, and
-    /// keep/discard state plus the analyzed asset.
+    /// Builds the editor's input for one list item: its window, crop rect, and crop
+    /// adjustment plus the analyzed asset. Keep/discard stays the list's own decision —
+    /// the editor no longer surfaces or edits it.
     ///
     /// `poseFrames` is empty — the pipeline's sampled frames don't reach the
     /// list yet (the Home → Processing wiring threads them through when it
     /// lands), so the editor keeps the pipeline-computed crop rect instead of
     /// re-deriving it when a trim handle drags outward past the original
-    /// window. Trimming, the live crop preview, and keep/discard all work;
-    /// only the re-derivation for newly included frames waits on the frames.
+    /// window. Trimming and the live crop preview both work; only the
+    /// re-derivation for newly included frames waits on the frames.
     func editorSource(for item: ClipListItem) -> ClipEditorSource {
         ClipEditorSource(
             window: item.window,
             cropRect: item.cropRect,
-            isKept: item.isKept,
+            cropAdjustment: item.cropAdjustment,
             asset: asset,
             poseFrames: [])
     }
 
-    /// Applies the editor's commit to the item with the given id: the window,
-    /// crop rect, and keep/discard decision the user left the editor with
-    /// replace the list entry's, so trim/crop edits commit on back-navigation
-    /// (docs/UIUX.md § "Clip Detail / Editor"). A no-op for unknown ids — the
-    /// item may have been removed by a re-run of detection while the editor
-    /// was open.
+    /// Applies the editor's commit to the item with the given id: the window, crop rect,
+    /// and crop adjustment the user left the editor with replace the list entry's, so
+    /// trim/crop edits commit on back-navigation (docs/UIUX.md § "Clip Detail / Editor").
+    /// The item's `isKept` carries over unchanged — the editor doesn't own that decision.
+    /// A no-op for unknown ids — the item may have been removed by a re-run of detection,
+    /// or deleted from the editor, while it was open.
     func applyEditorResult(_ result: ClipEditorResult, to id: UUID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         items[index] = ClipListItem(
             id: id,
             window: result.window,
             cropRect: result.cropRect,
-            isKept: result.isKept)
+            cropAdjustment: result.cropAdjustment,
+            isKept: items[index].isKept)
+    }
+
+    /// Removes the item with the given id entirely — the editor's Delete action, distinct
+    /// from discarding: a discarded clip still shows in the grid (excluded from export
+    /// only), while a deleted clip is gone. A no-op for unknown ids.
+    func delete(_ id: UUID) {
+        items.removeAll { $0.id == id }
     }
 
     /// The per-card keep/discard quick action. A no-op for unknown ids — the card that

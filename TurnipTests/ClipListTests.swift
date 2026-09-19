@@ -120,16 +120,18 @@ final class ClipListTests: XCTestCase {
         let result = ClipEditorResult(
             window: TrickWindow(startTime: 1, endTime: 4),
             cropRect: NormalizedRect(minX: 0.1, maxX: 0.9, minY: 0.1, maxY: 0.9),
-            isKept: false)
+            cropAdjustment: CropAdjustment(scale: 1.5, rotationRadians: 0, offset: .zero))
         viewModel.applyEditorResult(result, to: target.id)
 
-        // The editor's commit lands on the tapped item — window, crop rect, and
-        // keep/discard — and leaves the rest of the list alone.
+        // The editor's commit lands on the tapped item — window, crop rect, and crop
+        // adjustment — and leaves the rest of the list (and the item's own keep/discard
+        // decision, which the editor doesn't own) alone.
         let updated = viewModel.items[1]
         XCTAssertEqual(updated.id, target.id)
         XCTAssertEqual(updated.window, result.window)
         XCTAssertEqual(updated.cropRect, result.cropRect)
-        XCTAssertFalse(updated.isKept)
+        XCTAssertEqual(updated.cropAdjustment, result.cropAdjustment)
+        XCTAssertEqual(updated.isKept, target.isKept)
         XCTAssertEqual(viewModel.items[0], other)
     }
 
@@ -142,8 +144,29 @@ final class ClipListTests: XCTestCase {
             ClipEditorResult(
                 window: TrickWindow(startTime: 1, endTime: 4),
                 cropRect: fullFrame,
-                isKept: false),
+                cropAdjustment: .identity),
             to: makeItem().id)
+
+        XCTAssertEqual(viewModel.items, [item])
+    }
+
+    @MainActor
+    func testDeleteRemovesTheMatchingItem() {
+        let target = makeItem()
+        let other = makeItem()
+        let viewModel = ClipListViewModel(items: [other, target], asset: dummyAsset())
+
+        viewModel.delete(target.id)
+
+        XCTAssertEqual(viewModel.items, [other])
+    }
+
+    @MainActor
+    func testDeleteIgnoresUnknownIds() {
+        let item = makeItem()
+        let viewModel = ClipListViewModel(items: [item], asset: dummyAsset())
+
+        viewModel.delete(makeItem().id)
 
         XCTAssertEqual(viewModel.items, [item])
     }
@@ -158,7 +181,7 @@ final class ClipListTests: XCTestCase {
 
         XCTAssertEqual(source.window, item.window)
         XCTAssertEqual(source.cropRect, item.cropRect)
-        XCTAssertEqual(source.isKept, item.isKept)
+        XCTAssertEqual(source.cropAdjustment, item.cropAdjustment)
         XCTAssertTrue(source.asset === asset)
     }
 
@@ -171,11 +194,12 @@ final class ClipListTests: XCTestCase {
         let items = viewModel.exportConfirmationItems
 
         // Only the kept clip reaches the confirmation screen, carrying the id,
-        // window, and crop rect it exports with.
+        // window, crop rect, and crop adjustment it exports with.
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items[0].id, kept.id)
         XCTAssertEqual(items[0].window, kept.window)
         XCTAssertEqual(items[0].cropRect, kept.cropRect)
+        XCTAssertEqual(items[0].cropAdjustment, kept.cropAdjustment)
     }
 
     // MARK: - ClipThumbnailLoader.displayedCropRect
