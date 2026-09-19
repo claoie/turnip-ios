@@ -13,13 +13,12 @@ import SwiftUI
 /// concurrency checker won't treat as `@Sendable` even when the function itself captures
 /// nothing.
 private func exportOneClip(
-    _ window: TrickWindow, _ cropRect: NormalizedRect, _ cropAdjustment: CropAdjustment,
-    _ asset: AVAsset, _ directory: URL,
+    _ spec: ClipSpec, _ asset: AVAsset, _ directory: URL,
     _ progress: @escaping @Sendable (Double) -> Void
 ) async throws -> URL {
     do {
         let exported = try await ClipExporter().export(
-            ClipSpec(window: window, cropRect: cropRect, cropAdjustment: cropAdjustment),
+            spec,
             from: asset,
             to: directory,
             progress: progress)

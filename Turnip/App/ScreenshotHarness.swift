@@ -25,7 +25,7 @@ struct ScreenshotHarness: View {
                         cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1))
                 ],
                 asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
-                exportClip: { _, _, _, _, directory, progress in
+                exportClip: { _, _, directory, progress in
                     if finishImmediately {
                         progress(1.0)
                     } else {

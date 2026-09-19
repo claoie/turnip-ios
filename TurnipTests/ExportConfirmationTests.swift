@@ -86,15 +86,13 @@ final class ExportConfirmationViewModelTests: XCTestCase {
         }
 
         func export(
-            _ window: TrickWindow,
-            _ cropRect: NormalizedRect,
-            _ cropAdjustment: CropAdjustment,
+            _ spec: ClipSpec,
             _ asset: AVAsset,
             _ directory: URL,
             _ progress: @escaping @Sendable (Double) -> Void
         ) async throws -> URL {
             let callIndex = exportCalls.count
-            exportCalls.append((window, cropRect))
+            exportCalls.append((spec.window, spec.cropRect))
             directoriesAtCall.append(directory)
             directoryExistedAtCall.append(
                 FileManager.default.fileExists(atPath: directory.path))
@@ -147,8 +145,8 @@ final class ExportConfirmationViewModelTests: XCTestCase {
             // allocation") while the harness's identical AVURLAsset form runs
             // clean (see ScreenshotHarness). The fakes never read the asset.
             asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
-            exportClip: { window, cropRect, cropAdjustment, asset, directory, progress in
-                try await fake.export(window, cropRect, cropAdjustment, asset, directory, progress)
+            exportClip: { spec, asset, directory, progress in
+                try await fake.export(spec, asset, directory, progress)
             },
             saveToPhotos: { url in try await fake.save(url) },
             makeDirectory: makeDirectory ?? defaultExportDirectory)

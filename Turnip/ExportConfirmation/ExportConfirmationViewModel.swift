@@ -50,9 +50,7 @@ enum ExportConfirmationError: Error, Equatable {
 /// progress callback. `@Sendable` constrains what the closure captures, not where it
 /// executes.
 typealias ExportOneClip = @Sendable (
-    _ window: TrickWindow,
-    _ cropRect: NormalizedRect,
-    _ cropAdjustment: CropAdjustment,
+    _ spec: ClipSpec,
     _ asset: AVAsset,
     _ directory: URL,
     _ progress: @escaping @Sendable (Double) -> Void
@@ -350,8 +348,10 @@ final class ExportConfirmationViewModel: ObservableObject {
         if clips.indices.contains(index), clips[index].phase == .saved { return true }
         setPhase(at: index, to: .exporting(fraction: 0))
         do {
+            let spec = ClipSpec(
+                window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment)
             let fileURL = try await exportClip(
-                item.window, item.cropRect, item.cropAdjustment, asset, directory
+                spec, asset, directory
             ) { [weak self] fraction in
                 Task { [weak self] in
                     await self?.reportExportProgress(index: index, fraction: fraction)
