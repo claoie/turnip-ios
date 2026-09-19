@@ -38,8 +38,8 @@ flowchart TD
     E2 -->|retry / back to Home| A
     C -->|tap a tile| C
     C -->|tap a tile's expand button| D[Clip Detail / Editor]
-    D -->|save changes| C
-    D -->|discard| C
+    D -->|back, commits edits| C
+    D -->|delete| C
     C -->|export kept clips| F[Export Confirmation]
     F -->|done / back| A
     C -->|back| A
@@ -70,11 +70,14 @@ flowchart TD
 
 ### 2. Processing
 
-- Does not auto-start. The screen fills with the picked video (fit to the
-  screen, no native playback chrome) and a thin scrub bar (play/pause, seek,
-  mute) draws over the bottom, with a "Start analysis" button below it —
-  black background, no title, no caption text, Photos-app look, back chevron
-  to Home. The user plays the video, or starts analysis when ready.
+- The pipeline does not auto-start, but the picked video does: it fills the
+  screen (fit to the screen, no native playback chrome) and starts playing
+  automatically on arrival, Photos-app style — no tap needed to see it. A thin
+  scrub bar (play/pause, seek, mute) draws over the bottom, with a large,
+  full-width "Start analysis" button below it — black background, no title,
+  no caption text, back chevron to Home. The user watches the autoplaying
+  video, pausing/scrubbing it via the scrub bar if they want, and starts
+  analysis when ready.
 - Once started, shows the full pipeline run: frame sampling → pose inference →
   motion signal → peak detection → crop rect (per issues
   [#8](https://github.com/hoiekim/turnip-ios/issues/8)–[#9](https://github.com/hoiekim/turnip-ios/issues/9)).
@@ -91,9 +94,9 @@ flowchart TD
 - A grid of square tiles, one per detected trick window, plus a trailing "+"
   tile (grey square, centered plus sign) that appends a new full-frame clip at
   the start of the asset for the user to trim.
-- Each tile shows the clip's thumbnail; tapping the tile plays it inline (loops
-  the window, stops at its end) rather than navigating anywhere or opening a
-  full-screen player. A thin, read-only timeline overlays the bottom edge of
+- Each tile shows the clip's thumbnail; tapping the tile plays it inline,
+  looping the window continuously, rather than navigating anywhere or opening
+  a full-screen player. A thin, read-only timeline overlays the bottom edge of
   the tile: it spans the whole source video with the clip's window drawn as a
   highlighted segment, so a glance at the grid shows roughly which part of the
   video each clip is from. It isn't draggable — trimming happens in the editor
