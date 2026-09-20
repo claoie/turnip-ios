@@ -28,8 +28,19 @@ final class ClipPlaybackController: ObservableObject {
     /// the finger is now rather than working through every intermediate frame.
     private var pendingSeekTime: TimeInterval?
 
-    init(asset: AVAsset) {
+    private let makePlayer: @MainActor () -> AVPlayer
+    private let isVideoAutoplayEnabled: @MainActor () -> Bool
+
+    init(
+        asset: AVAsset,
+        makePlayer: @escaping @MainActor () -> AVPlayer = { AVPlayer() },
+        isVideoAutoplayEnabled: @escaping @MainActor () -> Bool = {
+            UIAccessibility.isVideoAutoplayEnabled
+        }
+    ) {
         self.asset = asset
+        self.makePlayer = makePlayer
+        self.isVideoAutoplayEnabled = isVideoAutoplayEnabled
     }
 
     /// The tile tap: starts this clip playing (looping the window, like the old
@@ -103,10 +114,6 @@ final class ClipPlaybackController: ObservableObject {
         isPlaying = false
     }
 
-    private func makePlayer() -> AVPlayer {
-        AVPlayer()
-    }
-
     private func seek(to time: TimeInterval) {
         player?.seek(
             to: CMTime(seconds: time, preferredTimescale: 600),
@@ -160,9 +167,9 @@ final class ClipPlaybackController: ObservableObject {
     /// Loops back to the window's start, unless the system's video-autoplay setting is
     /// off — `docs/ACCESSIBILITY.md`'s Clip List checklist rules out auto-playing loops
     /// in that case, so this falls back to the old pause-at-end behavior instead.
-    private func loopBack() {
+    func loopBack() {
         guard let activeWindow else { return }
-        guard UIAccessibility.isVideoAutoplayEnabled else {
+        guard isVideoAutoplayEnabled() else {
             pause()
             return
         }
