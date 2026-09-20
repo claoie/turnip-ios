@@ -301,33 +301,26 @@ struct VideoGalleryView: View {
     /// video, tap to select. Oldest-to-newest top-to-bottom, matching `growingGrid`, and
     /// opened scrolled to the newest (bottom) row rather than the oldest.
     ///
-    /// A `scaleEffect(y: -1)` flip (on the `ScrollView` and each un-flipped tile) would
-    /// get this — and stable append-only paging — for free, but on-device it corrupted
-    /// tile rendering (stale/ghosted compositing on `VideoTileView`'s `GeometryReader` +
-    /// `.clipped()` content), so this pays for row order with a real reversal instead and
-    /// an explicit scroll-to-bottom. Known gap: paging in another page while scrolled up
-    /// inserts rows above the current position and visibly shoves it down — not yet worth
-    /// solving since it needs 60+ videos and a scroll near the top to hit.
+    /// A `ScrollViewReader.scrollTo` on first appear (tried first) reliably opened at the
+    /// right row, but forces a `LazyVGrid` to realize far more of a 60-tile page than the
+    /// handful actually on screen, which is exactly the kind of thing that shows up as
+    /// scroll lag. A `scaleEffect(y: -1)` flip (on the `ScrollView` and each un-flipped
+    /// tile) gets the same opened-at-the-bottom result for free — native offset 0 already
+    /// *is* the visual bottom, so nothing has to scroll or force-realize anything — and
+    /// paging in another page lands past the native content's far edge (now the visual
+    /// top, off-screen) rather than shoving the current scroll position down.
     private func expandedGrid(height: CGFloat) -> some View {
-        let tiles = Self.rowReversed(Array(viewModel.videos.enumerated()), columns: columns.count)
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: Self.spacing) {
-                    ForEach(tiles, id: \.element.localIdentifier) { index, asset in
-                        tile(for: asset, index: index)
-                            .id(asset.localIdentifier)
-                    }
-                }
-            }
-            .onAppear {
-                guard let newest = viewModel.videos.first else { return }
-                // `scrollTo` needs a settled layout pass to land correctly; firing it in
-                // the same runloop turn as `onAppear` intermittently no-ops.
-                DispatchQueue.main.async {
-                    proxy.scrollTo(newest.localIdentifier, anchor: .bottom)
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: Self.spacing) {
+                ForEach(
+                    Array(viewModel.videos.enumerated()), id: \.element.localIdentifier
+                ) { index, asset in
+                    tile(for: asset, index: index)
+                        .scaleEffect(x: 1, y: -1)
                 }
             }
         }
+        .scaleEffect(x: 1, y: -1)
         .frame(height: height)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(gridAccessibilityLabel)
