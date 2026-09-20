@@ -75,7 +75,10 @@ struct ClipListView: View {
     var body: some View {
         ScrollView {
             LazyVGrid(
-                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                columns: [
+                    GridItem(.flexible(), alignment: .top),
+                    GridItem(.flexible(), alignment: .top)
+                ],
                 spacing: 16
             ) {
                 ForEach(viewModel.items) { item in

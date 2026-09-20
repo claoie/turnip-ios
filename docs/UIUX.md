@@ -29,7 +29,12 @@ before that issue gets split.
 
 ```mermaid
 flowchart TD
-    A[Home / Video Gallery] -->|tap a video tile| B[Processing]
+    A[Home / Video Gallery — collapsed] -->|swipe down| A2[Home / Video Gallery — expanded]
+    A2 -->|tap a video tile| B[Processing]
+    A -->|swipe up| G[Camera]
+    A2 -->|swipe up| G
+    G -->|recording saved| B
+    G -->|cancel| A
     B -->|clips found| C[Clip List]
     B -->|no tricks detected| E1[Empty state]
     B -->|pipeline error| E2[Error state]
@@ -45,28 +50,68 @@ flowchart TD
     C -->|back| A
 ```
 
+The whole app forces dark appearance (`.preferredColorScheme(.dark)` in
+`ContentView`) — black backgrounds throughout, no light-mode variant. This is
+a v1 product decision (see "Decisions" below), not a per-screen choice.
+
 ### 1. Home / Video Gallery
 
-- Entry point *is* the picker — a 3-column grid of thumbnails covering every
-  video in the device's Photos library, not a button that opens a picker
-  sheet. Tapping a tile is the "pick video" action and goes straight to
-  Processing for that video.
-- The "Turnip" title renders inline (centered), Photos-app style — like every
-  title in the flow.
-- No account, no settings required for v1 — nothing in `DESIGN.md`'s v1 scope
-  needs either.
-- **Permission model** (shipped, in `Turnip/Home/`): because Home *is* the
-  gallery, it enumerates video `PHAsset`s itself rather than delegating to
-  an out-of-process picker, so it needs real Photos access. As built:
-  - Read/write authorization (`NSPhotoLibraryUsageDescription`) requested
-    on first launch, via `PHPhotoLibrary.requestAuthorization(for:)`.
-  - **Limited** access shows the granted videos plus a banner opening
-    `presentLimitedLibraryPicker`, rather than looking empty.
-  - **Denied** or restricted access shows an empty state pointing at
-    Settings, since there is no picker fallback once Home is the gallery.
-  - Thumbnails come from a `PHCachingImageManager` prefetching around the
-    visible rows, over 60-asset pages, so a library with hundreds of
-    videos scrolls without stalling on first load.
+Entry point *is* the picker — every video in the device's Photos library, not
+a button that opens a picker sheet. No account, no settings required for v1
+— nothing in `DESIGN.md`'s v1 scope needs either. Unlike a conventional
+single-layout screen, Home has two states (`Turnip/Home/HomeView.swift`,
+`VideoGalleryView`):
+
+- **Collapsed** (the resting/landing state): no title bar — the app mark is
+  centered in the space below the peeking row instead. One row of the
+  newest 3 videos is pinned at the true top edge (behind the status bar;
+  there's no nav bar reserving that space while collapsed), non-interactive.
+  Below it, the rest of the screen is empty black down to a fixed bottom bar
+  reading "Swipe up to take a video." On launch, the collapsed row slides
+  down from off the top edge of the screen into its resting position — the
+  landing animation, 600ms. Swiping down anywhere on that row grows it
+  toward full screen, oldest-to-newest top-to-bottom: the newest row rides
+  the growing frame's bottom edge downward while older videos reveal from
+  under the top edge, and past the reveal threshold this commits into the
+  second state; swiping up on the bottom bar presents the Camera screen
+  full-screen.
+- **Expanded**: swiping down from collapsed reveals a normal full-screen
+  scrollable grid, oldest-to-newest top-to-bottom (matching the collapsed
+  reveal) and opened scrolled to the bottom — the newest videos are visible
+  without scrolling, and scrolling up steps back through older ones. The
+  title bar is back, every video is tappable, and tapping one goes straight
+  to Processing for that video. The "Swipe up to take a video" bar stays at
+  the bottom throughout.
+
+**Permission model** (shipped, in `Turnip/Home/`): because Home *is* the
+gallery, it enumerates video `PHAsset`s itself rather than delegating to an
+out-of-process picker, so it needs real Photos access. As built:
+- Read/write authorization (`NSPhotoLibraryUsageDescription`) requested
+  on first launch, via `PHPhotoLibrary.requestAuthorization(for:)`.
+- **Limited** access shows the granted videos plus a banner opening
+  `presentLimitedLibraryPicker`, rather than looking empty.
+- **Denied** or restricted access shows an empty state pointing at
+  Settings, since there is no picker fallback once Home is the gallery.
+- Thumbnails come from a `PHCachingImageManager` prefetching around the
+  visible rows, over 60-asset pages, so a library with hundreds of
+  videos scrolls without stalling on first load.
+
+### 1a. Camera
+
+- Reached only from Home's swipe-up affordance. Minimal v1 scope: full-screen
+  back-camera preview, a cancel chevron, and one record button (tap to
+  start, tap again to stop) — no flip camera, flash, or zoom
+  (`Turnip/Camera/`).
+- Needs `NSCameraUsageDescription` and `NSMicrophoneUsageDescription`
+  (Info.plist); denied/restricted access shows a message pointing at
+  Settings, matching Home's own denied state.
+- A finished recording is saved to the Photos library (via the same
+  `ClipPhotosSaver` Export Confirmation already uses) rather than kept as a
+  private file — that turns it into an ordinary `PHAsset`, so it re-enters
+  the flow exactly the way a tapped gallery tile does: Home calls
+  `VideoLibraryViewModel.select(_:)` on the newly-created asset, which pushes
+  straight into Processing. No dedicated "recording saved" screen exists;
+  the camera cover simply dismisses into Processing's idle state.
 
 ### 2. Processing
 
@@ -78,11 +123,11 @@ flowchart TD
   no caption text, back chevron to Home. The user watches the autoplaying
   video, pausing/scrubbing it via the scrub bar if they want, and starts
   analysis when ready.
-- Once started, shows the full pipeline run: frame sampling → pose inference →
-  motion signal → peak detection → crop rect (per issues
-  [#8](https://github.com/hoiekim/turnip-ios/issues/8)–[#9](https://github.com/hoiekim/turnip-ios/issues/9)).
-  This is not instant for a multi-minute input video, so needs real progress
-  feedback, not just a spinner — e.g. "analyzing frame 400/1200."
+- Once started, the video stays on screen (paused) rather than being replaced
+  by a separate page: a progress panel — spinner or determinate bar, plus
+  "analyzing frame 400/1200" — overlays the bottom of the still-visible video,
+  dimmed behind it. This is not instant for a multi-minute input video, so
+  needs real progress feedback, not just a spinner.
 - Two exits besides success:
   - **Empty state** — pipeline completes but finds zero trick windows (e.g.
     user picked a video with no motion peaks). Message + back to Home.
@@ -210,3 +255,10 @@ Resolved 2026-09-04.
    became directly editable (decision 1, above), the full frame with the crop
    marker overlaid had to be the only view — the toggle and the cropped-only view
    are both gone, replaced by "Reset crop area."
+5. **In-app camera + dark-only theme → Added.** Recorded 2026-09-19: v1 no
+   longer requires every video to already be in the Photos library before
+   Turnip can see it — Home's swipe-up affordance starts a minimal in-app
+   camera (§1a), and a recording is saved to Photos and handed to the
+   existing `PHAsset` pipeline unchanged. Home also gained the
+   collapsed/expanded two-state layout (§1) and the app forces dark
+   appearance everywhere, dropping light-mode support.

@@ -49,10 +49,8 @@ struct ProcessingView<Destination: View>: View {
     var body: some View {
         Group {
             switch viewModel.state {
-            case .idle:
-                idleState
-            case .processing(let progress):
-                processingState(progress)
+            case .idle, .processing:
+                videoStage
             case .empty:
                 emptyState
             case .failed(let message):
@@ -105,11 +103,13 @@ struct ProcessingView<Destination: View>: View {
         return false
     }
 
-    /// The resting state: the picked video fills the screen with no native playback
+    /// The video stage: the picked video fills the screen with no native playback
     /// chrome (`BareVideoPlayerView`) — Photos-app look, black background, no title, no
-    /// caption. A thin scrub bar and the manual "Start analysis" button sit over the
-    /// bottom of the video rather than pushing it into a boxed player.
-    private var idleState: some View {
+    /// caption. This backs both `.idle` (scrub bar + "Start analysis" button over the
+    /// bottom) and `.processing` (progress overlay over the bottom instead) — the video
+    /// stays on screen and paused behind the progress UI rather than the analysis
+    /// replacing it with a separate page.
+    private var videoStage: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let player {
@@ -118,6 +118,9 @@ struct ProcessingView<Destination: View>: View {
             } else {
                 ProgressView().tint(.white)
             }
+            if isAnalyzing {
+                Color.black.opacity(0.45).ignoresSafeArea()
+            }
         }
         // `.safeAreaInset`, not `.overlay`: an overlay sizes its content at its own
         // ideal width and aligns it, so a `.frame(maxWidth: .infinity)` button inside
@@ -125,49 +128,66 @@ struct ProcessingView<Destination: View>: View {
         // inset reserves real full-width space instead — the same pattern the clip
         // list's "Export N clips" button uses.
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 12) {
-                if let player {
-                    VideoScrubBar(player: player)
-                }
-                // Pause the idle player before this state leaves the hierarchy:
-                // nothing would call `pause()` on it afterwards, so its audio would
-                // keep playing behind the progress UI and the clip list.
-                Button {
-                    player?.pause()
-                    viewModel.start(video: video)
-                } label: {
-                    // `.borderedProminent` sizes itself to the label, ignoring a
-                    // `.frame(maxWidth:)` applied to the button from outside — the
-                    // frame has to be on the label content to actually stretch it.
-                    Text("Start analysis")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            if case .processing(let progress) = viewModel.state {
+                processingOverlay(progress)
+            } else {
+                idleControls
             }
-            .padding(.horizontal)
-            .padding(.bottom, 24)
         }
     }
 
-    private func processingState(_ progress: ProcessingProgress) -> some View {
-        VStack(spacing: 16) {
+    private var idleControls: some View {
+        VStack(spacing: 12) {
+            if let player {
+                VideoScrubBar(player: player)
+            }
+            // Pause the idle player before this state leaves the hierarchy:
+            // nothing would call `pause()` on it afterwards, so its audio would
+            // keep playing behind the progress UI and the clip list.
+            Button {
+                player?.pause()
+                viewModel.start(video: video)
+            } label: {
+                // `.borderedProminent` sizes itself to the label, ignoring a
+                // `.frame(maxWidth:)` applied to the button from outside — the
+                // frame has to be on the label content to actually stretch it.
+                Text("Start analysis")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        }
+        .padding(.horizontal)
+        .padding(.bottom, 24)
+    }
+
+    /// The progress panel drawn over the bottom of the still-visible, paused video —
+    /// replaces `idleControls` in the same safe-area inset rather than replacing the
+    /// video stage itself.
+    private func processingOverlay(_ progress: ProcessingProgress) -> some View {
+        VStack(spacing: 12) {
             if let fraction = progress.fraction {
                 ProgressView(value: fraction)
+                    .tint(.white)
                     .accessibilityLabel("Analysis progress")
             } else {
                 ProgressView()
+                    .tint(.white)
                     .accessibilityLabel("Analyzing video")
             }
             Text(progress.label)
                 .font(.headline)
+                .foregroundStyle(.white)
             Text("This runs fully on-device and can take a while for long videos.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.7))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
         }
         .padding()
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(0.55))
     }
 
     private var emptyState: some View {

@@ -31,9 +31,11 @@ struct ClipPhotosSaver: Sendable {
         PhotoLibraryAuthorization(await PHPhotoLibrary.requestAuthorization(for: .addOnly))
     }
 
-    /// Saves one exported video file to Photos. The file must exist; the caller decides
-    /// when to delete the sandbox copy afterwards.
-    func saveVideo(at fileURL: URL) async throws {
+    /// Saves one exported video file to Photos, returning the created asset's
+    /// `PHAsset.localIdentifier`. The file must exist; the caller decides when to delete
+    /// the sandbox copy afterwards.
+    @discardableResult
+    func saveVideo(at fileURL: URL) async throws -> String {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             throw ClipPhotosSaveError.missingInputFile(fileURL)
         }
@@ -51,18 +53,20 @@ struct ClipPhotosSaver: Sendable {
         // The change block can't throw, so a nil creation request is reported with a flag.
         // The commit itself throws a raw PhotoKit NSError (out of space, asset rejected);
         // it is wrapped so every failure out of this method is a ClipPhotosSaveError.
-        var requestAccepted = false
+        var createdIdentifier: String?
         do {
             try await PHPhotoLibrary.shared().performChanges {
-                requestAccepted =
-                    PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: fileURL) != nil
+                createdIdentifier = PHAssetCreationRequest
+                    .creationRequestForAssetFromVideo(atFileURL: fileURL)?
+                    .placeholderForCreatedAsset?.localIdentifier
             }
         } catch {
             throw ClipPhotosSaveError.saveRejected(reason: error.localizedDescription)
         }
-        guard requestAccepted else {
+        guard let createdIdentifier else {
             throw ClipPhotosSaveError.saveRejected(
                 reason: "Photos rejected the creation request for \(fileURL.lastPathComponent)")
         }
+        return createdIdentifier
     }
 }
