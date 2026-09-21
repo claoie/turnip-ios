@@ -1,15 +1,16 @@
 import SwiftUI
 
-/// The camera-recording screen, reached from Home's "swipe up to take a video" affordance.
-/// Minimal v1 scope: full-screen back-camera preview, a cancel chevron, and one record
-/// button. On a successful recording, `onFinished` hands the caller the temp file so it can
-/// save it to Photos and feed the resulting `PHAsset` into the existing picked-video
-/// pipeline — this screen knows nothing about Photos or navigation.
+/// The camera-recording screen, one of the two pages `RootTabView` swipes between. Minimal
+/// v1 scope: full-screen back-camera preview, a cancel chevron, and one record button. On a
+/// successful recording, `onFinished` hands the caller the temp file so it can save it to
+/// Photos and feed the resulting `PHAsset` into the existing picked-video pipeline — this
+/// screen knows nothing about Photos or navigation. `onCancel` backs out to the gallery tab;
+/// a no-op default since not every caller (e.g. a preview) needs one.
 struct CameraCaptureView: View {
     let onFinished: (URL) -> Void
+    var onCancel: () -> Void = {}
 
     @StateObject private var viewModel = CameraCaptureViewModel()
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ZStack {
@@ -45,7 +46,7 @@ struct CameraCaptureView: View {
 
     private var cancelButton: some View {
         Button {
-            dismiss()
+            onCancel()
         } label: {
             Image(systemName: "xmark")
                 .font(.body.weight(.semibold))

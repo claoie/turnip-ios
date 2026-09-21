@@ -2,25 +2,19 @@ import Photos
 import SwiftUI
 
 /// Home / Video Gallery per docs/UIUX.md: the entry screen *is* the video picker — a 3-column
-/// grid of every video in the Photos library. Tapping a tile is the "pick" action.
+/// grid of every video in the Photos library, newest first. Tapping a tile is the "pick" action.
+/// The view model is owned by `RootTabView` (shared with the Camera tab, whose finished
+/// recordings feed into the same `select(_:)` a tapped tile calls) rather than by this view.
 struct HomeView: View {
-    @StateObject private var viewModel = VideoLibraryViewModel()
-    @State private var showCamera = false
-    /// Collapsed (the resting/landing state — logo centered, no title, one row peeking at
-    /// the top) vs. expanded (swiped down into a full-screen scrollable grid with the
-    /// title bar back). The title bar itself is driven by this, not just the grid's own
-    /// layout, so it has to live here rather than inside `VideoGalleryView`.
-    @State private var isExpanded = false
+    @ObservedObject var viewModel: VideoLibraryViewModel
 
     var body: some View {
         NavigationStack(path: $viewModel.path) {
             content
-                .navigationTitle("Turnip")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar(isExpanded ? .visible : .hidden, for: .navigationBar)
-                .fullScreenCover(isPresented: $showCamera) {
-                    CameraCaptureView(onFinished: handleRecorded)
+                .toolbar {
+                    ToolbarItem(placement: .principal) { TitleView() }
                 }
+                .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(for: SelectedVideo.self) { video in
                     // The Processing screen shows the picked video and runs the real
                     // detection pipeline on the user's tap, then pushes the clip list
@@ -61,8 +55,7 @@ struct HomeView: View {
         case .denied(let restricted):
             PhotosAccessDeniedView(restricted: restricted)
         case .authorized, .limited:
-            VideoGalleryView(
-                viewModel: viewModel, isExpanded: $isExpanded, onSwipeUpToRecord: { showCamera = true })
+            VideoGalleryView(viewModel: viewModel)
         }
     }
 
@@ -72,269 +65,80 @@ struct HomeView: View {
             set: { if !$0 { viewModel.errorMessage = nil } }
         )
     }
+}
 
-    /// A recording finished: save it to Photos (reusing the same `ClipPhotosSaver` the
-    /// export flow already uses), then hand the resulting `PHAsset` to `viewModel.select`
-    /// — the exact call a tapped gallery tile makes. That pushes it onto the shared
-    /// `NavigationStack` path and lands on `ProcessingView`'s idle "Start analysis" state
-    /// with no new navigation code.
-    private func handleRecorded(_ fileURL: URL) {
-        showCamera = false
-        Task {
-            defer { try? FileManager.default.removeItem(at: fileURL) }
-            do {
-                let identifier = try await ClipPhotosSaver().saveVideo(at: fileURL)
-                guard let asset = PHAsset.fetchAssets(
-                    withLocalIdentifiers: [identifier], options: nil
-                ).firstObject else { return }
-                viewModel.select(asset)
-            } catch {
-                viewModel.errorMessage = (error as? LocalizedError)?.errorDescription
-                    ?? error.localizedDescription
-            }
+/// The nav bar's custom title: the app mark beside "Turnip", the mark sized relative to the
+/// title text (1.2x its height) rather than an independent constant, so the two stay
+/// proportional if the title style ever changes.
+private struct TitleView: View {
+    private static let fontSize: CGFloat = 17
+    private static let fontWeight: Font.Weight = .semibold
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image("SplashLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(height: Self.fontSize * 1.2)
+            Text("Turnip")
+                .font(.system(size: Self.fontSize, weight: Self.fontWeight))
         }
     }
 }
 
-/// The grid plus its decorations: a "select more" banner under limited access, a bottom
-/// banner with a cancel button while a tapped video is being fetched, and — when nothing
-/// is being fetched — the "swipe up to take a video" affordance that starts the camera.
-///
-/// Two states, not one screen: **collapsed** (the landing state — no title bar, the app
-/// mark centered on screen, one row of the newest videos pinned at the true top edge,
-/// growing live as the user swipes down) and **expanded** (committed into, past the reveal
-/// threshold) — a normal full-screen scrollable grid with the title bar back.
+/// The grid plus its decorations: a "select more" banner under limited access, and a bottom
+/// banner with a cancel button while a tapped video is being fetched. An ordinary full-screen
+/// scrollable grid, newest videos first — no landing/reveal state.
 struct VideoGalleryView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
-    @Binding var isExpanded: Bool
-    let onSwipeUpToRecord: () -> Void
 
     private static let spacing: CGFloat = 2
     private let columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: 3)
 
-    /// Drives the landing animation: the collapsed row slides down from off the top edge
-    /// into its resting position once, on first appearance.
-    @State private var hasAppeared = false
-    @State private var hasInitialized = false
-    /// How far into the swipe-down-to-expand reveal the user currently is, live while
-    /// dragging: 0 = collapsed height, 1 = fully expanded height. Settles back to exactly
-    /// 0 or 1 once the gesture ends.
-    @State private var revealProgress: CGFloat = 0
-
-    /// How many points of downward drag equal a full reveal.
-    private static let revealDragDistance: CGFloat = 240
-    /// How many tiles the *collapsed/growing* grid ever renders — capped (rather than the
-    /// whole library) since it isn't inside a `ScrollView` and so isn't lazy. Comfortably
-    /// covers any phone screen's worth of rows; the real, fully lazy `ScrollView` grid
-    /// takes over once `isExpanded` settles true.
-    private static let collapsedTileCap = 24
-
     var body: some View {
-        GeometryReader { proxy in
-            let tileSize = (proxy.size.width - CGFloat(columns.count - 1) * Self.spacing)
-                / CGFloat(columns.count)
-            let rowHeight = tileSize + Self.spacing
-
-            // The logo, the landing slide, and (via the bottom bar below) the "swipe up"
-            // text must all render regardless of load state — an empty or not-yet-loaded
-            // library is exactly when a user most needs the record affordance, and it must
-            // not depend on the grid ever having tiles to animate in.
-            if isExpanded {
-                expandedContent(height: proxy.size.height)
-            } else {
-                ZStack {
-                    // Centered on the *whole* container would sit visually high — the
-                    // peeking row above eats into that space but nothing below balances
-                    // it, since the bottom bar is already excluded via `safeAreaInset`.
-                    // Offsetting by half the row's height centers the mark in the space
-                    // actually left below the row instead.
-                    Image("SplashLogo")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 260, height: 260)
-                        .offset(y: rowHeight / 2)
-                    VStack(spacing: 0) {
-                        growingGrid(
-                            rowHeight: rowHeight, fullHeight: proxy.size.height,
-                            entryOffset: proxy.size.height)
-                        Spacer(minLength: 0)
-                    }
+        content
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if viewModel.authorization == .limited {
+                    LimitedAccessBanner(selectMore: viewModel.presentLimitedLibraryPicker)
                 }
-                // The whole landing page responds to the swipe, not just the tile row or
-                // the bottom bar — the bar keeps its own copy of the up-swipe below since
-                // it lives outside this content in a `safeAreaInset` and this gesture
-                // can't reach that area.
-                .contentShape(Rectangle())
-                .gesture(collapsedDragGesture)
             }
-        }
-        // Collapsed: content goes edge-to-edge behind the status bar (there's no nav bar
-        // reserving that space). Expanded: the nav bar is back, so the safe area has to be
-        // respected again or the title renders on top of the grid instead of above it.
-        .ignoresSafeArea(edges: isExpanded ? [] : .top)
-        .background(Color.black.ignoresSafeArea())
-        .onAppear {
-            guard !hasInitialized else { return }
-            hasInitialized = true
-            withAnimation(.easeOut(duration: 0.6)) {
-                hasAppeared = true
-            }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if viewModel.authorization == .limited {
-                LimitedAccessBanner(selectMore: viewModel.presentLimitedLibraryPicker)
-            }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let resolution = viewModel.resolution {
-                ResolutionBanner(resolution: resolution, cancel: viewModel.cancelSelection)
-            } else {
-                SwipeUpToRecordBar(onSwipeUp: onSwipeUpToRecord)
-                    .opacity(hasAppeared ? 1 : 0)
-            }
-        }
-    }
-
-    /// The collapsed/growing grid: not a `ScrollView` at all — up to `collapsedTileCap`
-    /// videos in a plain `LazyVGrid`, non-interactive. A `ScrollView` keeps its own pan
-    /// gesture recognizer even while `.scrollDisabled`, and that recognizer beat a sibling
-    /// `DragGesture` for the touch far too often for swipe-down-to-expand to fire
-    /// reliably, so this state avoids having a `ScrollView` there to compete with in the
-    /// first place. Its own height tracks `revealProgress` live: dragging down grows it
-    /// from `rowHeight` toward `fullHeight`, `.clipped()` to reveal more rows as it grows
-    /// rather than stretching the ones already visible. Tiles aren't tappable here either
-    /// — nothing asks for opening a video before the grid is expanded.
-    private func growingGrid(rowHeight: CGFloat, fullHeight: CGFloat, entryOffset: CGFloat) -> some View {
-        let height = rowHeight + (fullHeight - rowHeight) * revealProgress
-        // Reverses the order of *rows*, not of assets — each row keeps its own
-        // left-to-right order, so the newest row (last after this reversal) reads
-        // exactly like the first row of `expandedGrid`, just relocated to the
-        // bottom of this frame.
-        let tiles = Self.rowReversed(
-            Array(viewModel.videos.prefix(Self.collapsedTileCap)), columns: columns.count)
-        return LazyVGrid(columns: columns, spacing: Self.spacing) {
-            ForEach(tiles, id: \.localIdentifier) { asset in
-                VideoTileView(
-                    asset: asset,
-                    thumbnails: viewModel.thumbnails,
-                    revision: viewModel.thumbnails.revision(for: asset),
-                    isResolving: viewModel.isResolving(asset),
-                    downloadProgress: viewModel.downloadProgress(for: asset)
-                )
-            }
-        }
-        // The frame's own top edge is pinned at the screen's top edge (see the
-        // enclosing `VStack`), so growing its height extends the bottom edge
-        // downward. Bottom-aligning the (taller, always fully laid out) grid inside
-        // it means the newest row rides that bottom edge down while older rows
-        // reveal from above.
-        .frame(height: max(height, rowHeight), alignment: .bottom)
-        .clipped()
-        .offset(y: hasAppeared ? 0 : -entryOffset)
-        .opacity(hasAppeared ? 1 : 0)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(gridAccessibilityLabel)
-        .accessibilityIdentifier("video-grid")
-        .accessibilityAddTraits(.isButton)
-        // VoiceOver has no swipe gesture equivalent on a plain container; a double-tap
-        // action is the only way it can reach the expanded grid at all.
-        .accessibilityAction { expand() }
-    }
-
-    /// One gesture for the whole landing page, live-tracking on the way down (the grid
-    /// grows with the finger, matching "tiles come down as I swipe" rather than a sudden
-    /// cross-fade once released) and threshold-based on the way up (unchanged — already
-    /// felt right as a plain swipe-to-open-camera).
-    private var collapsedDragGesture: some Gesture {
-        DragGesture(minimumDistance: 10)
-            .onChanged { value in
-                let dy = value.translation.height
-                revealProgress = dy > 0 ? min(1, dy / Self.revealDragDistance) : 0
-            }
-            .onEnded { value in
-                let dy = value.translation.height
-                if dy > 0 {
-                    if revealProgress > 0.35 {
-                        expand()
-                    } else {
-                        withAnimation(.easeOut(duration: 0.25)) { revealProgress = 0 }
-                    }
-                } else {
-                    withAnimation(.easeOut(duration: 0.25)) { revealProgress = 0 }
-                    if dy < -40 {
-                        onSwipeUpToRecord()
-                    }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let resolution = viewModel.resolution {
+                    ResolutionBanner(resolution: resolution, cancel: viewModel.cancelSelection)
                 }
             }
     }
 
-    /// Commits to the expanded grid: finishes the live reveal to full height, then swaps
-    /// in the real `ScrollView`-backed grid once that animation has visually landed — the
-    /// swap itself has to wait, or the still-mid-drag frame would jump to a `ScrollView`
-    /// that hasn't settled yet.
-    private func expand() {
-        withAnimation(.easeOut(duration: 0.3)) {
-            revealProgress = 1
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            isExpanded = true
-        }
-    }
-
-    /// Everything the *expanded* state can show — loading, empty, or the real grid. Kept
-    /// separate from the collapsed branch so the logo/landing-animation/bottom-bar shell
-    /// above renders unconditionally, independent of whether the library has loaded yet.
     @ViewBuilder
-    private func expandedContent(height: CGFloat) -> some View {
+    private var content: some View {
         if !viewModel.hasLoaded {
+            // Not yet the same thing as "no videos" — the first fetch hasn't run.
             ProgressView()
-                .tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if viewModel.videos.isEmpty {
             emptyState
         } else {
-            expandedGrid(height: height)
+            grid
         }
     }
 
-    /// The expanded, full-screen scrollable grid — ordinary Photos-picker browsing, every
-    /// video, tap to select. Oldest-to-newest top-to-bottom, matching `growingGrid`, and
-    /// opened scrolled to the newest (bottom) row rather than the oldest.
-    ///
-    /// A `ScrollViewReader.scrollTo` on first appear (tried first) reliably opened at the
-    /// right row, but forces a `LazyVGrid` to realize far more of a 60-tile page than the
-    /// handful actually on screen, which is exactly the kind of thing that shows up as
-    /// scroll lag. A `scaleEffect(y: -1)` flip (on the `ScrollView` and each un-flipped
-    /// tile) gets the same opened-at-the-bottom result for free — native offset 0 already
-    /// *is* the visual bottom, so nothing has to scroll or force-realize anything — and
-    /// paging in another page lands past the native content's far edge (now the visual
-    /// top, off-screen) rather than shoving the current scroll position down.
-    private func expandedGrid(height: CGFloat) -> some View {
+    private var grid: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: Self.spacing) {
                 ForEach(
                     Array(viewModel.videos.enumerated()), id: \.element.localIdentifier
                 ) { index, asset in
                     tile(for: asset, index: index)
-                        .scaleEffect(x: 1, y: -1)
                 }
             }
         }
-        .scaleEffect(x: 1, y: -1)
-        .frame(height: height)
+        // The grid announces its count when VoiceOver enters it — a VoiceOver user
+        // otherwise has no sense of how many videos they're swiping through. The
+        // ScrollView must be declared an accessibility container: a label on a
+        // non-element container is never announced on entry.
         .accessibilityElement(children: .contain)
         .accessibilityLabel(gridAccessibilityLabel)
         .accessibilityIdentifier("video-grid")
-    }
-
-    /// Groups `assets` into rows of `columns` and reverses the row order while keeping
-    /// each row's own order intact — unlike reversing the flat array, which would also
-    /// mirror left-to-right order within what was the last row.
-    private static func rowReversed<T>(_ assets: [T], columns: Int) -> [T] {
-        stride(from: 0, to: assets.count, by: columns)
-            .map { Array(assets[$0..<min($0 + columns, assets.count)]) }
-            .reversed()
-            .flatMap { $0 }
     }
 
     private func tile(for asset: PHAsset, index: Int) -> some View {
@@ -429,41 +233,6 @@ private struct ResolutionBanner: View {
         .padding()
         .background(.bar)
         .accessibilityIdentifier("resolution-banner")
-    }
-}
-
-/// The bottom affordance inviting the user to record: an up-arrow, an instruction, and a
-/// swipe-up gesture scoped to this bar specifically (not the whole screen) so it never
-/// competes with the grid `ScrollView`'s own vertical scroll gesture.
-private struct SwipeUpToRecordBar: View {
-    let onSwipeUp: () -> Void
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: "chevron.up")
-                .font(.footnote.weight(.semibold))
-            Text("Swipe up to take a video")
-                .font(.footnote.weight(.semibold))
-        }
-        .foregroundStyle(.white)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
-        .background(Color.black)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 10)
-                .onEnded { value in
-                    if value.translation.height < -40 {
-                        onSwipeUp()
-                    }
-                }
-        )
-        .accessibilityIdentifier("swipe-up-to-record")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityLabel("Take a video")
-        // VoiceOver has no swipe gesture equivalent here; a double-tap action is the only
-        // way it can start the camera at all.
-        .accessibilityAction { onSwipeUp() }
     }
 }
 

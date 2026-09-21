@@ -29,12 +29,11 @@ before that issue gets split.
 
 ```mermaid
 flowchart TD
-    A[Home / Video Gallery — collapsed] -->|swipe down| A2[Home / Video Gallery — expanded]
-    A2 -->|tap a video tile| B[Processing]
-    A -->|swipe up| G[Camera]
-    A2 -->|swipe up| G
+    S[Splash] -->|fades out| A
+    A[Home / Video Gallery] -->|tap a video tile| B[Processing]
+    A -->|tap camera icon / swipe right| G[Camera]
+    G -->|tap gallery icon / swipe left| A
     G -->|recording saved| B
-    G -->|cancel| A
     B -->|clips found| C[Clip List]
     B -->|no tricks detected| E1[Empty state]
     B -->|pipeline error| E2[Error state]
@@ -54,34 +53,36 @@ The whole app forces dark appearance (`.preferredColorScheme(.dark)` in
 `ContentView`) — black backgrounds throughout, no light-mode variant. This is
 a v1 product decision (see "Decisions" below), not a per-screen choice.
 
+### 0. Splash
+
+`Turnip/App/SplashScreenView.swift`: the app mark centered on black.
+`ContentView` shows it as an overlay for a fixed beat on launch, then
+cross-fades it out to reveal the root tab view underneath — a timer, not a
+readiness signal, so it never depends on how long the Photos fetch takes.
+
+### Root navigation
+
+`Turnip/App/RootTabView.swift` hosts the app's two pages — Camera and Home
+— in a swipeable `TabView` (`.page` style, native page dots hidden), with a
+custom floating pill bar overlaid at the bottom rather than the system tab
+bar: camera icon on the left, gallery-grid icon on the right, gallery
+selected by default. Tapping an icon or swiping the page (right reveals
+Camera, since it's the page before Home) both drive the same selection
+state. It also owns the one `VideoLibraryViewModel` shared by both pages —
+a finished recording needs to hand its asset into the same
+`select(_:)` a tapped gallery tile calls, then switch back to the gallery
+tab so the pick lands the way tapping a tile always has.
+
 ### 1. Home / Video Gallery
 
 Entry point *is* the picker — every video in the device's Photos library, not
 a button that opens a picker sheet. No account, no settings required for v1
-— nothing in `DESIGN.md`'s v1 scope needs either. Unlike a conventional
-single-layout screen, Home has two states (`Turnip/Home/HomeView.swift`,
-`VideoGalleryView`):
-
-- **Collapsed** (the resting/landing state): no title bar — the app mark is
-  centered in the space below the peeking row instead. One row of the
-  newest 3 videos is pinned at the true top edge (behind the status bar;
-  there's no nav bar reserving that space while collapsed), non-interactive.
-  Below it, the rest of the screen is empty black down to a fixed bottom bar
-  reading "Swipe up to take a video." On launch, the collapsed row slides
-  down from off the top edge of the screen into its resting position — the
-  landing animation, 600ms. Swiping down anywhere on that row grows it
-  toward full screen, oldest-to-newest top-to-bottom: the newest row rides
-  the growing frame's bottom edge downward while older videos reveal from
-  under the top edge, and past the reveal threshold this commits into the
-  second state; swiping up on the bottom bar presents the Camera screen
-  full-screen.
-- **Expanded**: swiping down from collapsed reveals a normal full-screen
-  scrollable grid, oldest-to-newest top-to-bottom (matching the collapsed
-  reveal) and opened scrolled to the bottom — the newest videos are visible
-  without scrolling, and scrolling up steps back through older ones. The
-  title bar is back, every video is tappable, and tapping one goes straight
-  to Processing for that video. The "Swipe up to take a video" bar stays at
-  the bottom throughout.
+— nothing in `DESIGN.md`'s v1 scope needs either. An ordinary full-screen
+scrollable grid (`Turnip/Home/HomeView.swift`, `VideoGalleryView`), newest
+videos first, top-to-bottom, three columns. The nav bar shows the app mark
+beside the "Turnip" title (the mark 1.2x the title text's height) — no
+custom landing state, no swipe-to-reveal. Tapping a tile goes straight to
+Processing for that video.
 
 **Permission model** (shipped, in `Turnip/Home/`): because Home *is* the
 gallery, it enumerates video `PHAsset`s itself rather than delegating to an
@@ -98,9 +99,11 @@ out-of-process picker, so it needs real Photos access. As built:
 
 ### 1a. Camera
 
-- Reached only from Home's swipe-up affordance. Minimal v1 scope: full-screen
-  back-camera preview, a cancel chevron, and one record button (tap to
-  start, tap again to stop) — no flip camera, flash, or zoom
+- One of the root tab view's two pages (see "Root navigation" above), not a
+  modal — reached by tapping the floating bar's camera icon or swiping the
+  page right from Home. Minimal v1 scope: full-screen back-camera preview, a
+  cancel chevron (switches back to the gallery tab), and one record button
+  (tap to start, tap again to stop) — no flip camera, flash, or zoom
   (`Turnip/Camera/`).
 - Needs `NSCameraUsageDescription` and `NSMicrophoneUsageDescription`
   (Info.plist); denied/restricted access shows a message pointing at
@@ -108,10 +111,10 @@ out-of-process picker, so it needs real Photos access. As built:
 - A finished recording is saved to the Photos library (via the same
   `ClipPhotosSaver` Export Confirmation already uses) rather than kept as a
   private file — that turns it into an ordinary `PHAsset`, so it re-enters
-  the flow exactly the way a tapped gallery tile does: Home calls
-  `VideoLibraryViewModel.select(_:)` on the newly-created asset, which pushes
-  straight into Processing. No dedicated "recording saved" screen exists;
-  the camera cover simply dismisses into Processing's idle state.
+  the flow exactly the way a tapped gallery tile does: `RootTabView` calls
+  `VideoLibraryViewModel.select(_:)` on the newly-created asset and switches
+  to the gallery tab, landing on Processing's idle state exactly as if the
+  user had tapped a tile.
 
 ### 2. Processing
 
