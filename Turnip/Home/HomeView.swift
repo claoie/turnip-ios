@@ -262,6 +262,7 @@ struct PhotosAccessDeniedView: View {
         PhotosAccessDeniedView(restricted: false)
             .navigationTitle("Turnip")
     }
+    .preferredColorScheme(.dark)
 }
 
 #Preview("Restricted") {
@@ -269,4 +270,5 @@ struct PhotosAccessDeniedView: View {
         PhotosAccessDeniedView(restricted: true)
             .navigationTitle("Turnip")
     }
+    .preferredColorScheme(.dark)
 }

@@ -237,4 +237,5 @@ private struct ClipStatusRow: View {
             saveToPhotos: { _ in }
         )
     }
+    .preferredColorScheme(.dark)
 }

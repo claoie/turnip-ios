@@ -56,4 +56,5 @@ struct ClipShareButton: View {
         .appendingPathComponent("turnip-share-preview.mp4")
     _ = FileManager.default.createFile(atPath: url.path, contents: Data())
     return ClipShareButton(fileURL: url, clipTitle: "Clip 1 · 2.4s")
+        .preferredColorScheme(.dark)
 }

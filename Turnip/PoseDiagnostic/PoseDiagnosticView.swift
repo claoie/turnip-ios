@@ -103,4 +103,5 @@ struct PoseDiagnosticView: View {
             )
         )
     }
+    .preferredColorScheme(.dark)
 }

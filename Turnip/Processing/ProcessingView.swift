@@ -223,4 +223,5 @@ struct ProcessingView<Destination: View>: View {
             }
         )
     }
+    .preferredColorScheme(.dark)
 }

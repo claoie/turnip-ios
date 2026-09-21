@@ -330,4 +330,5 @@ private struct ClipCardView: View {
             asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null"))
         )
     }
+    .preferredColorScheme(.dark)
 }

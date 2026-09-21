@@ -230,6 +230,7 @@ private struct CropOverlayShape: Shape {
             onCommit: { _ in },
             onDelete: {})
     }
+    .preferredColorScheme(.dark)
 }
 
 /// Writes a tiny generated sample movie for the `#Preview` above — six seconds of
