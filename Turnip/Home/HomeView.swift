@@ -15,6 +15,10 @@ struct HomeView: View {
                     ToolbarItem(placement: .principal) { TitleView() }
                 }
                 .navigationBarTitleDisplayMode(.inline)
+                // The grid runs edge-to-edge under the status bar/nav bar (docs/UIUX.md);
+                // without hiding the bar's own background, its blur would opaque out the
+                // tiles scrolling underneath it.
+                .toolbarBackground(.hidden, for: .navigationBar)
                 .navigationDestination(for: SelectedVideo.self) { video in
                     // The Processing screen shows the picked video and runs the real
                     // detection pipeline on the user's tap, then pushes the clip list
@@ -143,6 +147,7 @@ struct VideoGalleryView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(gridAccessibilityLabel)
         .accessibilityIdentifier("video-grid")
+        .modifier(HiddenTopScrollEdgeEffect())
     }
 
     private func tile(for asset: PHAsset, index: Int) -> some View {
