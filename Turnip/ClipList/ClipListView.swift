@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UIKit
 
 /// The export-confirmation screen's per-clip export, wired to the real pipeline step 7
 /// (`ClipExporter`): trims the source video to the window, crops to its rect, and writes
@@ -42,11 +43,12 @@ private func saveOneClipToPhotos(_ url: URL) async throws {
 
 /// The triage screen (`docs/UIUX.md` § "Clip List (triage)"): a grid of square tiles,
 /// one per detected trick window, plus a trailing "+" tile that appends a new clip. Each
-/// tile plays its clip inline on tap, draws a read-only timeline over the bottom
-/// showing where its window sits in the full source video (not adjustable here — that's
-/// what the editor is for), and carries an expand button (straight into the full
-/// `ClipEditorView` — "view large" and "edit" are the same entry point, not two icons
-/// on the tile) and the keep/discard toggle.
+/// tile autoplay-loops its window inline (accessibility permitting) so the grid reads
+/// like a wall of tiny previews rather than static frames, draws a read-only timeline
+/// over the bottom showing where its window sits in the full source video (not
+/// adjustable here — that's what the editor is for), and carries the keep/discard
+/// toggle. Tapping the tile itself opens the full `ClipEditorView` directly — "view
+/// large" and "edit" are the same entry point, not a separate icon.
 ///
 /// The processing screen pushes this with the pipeline's output; the export action goes
 /// to export confirmation. The back chevron pops to Home rather than to the processing
@@ -55,7 +57,6 @@ private func saveOneClipToPhotos(_ url: URL) async throws {
 /// flow's shared stack.
 struct ClipListView: View {
     @StateObject private var viewModel: ClipListViewModel
-    @StateObject private var playback: ClipPlaybackController
     @State private var showingExport = false
     @State private var expandTarget: ExpandTarget?
     let popToRoot: () -> Void
@@ -68,7 +69,6 @@ struct ClipListView: View {
     ) {
         _viewModel = StateObject(wrappedValue: ClipListViewModel(
             items: items, asset: asset, loader: loader))
-        _playback = StateObject(wrappedValue: ClipPlaybackController(asset: asset))
         self.popToRoot = popToRoot
     }
 
@@ -85,8 +85,8 @@ struct ClipListView: View {
                     ClipCardView(
                         item: item,
                         viewModel: viewModel,
-                        playback: playback,
-                        onExpand: { expandTarget = ExpandTarget(id: item.id) })
+                        isSuspended: expandTarget != nil,
+                        onOpen: { expandTarget = ExpandTarget(id: item.id) })
                 }
                 AddClipTile { Task { await viewModel.addClip() } }
             }
@@ -128,18 +128,14 @@ struct ClipListView: View {
         .fullScreenCover(item: $expandTarget) { target in
             editor(for: target)
         }
-        .onChange(of: expandTarget?.id) { _ in
-            // The grid's own inline playback shouldn't keep running behind the
-            // editor, and shouldn't resume stale audio once the editor closes.
-            playback.stop()
-        }
     }
 
-    /// The expand button's destination: the full `ClipEditorView` (crop + trim) —
-    /// expand goes directly to the editor rather than through an intermediate
-    /// full-screen viewer, merging "view large" and "edit" into one entry point.
-    /// The editor owns its own back/Delete toolbar and closes itself via
-    /// `@Environment(\.dismiss)`, which resets `expandTarget` to `nil`.
+    /// The tile tap's destination: the full `ClipEditorView` (crop + trim) — tapping
+    /// goes directly to the editor rather than through an intermediate full-screen
+    /// viewer, merging "view large" and "edit" into one entry point. The editor owns
+    /// its own back/Delete toolbar and closes itself via `@Environment(\.dismiss)`,
+    /// which resets `expandTarget` to `nil` — each tile's `isSuspended` flag (derived
+    /// from `expandTarget`) then lets its player resume.
     @ViewBuilder
     private func editor(for target: ExpandTarget) -> some View {
         if let itemBinding = viewModel.binding(for: target.id) {
@@ -154,7 +150,7 @@ struct ClipListView: View {
     }
 }
 
-/// The expand button's presentation target: `UUID` alone isn't `Identifiable`, and
+/// The tapped tile's presentation target: `UUID` alone isn't `Identifiable`, and
 /// `fullScreenCover(item:)` needs one to know which clip to open (and to dismiss when
 /// it goes back to `nil`).
 private struct ExpandTarget: Identifiable {
@@ -183,23 +179,30 @@ private struct AddClipTile: View {
     }
 }
 
-/// One triage tile: a square clip surface (thumbnail, or the live inline playback while
-/// it's the active clip) with the expand button at the top-leading corner, the
-/// keep/discard toggle at the top-trailing corner, and a read-only range timeline
-/// overlaid on the bottom edge — all siblings drawn as overlays on the tap-driven media
-/// layer rather than nested inside a shared `Button`, so each keeps its own hit target
-/// instead of racing the tile's play/pause tap (the bug in the previous pencil-icon
-/// button).
+/// One triage tile: a square clip surface (an autoplay-looping preview layered over its
+/// poster thumbnail, so there's no blank flash while the loop's player becomes ready)
+/// with the keep/discard toggle at the top-trailing corner and a read-only range
+/// timeline overlaid on the bottom edge — siblings drawn as overlays on the tap-driven
+/// media layer rather than nested inside a shared `Button`, so each keeps its own hit
+/// target instead of racing the tile's tap.
+///
+/// Owns its own `AVQueuePlayer` + `AVPlayerLooper` rather than sharing one across the
+/// grid: every visible tile loops simultaneously, which a single shared player can't
+/// do. `LazyVGrid` mounting/unmounting off-screen tiles bounds how many of these run
+/// concurrently to what's on (or near) screen.
 private struct ClipCardView: View {
     let item: ClipListItem
     @ObservedObject var viewModel: ClipListViewModel
-    @ObservedObject var playback: ClipPlaybackController
-    let onExpand: () -> Void
+    /// True while the full-screen editor is up, per `ClipListView.expandTarget`. The
+    /// editor's `fullScreenCover` doesn't reliably fire `onDisappear` on the tiles
+    /// behind it, so this is the signal that actually pauses them instead.
+    let isSuspended: Bool
+    let onOpen: () -> Void
 
     @State private var thumbnail: CGImage?
     @State private var duration: TimeInterval?
-
-    private var isActive: Bool { playback.activeItemID == item.id }
+    @State private var player: AVQueuePlayer?
+    @State private var looper: AVPlayerLooper?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -217,6 +220,23 @@ private struct ClipCardView: View {
             thumbnail = await image
             duration = await assetDuration
         }
+        .onAppear { startPlayback() }
+        .onDisappear { teardownPlayback() }
+        .onChange(of: isSuspended) { suspended in
+            if suspended {
+                player?.pause()
+            } else {
+                startPlayback()
+            }
+        }
+        .onChange(of: item.window) { _ in
+            // `ForEach` keys tiles by `item.id`, so an editor commit that changes the
+            // window reuses this same tile's identity — and its player/looper — rather
+            // than creating a fresh one. Without rebuilding here, the loop would keep
+            // playing the pre-edit range forever.
+            teardownPlayback()
+            startPlayback()
+        }
     }
 
     private var tile: some View {
@@ -225,54 +245,73 @@ private struct ClipCardView: View {
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .clipped()
                 .contentShape(Rectangle())
-                .onTapGesture { playback.toggle(item) }
+                .onTapGesture(perform: onOpen)
                 // The UI-test screenshot harness waits on this label to prove the
                 // thumbnail fallback actually engaged.
-                .accessibilityLabel(
-                    thumbnail == nil && !isActive
-                        ? "Thumbnail placeholder"
-                        : (playback.isPlaying && isActive ? "Pause clip" : "Play clip"))
+                .accessibilityLabel(thumbnail == nil ? "Thumbnail placeholder" : "Open clip")
                 .accessibilityAddTraits(.isButton)
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(alignment: .topLeading) { expandButton }
         .overlay(alignment: .topTrailing) { keepButton }
         .overlay(alignment: .bottom) { trimOverlay }
     }
 
     @ViewBuilder
     private var mediaLayer: some View {
-        if isActive, let player = playback.player {
-            BareVideoPlayerView(player: player, videoGravity: .resizeAspectFill)
-        } else if let thumbnail {
-            // The generator hands back the displayed (upright) frame, so `.up` is exact —
-            // no UIKit bridge needed.
-            Image(decorative: thumbnail, scale: 1.0, orientation: .up)
-                .resizable()
-                .scaledToFill()
-        } else {
-            Color(.quaternarySystemFill)
-                .overlay { ProgressView() }
+        ZStack {
+            if let thumbnail {
+                // The generator hands back the displayed (upright) frame, so `.up` is
+                // exact — no UIKit bridge needed. Drawn under the player unconditionally
+                // as a poster: the looper's item takes a moment to become ready, and
+                // without this the tile would show black until it does.
+                Image(decorative: thumbnail, scale: 1.0, orientation: .up)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color(.quaternarySystemFill)
+                    .overlay { ProgressView() }
+            }
+            if let player {
+                BareVideoPlayerView(player: player, videoGravity: .resizeAspectFill)
+            }
         }
     }
 
-    /// The diameter every top-corner icon circle renders at, kept/discarded or not —
-    /// a fixed frame rather than content-driven padding, so swapping the keep button's
-    /// icon (or hiding it entirely for the unselected state) can never change its size
-    /// relative to the expand button's.
-    private static let iconButtonDiameter: CGFloat = 28
-
-    private var expandButton: some View {
-        ScrimIconButton(
-            systemImage: "arrow.up.left.and.arrow.down.right",
-            accessibilityLabel: "Expand clip",
-            diameter: Self.iconButtonDiameter,
-            font: .caption.weight(.semibold),
-            action: onExpand
-        )
-        .padding(6)
+    /// Builds the tile's own looping player on first need and starts it, unless the
+    /// system's video-autoplay setting is off (`docs/ACCESSIBILITY.md`'s Clip List
+    /// checklist rules out auto-playing loops in that case, so the tile just shows its
+    /// static poster) or the editor is currently covering the grid. Safe to call
+    /// repeatedly — an existing player is just resumed.
+    private func startPlayback() {
+        guard UIAccessibility.isVideoAutoplayEnabled, !isSuspended else { return }
+        if player == nil {
+            let templateItem = AVPlayerItem(sdrAsset: viewModel.sourceAsset)
+            let queuePlayer = AVQueuePlayer()
+            queuePlayer.isMuted = true
+            let timeRange = CMTimeRange(
+                start: CMTime(seconds: item.window.startTime, preferredTimescale: 600),
+                end: CMTime(seconds: item.window.endTime, preferredTimescale: 600))
+            looper = AVPlayerLooper(player: queuePlayer, templateItem: templateItem, timeRange: timeRange)
+            player = queuePlayer
+        }
+        player?.play()
     }
+
+    /// Releases the tile's decoder entirely rather than just pausing — called on
+    /// `onDisappear`, so a tile scrolled far off-screen doesn't keep holding a decode
+    /// pipeline open behind ones that are actually visible.
+    private func teardownPlayback() {
+        player?.pause()
+        looper?.disableLooping()
+        looper = nil
+        player = nil
+    }
+
+    /// The diameter every top-corner icon circle renders at, kept/discarded or not —
+    /// a fixed frame rather than content-driven padding, so hiding the keep button's
+    /// checkmark for the unselected state can never change its size.
+    private static let iconButtonDiameter: CGFloat = 28
 
     /// Photos-style selection marker: a solid blue circle with a white checkmark when
     /// kept, the same semi-transparent grey circle the other tile buttons use —

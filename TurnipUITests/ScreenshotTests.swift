@@ -105,19 +105,19 @@ final class ScreenshotTests: XCTestCase {
         addScreenshot(named: "clip-list-media")
     }
 
-    /// Tapping a tile's expand button opens the full `ClipEditorView` directly —
-    /// expand is the single entry point into detail/editing, not a separate pencil
-    /// icon and not an intermediate full-screen viewer.
-    func testClipListExpandOpensEditor() throws {
+    /// Tapping a tile opens the full `ClipEditorView` directly — the tile itself is
+    /// the single entry point into detail/editing, not a separate expand icon and not
+    /// an intermediate full-screen viewer.
+    func testClipListTapOpensEditor() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotClipListMedia"]
         app.launch()
         XCTAssertTrue(app.navigationBars["Clips"].waitForExistence(timeout: 15))
-        let expandButton = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == 'Expand clip'"))
+        let tile = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == 'Open clip'"))
             .firstMatch
-        XCTAssertTrue(expandButton.waitForExistence(timeout: 15))
-        expandButton.tap()
+        XCTAssertTrue(tile.waitForExistence(timeout: 15))
+        tile.tap()
         XCTAssertTrue(app.navigationBars["Edit clip"].waitForExistence(timeout: 15))
         addScreenshot(named: "clip-list-expand-to-editor")
     }
