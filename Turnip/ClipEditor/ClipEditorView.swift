@@ -63,15 +63,10 @@ struct ClipEditorView: View {
     /// the presenting screen's state settles before the animation begins instead of
     /// racing it.
     private var backButton: some View {
-        Button {
+        BackChevronButton(accessibilityLabel: "Back to clips") {
             onCommit(viewModel.result)
             dismiss()
-        } label: {
-            Image(systemName: "chevron.backward")
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
         }
-        .accessibilityLabel("Back to clips")
     }
 
     private var deleteButton: some View {
@@ -91,21 +86,16 @@ struct ClipEditorView: View {
             if let overlay = viewModel.previewOverlay, overlay.videoSize.width > 0 {
                 fullFramePreview(overlay: overlay)
             } else if viewModel.failedToLoad {
-                VStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
-                    Text("Couldn't load this clip")
-                        .font(.headline)
-                    Text("The video file couldn't be read.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                StatusStateView(
+                    systemImage: "exclamationmark.triangle",
+                    title: "Couldn't load this clip",
+                    message: "The video file couldn't be read."
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Couldn't load this clip. The video file couldn't be read.")
             } else {
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 8)
                     .fill(.quaternary)
                     .aspectRatio(9.0 / 16.0, contentMode: .fit)
                     .overlay { ProgressView() }
@@ -193,23 +183,12 @@ struct ClipEditorView: View {
     /// mute, alongside `TrimSliderView`'s own timeline below — the three controls this
     /// screen needs, no more.
     private var playbackControls: some View {
-        HStack(spacing: 20) {
-            Button(action: viewModel.togglePlayback) {
-                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                    .foregroundStyle(.white)
+        PlaybackControlsPill {
+            HStack(spacing: 20) {
+                PlayPauseButton(isPlaying: viewModel.isPlaying, action: viewModel.togglePlayback)
+                MuteButton(isMuted: viewModel.isMuted, action: viewModel.toggleMute)
             }
-            .accessibilityLabel(viewModel.isPlaying ? "Pause" : "Play")
-
-            Button(action: viewModel.toggleMute) {
-                Image(systemName: viewModel.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .foregroundStyle(.white)
-            }
-            .accessibilityLabel(viewModel.isMuted ? "Unmute" : "Mute")
         }
-        .font(.body)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Capsule().fill(.black.opacity(0.4)))
         .padding(.bottom, 12)
         .allowsHitTesting(true)
     }

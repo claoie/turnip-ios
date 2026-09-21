@@ -123,10 +123,9 @@ struct ProcessingView<Destination: View>: View {
             }
         }
         // `.safeAreaInset`, not `.overlay`: an overlay sizes its content at its own
-        // ideal width and aligns it, so a `.frame(maxWidth: .infinity)` button inside
-        // has no wider proposal to expand into and stays text-hugging. A safe-area
-        // inset reserves real full-width space instead — the same pattern the clip
-        // list's "Export N clips" button uses.
+        // ideal width and aligns it, so `PrimaryActionBar`'s full-width button has no
+        // wider proposal to expand into and stays text-hugging. A safe-area inset
+        // reserves real full-width space instead.
         .safeAreaInset(edge: .bottom) {
             if case .processing(let progress) = viewModel.state {
                 processingOverlay(progress)
@@ -140,25 +139,16 @@ struct ProcessingView<Destination: View>: View {
         VStack(spacing: 12) {
             if let player {
                 VideoScrubBar(player: player)
+                    .padding(.horizontal)
             }
             // Pause the idle player before this state leaves the hierarchy:
             // nothing would call `pause()` on it afterwards, so its audio would
             // keep playing behind the progress UI and the clip list.
-            Button {
+            PrimaryActionBar("Start analysis") {
                 player?.pause()
                 viewModel.start(video: video)
-            } label: {
-                // `.borderedProminent` sizes itself to the label, ignoring a
-                // `.frame(maxWidth:)` applied to the button from outside — the
-                // frame has to be on the label content to actually stretch it.
-                Text("Start analysis")
-                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
         }
-        .padding(.horizontal)
-        .padding(.bottom, 24)
     }
 
     /// The progress panel drawn over the bottom of the still-visible, paused video —
@@ -191,41 +181,31 @@ struct ProcessingView<Destination: View>: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "film")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text("No tricks found")
-                .font(.title2)
-            Text("The whole video was analyzed but nothing moved like a trick. "
-                + "Try a clip with bigger, faster movement.")
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
+        StatusStateView(
+            systemImage: "film",
+            title: "No tricks found",
+            message: "The whole video was analyzed but nothing moved like a trick. "
+                + "Try a clip with bigger, faster movement."
+        ) {
             Button("Back to Home") { dismiss() }
                 .buttonStyle(.borderedProminent)
                 .padding(.top, 8)
         }
-        .padding()
     }
 
     private func errorState(message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text("Couldn't analyze this video")
-                .font(.title2)
-            Text(message)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            Button("Retry") { viewModel.retry(video: video) }
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 8)
-            Button("Back to Home", role: .cancel) { dismiss() }
+        StatusStateView(
+            systemImage: "exclamationmark.triangle",
+            title: "Couldn't analyze this video",
+            message: message
+        ) {
+            VStack(spacing: 12) {
+                Button("Retry") { viewModel.retry(video: video) }
+                    .buttonStyle(.borderedProminent)
+                Button("Back to Home", role: .cancel) { dismiss() }
+            }
+            .padding(.top, 8)
         }
-        .padding()
     }
 }
 

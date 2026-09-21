@@ -173,22 +173,13 @@ struct VideoGalleryView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "video.slash")
-                .font(.system(size: 44))
-                .foregroundStyle(.secondary)
-            Text(viewModel.authorization == .limited ? "No videos selected" : "No videos")
-                .font(.title3.weight(.semibold))
-            Text(
-                viewModel.authorization == .limited
-                    ? "Turnip can only see the videos you choose. Select some to get started."
-                    : "Record a tricking session, and it'll show up here."
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-        }
-        .padding(32)
+        StatusStateView(
+            systemImage: "video.slash",
+            title: viewModel.authorization == .limited ? "No videos selected" : "No videos",
+            message: viewModel.authorization == .limited
+                ? "Turnip can only see the videos you choose. Select some to get started."
+                : "Record a tricking session, and it'll show up here."
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -246,22 +237,14 @@ struct PhotosAccessDeniedView: View {
     let restricted: Bool
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 44))
-                .foregroundStyle(.secondary)
-            Text("Turnip needs access to your videos")
-                .font(.title3.weight(.semibold))
-                .multilineTextAlignment(.center)
-            Text(
-                restricted
-                    ? "Photos access is restricted on this device, so Turnip can't show your videos."
-                    : "Turnip finds and trims tricks in recordings from your Photos library. "
-                        + "Allow access in Settings to get started."
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
+        StatusStateView(
+            systemImage: "photo.on.rectangle.angled",
+            title: "Turnip needs access to your videos",
+            message: restricted
+                ? "Photos access is restricted on this device, so Turnip can't show your videos."
+                : "Turnip finds and trims tricks in recordings from your Photos library. "
+                    + "Allow access in Settings to get started."
+        ) {
             if !restricted, let settingsURL = URL(string: UIApplication.openSettingsURLString) {
                 Link("Open Settings", destination: settingsURL)
                     .buttonStyle(.borderedProminent)
@@ -269,7 +252,6 @@ struct PhotosAccessDeniedView: View {
                     .accessibilityIdentifier("open-settings")
             }
         }
-        .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("photos-access-denied")
     }

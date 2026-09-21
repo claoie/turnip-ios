@@ -62,24 +62,13 @@ struct ExportConfirmationView: View {
                 // The default back chevron would return to the clip list; the flow is
                 // finished, so back goes home — the same chevron the clip list draws.
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        popToRoot()
-                    } label: {
-                        Image(systemName: "chevron.backward")
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("Back to Home")
+                    BackChevronButton(accessibilityLabel: "Back to Home", action: popToRoot)
                 }
             }
         }
         .safeAreaInset(edge: .bottom) {
             if viewModel.isFinished {
-                Button("Done") { popToRoot() }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(.thinMaterial)
+                PrimaryActionBar("Done") { popToRoot() }
             }
         }
         .task {

@@ -100,14 +100,7 @@ struct ClipListView: View {
             // the flow's "back" is Home, so this screen draws its own chevron —
             // Photos-style, chevron only, no text label.
             ToolbarItem(placement: .navigationBarLeading) {
-                Button {
-                    popToRoot()
-                } label: {
-                    Image(systemName: "chevron.backward")
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .accessibilityLabel("Back to Home")
+                BackChevronButton(accessibilityLabel: "Back to Home", action: popToRoot)
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(viewModel.allKept ? "Deselect All" : "Select All") {
@@ -128,12 +121,9 @@ struct ClipListView: View {
                 popToRoot: popToRoot)
         }
         .safeAreaInset(edge: .bottom) {
-            Button(viewModel.exportTitle) { showingExport = true }
-                .buttonStyle(.borderedProminent)
-                .disabled(!viewModel.canExport)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(.thinMaterial)
+            PrimaryActionBar(viewModel.exportTitle, isEnabled: viewModel.canExport) {
+                showingExport = true
+            }
         }
         .fullScreenCover(item: $expandTarget) { target in
             editor(for: target)
@@ -274,14 +264,20 @@ private struct ClipCardView: View {
     private static let iconButtonDiameter: CGFloat = 28
 
     private var expandButton: some View {
-        tileButton(systemImage: "arrow.up.left.and.arrow.down.right", action: onExpand)
-            .accessibilityLabel("Expand clip")
+        ScrimIconButton(
+            systemImage: "arrow.up.left.and.arrow.down.right",
+            accessibilityLabel: "Expand clip",
+            diameter: Self.iconButtonDiameter,
+            font: .caption.weight(.semibold),
+            action: onExpand
+        )
+        .padding(6)
     }
 
     /// Photos-style selection marker: a solid blue circle with a white checkmark when
     /// kept, the same semi-transparent grey circle the other tile buttons use —
-    /// but empty — when discarded. Custom rather than `tileButton`, since only this one
-    /// needs a background color that changes with state.
+    /// but empty — when discarded. Custom rather than `ScrimIconButton`, since only
+    /// this one needs a background color that changes with state.
     private var keepButton: some View {
         Button(action: toggleKeep) {
             ZStack {
@@ -301,18 +297,6 @@ private struct ClipCardView: View {
 
     private func toggleKeep() {
         viewModel.toggleKeep(item)
-    }
-
-    private func tileButton(systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: Self.iconButtonDiameter, height: Self.iconButtonDiameter)
-                .background(.black.opacity(0.4), in: Circle())
-        }
-        .buttonStyle(.plain)
-        .padding(6)
     }
 
     @ViewBuilder

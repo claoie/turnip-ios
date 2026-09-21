@@ -45,17 +45,8 @@ struct CameraCaptureView: View {
     }
 
     private var cancelButton: some View {
-        Button {
-            onCancel()
-        } label: {
-            Image(systemName: "xmark")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
-                .background(.black.opacity(0.4), in: Circle())
-        }
-        .padding()
-        .accessibilityLabel("Cancel")
+        ScrimIconButton(systemImage: "xmark", accessibilityLabel: "Cancel", action: onCancel)
+            .padding()
     }
 
     private var recordButton: some View {
@@ -90,27 +81,18 @@ private struct CameraAccessDeniedView: View {
     let restricted: Bool
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "camera.fill")
-                .font(.system(size: 44))
-                .foregroundStyle(.secondary)
-            Text("Turnip needs camera access")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.white)
-            Text(
-                restricted
-                    ? "Camera access is restricted on this device."
-                    : "Allow camera and microphone access in Settings to record a trick."
-            )
-            .font(.subheadline)
-            .foregroundStyle(.white.opacity(0.7))
-            .multilineTextAlignment(.center)
+        StatusStateView(
+            systemImage: "camera.fill",
+            title: "Turnip needs camera access",
+            message: restricted
+                ? "Camera access is restricted on this device."
+                : "Allow camera and microphone access in Settings to record a trick."
+        ) {
             if !restricted, let settingsURL = URL(string: UIApplication.openSettingsURLString) {
                 Link("Open Settings", destination: settingsURL)
                     .buttonStyle(.borderedProminent)
                     .padding(.top, 8)
             }
         }
-        .padding(32)
     }
 }

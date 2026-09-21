@@ -17,26 +17,14 @@ struct VideoScrubBar: View {
     private static let trackHeight: CGFloat = 3
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button(action: togglePlayback) {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .foregroundStyle(.white)
+        PlaybackControlsPill {
+            HStack(spacing: 12) {
+                PlayPauseButton(isPlaying: isPlaying, action: togglePlayback)
+                track
+                    .frame(height: Self.trackHeight)
+                MuteButton(isMuted: isMuted, action: toggleMute)
             }
-            .accessibilityLabel(isPlaying ? "Pause" : "Play")
-
-            track
-                .frame(height: Self.trackHeight)
-
-            Button(action: toggleMute) {
-                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .foregroundStyle(.white)
-            }
-            .accessibilityLabel(isMuted ? "Unmute" : "Mute")
         }
-        .font(.body)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Capsule().fill(.black.opacity(0.4)))
         .task { attach() }
         .onDisappear { detach() }
     }
