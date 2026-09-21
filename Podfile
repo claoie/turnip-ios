@@ -26,6 +26,16 @@ post_install do |installer|
       if current.nil? || Gem::Version.new(current) < Gem::Version.new('16.0')
         config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
       end
+
+      # TensorFlowLiteSwift 2.17.0's Model.swift calls the deprecated
+      # Data.withUnsafeBytes(_:) overload (the one taking a typed pointer);
+      # there's no newer pod release with a fix. It's vendored code we don't
+      # own, so silence just this one deprecation warning for this target
+      # rather than editing the checked-out pod source (pod install/update
+      # would overwrite it anyway).
+      if target.name == 'TensorFlowLiteSwift'
+        config.build_settings['OTHER_SWIFT_FLAGS'] = ['$(inherited)', '-suppress-warnings']
+      end
     end
   end
 end
