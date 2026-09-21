@@ -73,6 +73,14 @@ a finished recording needs to hand its asset into the same
 `select(_:)` a tapped gallery tile calls, then switch back to the gallery
 tab so the pick lands the way tapping a tile always has.
 
+The pill is a true overlay, not a safe-area inset — the gallery grid scrolls
+underneath it rather than stopping short, so it reads as floating over the
+tiles instead of a docked bar. It renders in Liquid Glass on iOS 26+
+(`.ultraThinMaterial` below that), and only while Home's own grid is the
+visible screen: it's hidden on the Camera page (which has its own cancel
+chevron back to Home) and hidden the moment Home pushes into
+Processing/ClipList/ClipEditor, reappearing once back at the grid.
+
 ### 1. Home / Video Gallery
 
 Entry point *is* the picker — every video in the device's Photos library, not

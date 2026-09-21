@@ -10,6 +10,13 @@ enum MainTab: Hashable {
     case home
 }
 
+/// The floating bar's approximate footprint, shared with `VideoGalleryView` so its grid
+/// can reserve scroll room to clear the bar — it overlays the grid rather than pushing it
+/// up, so without this the last row would be permanently stuck underneath it.
+enum FloatingTabBarMetrics {
+    static let clearance: CGFloat = 100
+}
+
 /// The app's root screen once past the splash: a swipeable, two-page `TabView` (Camera,
 /// then the gallery) with a custom floating pill replacing the system tab bar — this app
 /// has exactly two destinations, not the several a real `UITabBar` assumes.
@@ -30,13 +37,18 @@ struct RootTabView: View {
                 .tag(MainTab.home)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        // Reserves space for the floating bar rather than overlaying it on top: each
-        // page's own bottom-edge content (the record button, a resolution banner) then
-        // stacks above it automatically via the normal safe-area nesting, instead of
-        // needing hand-tuned padding to avoid the two colliding.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            FloatingTabBar(selectedTab: $selectedTab)
+        // An overlay, not a safe-area inset: the grid scrolls underneath it rather than
+        // stopping short, so it reads as floating over the content instead of a docked
+        // bar. Home-only and root-only (`viewModel.path.isEmpty`) per docs/UIUX.md — the
+        // Camera page has its own cancel chevron back to Home, and a drilled-in clip
+        // screen has its own back chevron, so the bar would be redundant chrome there.
+        .overlay(alignment: .bottom) {
+            if selectedTab == .home && viewModel.path.isEmpty {
+                FloatingTabBar(selectedTab: $selectedTab)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: selectedTab == .home && viewModel.path.isEmpty)
     }
 
     /// A recording finished: save it to Photos (reusing the same `ClipPhotosSaver` the
@@ -67,13 +79,22 @@ private struct FloatingTabBar: View {
     @Binding var selectedTab: MainTab
 
     var body: some View {
-        HStack(spacing: 40) {
+        let buttons = HStack(spacing: 40) {
             tabButton(.camera, systemImage: "camera.fill", label: "Camera")
             tabButton(.home, systemImage: "square.grid.2x2.fill", label: "Videos")
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 14)
-        .background(.ultraThinMaterial, in: Capsule())
+
+        // Real Liquid Glass where the OS supports it (iOS 26+); `.ultraThinMaterial`
+        // otherwise, matching how the bar already looked pre-Liquid Glass.
+        Group {
+            if #available(iOS 26.0, *) {
+                buttons.glassEffect()
+            } else {
+                buttons.background(.ultraThinMaterial, in: Capsule())
+            }
+        }
         .padding(.bottom, 12)
     }
 

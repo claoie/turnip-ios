@@ -131,6 +131,10 @@ struct VideoGalleryView: View {
                     tile(for: asset, index: index)
                 }
             }
+            // The floating tab bar overlays this screen rather than reserving its own
+            // safe-area space, so without this the bottom row would end up permanently
+            // stuck underneath it.
+            .padding(.bottom, FloatingTabBarMetrics.clearance)
         }
         // The grid announces its count when VoiceOver enters it — a VoiceOver user
         // otherwise has no sense of how many videos they're swiping through. The
