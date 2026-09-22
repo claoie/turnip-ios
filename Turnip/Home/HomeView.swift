@@ -272,11 +272,14 @@ struct PhotosAccessDeniedView: View {
 
 /// Home's nav bar: present, transparent, visually empty, and taking no space. On iOS 26 a
 /// scroll view's top scroll-edge glass — the soft blur that keeps the status bar legible
-/// over tiles scrolling beneath it — is only drawn by a navigation bar that has content.
-/// A hidden bar, an empty title, `scrollEdgeEffectStyle` on the scroll view, and a
-/// `safeAreaBar` standing in for the bar all leave the status bar dead sharp; the
-/// invisible principal item is the "content" that makes UIKit draw the glass, with the
-/// bar's own background hidden so nothing else shows. The bar still reserves its band
+/// over tiles scrolling beneath it — is only drawn by a navigation bar that has content,
+/// and only blurs (rather than merely dimming) when that content is text. A hidden bar,
+/// an empty title, `scrollEdgeEffectStyle` on the scroll view, and a `safeAreaBar`
+/// standing in for the bar all leave the status bar dead sharp; a clear color or a
+/// `hidden()` text as the principal item gets a dim gradient with no blur; a
+/// whitespace title draws stray glyphs. A fully transparent title text is the
+/// "content" that makes UIKit draw the real blur, with the bar's own background hidden
+/// so nothing else shows. The bar still reserves its band
 /// in the safe area, so the content gets that band back: it ignores the top safe area
 /// and re-adds only the status bar's share as an inset. The wordmark header then sits
 /// directly under the status bar at rest — in the grid and in the non-scrolling states
@@ -288,6 +291,12 @@ struct HomeNavigationBar: ViewModifier {
     /// The inline bar's height on iOS 26 (measured: the top safe area with the bar minus
     /// the top safe area without it). There is no public constant for it.
     private static let barHeight: CGFloat = 54
+
+    /// Whether the scroll content has moved up past its rest position. With the header
+    /// sitting inside the bar's band at rest, UIKit considers the content "under the
+    /// bar" from the start and would draw the glass over the wordmark before any scroll;
+    /// the effect is held hidden until the content actually moves.
+    @State private var isScrolled = false
 
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
@@ -301,12 +310,24 @@ struct HomeNavigationBar: ViewModifier {
                     }
                     .ignoresSafeArea(.container, edges: .top)
             }
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentOffset.y + geometry.contentInsets.top > 0.5
+                } action: { _, scrolled in
+                    isScrolled = scrolled
+                }
+                .scrollEdgeEffectHidden(!isScrolled, for: .top)
                 // Inline, or the root bar lays out for a large title and reserves that
                 // band too.
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .toolbar {
-                    ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) }
+                    ToolbarItem(placement: .principal) {
+                        // The wordmark header already announces "Turnip" as the screen's
+                        // header, so this stays out of the accessibility tree.
+                        Text("Turnip")
+                            .opacity(0)
+                            .accessibilityHidden(true)
+                    }
                 }
         } else {
             content.toolbar(.hidden, for: .navigationBar)

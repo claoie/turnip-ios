@@ -95,10 +95,12 @@ transparent, and takes no space: the content ignores the band the bar would
 reserve, so at rest the wordmark sits directly under the status bar with no
 empty gap above it. The bar exists only so iOS 26 draws its scroll-edge glass
 over the status bar and that band as tiles pass beneath, the same blur Clip
-List gets from its titled bar (nothing else draws it: a hidden bar gets no
-glass, and neither does a `safeAreaBar` standing in for one) — no custom
-landing state, no swipe-to-reveal. Tapping a tile goes straight to Processing
-for that video.
+List gets from its titled bar: its only content is an invisible title text,
+because nothing else draws a real blur (a hidden bar or a `safeAreaBar`
+standing in for one gets no glass at all, and a non-text bar item only a dim
+gradient). The glass stays hidden until the content actually scrolls, since
+the header rests inside the bar's band — no custom landing state, no
+swipe-to-reveal. Tapping a tile goes straight to Processing for that video.
 
 **Permission model** (shipped, in `Turnip/Home/`): because Home *is* the
 gallery, it enumerates video `PHAsset`s itself rather than delegating to an
