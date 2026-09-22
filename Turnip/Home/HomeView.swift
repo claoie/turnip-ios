@@ -11,14 +11,10 @@ struct HomeView: View {
     var body: some View {
         NavigationStack(path: $viewModel.path) {
             content
-                .toolbar {
-                    ToolbarItem(placement: .principal) { TitleView() }
-                }
-                .navigationBarTitleDisplayMode(.inline)
-                // The grid runs edge-to-edge under the status bar/nav bar (docs/UIUX.md);
-                // without hiding the bar's own background, its blur would opaque out the
-                // tiles scrolling underneath it.
-                .toolbarBackground(.hidden, for: .navigationBar)
+                // The wordmark is scroll content (`HomeHeader`), not a bar title, so it
+                // scrolls away with the tiles (docs/UIUX.md). Root-only — pushed screens
+                // declare their own bars.
+                .modifier(HomeNavigationBar())
                 .navigationDestination(for: SelectedVideo.self) { video in
                     // The Processing screen shows the picked video and runs the real
                     // detection pipeline on the user's tap, then pushes the clip list
@@ -57,7 +53,10 @@ struct HomeView: View {
             // The system permission prompt is up; nothing useful to draw behind it.
             ProgressView()
         case .denied(let restricted):
-            PhotosAccessDeniedView(restricted: restricted)
+            VStack(spacing: 0) {
+                HomeHeader()
+                PhotosAccessDeniedView(restricted: restricted)
+            }
         case .authorized, .limited:
             VideoGalleryView(viewModel: viewModel)
         }
@@ -71,15 +70,23 @@ struct HomeView: View {
     }
 }
 
-/// The nav bar's custom title: the "Turnip" wordmark image (mark + text baked into one asset).
-private struct TitleView: View {
-    private static let height: CGFloat = 20
+/// Home's title row: the "Turnip" wordmark image (mark + text baked into one asset),
+/// centered in a nav-bar-height band. Laid out as ordinary content — inside the grid's
+/// scroll view, or above a non-scrolling state — rather than as a nav bar title, so it
+/// scrolls away with the tiles instead of floating over them. Internal so the DEBUG
+/// screenshot harness can render the denied state exactly as Home does.
+struct HomeHeader: View {
+    private static let logoHeight: CGFloat = 36
+    private static let rowHeight: CGFloat = 44
 
     var body: some View {
         Image("TitleLogo")
             .resizable()
             .scaledToFit()
-            .frame(height: Self.height)
+            .frame(height: Self.logoHeight)
+            .frame(maxWidth: .infinity, minHeight: Self.rowHeight)
+            .accessibilityLabel("Turnip")
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -110,10 +117,16 @@ struct VideoGalleryView: View {
     private var content: some View {
         if !viewModel.hasLoaded {
             // Not yet the same thing as "no videos" — the first fetch hasn't run.
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                HomeHeader()
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else if viewModel.videos.isEmpty {
-            emptyState
+            VStack(spacing: 0) {
+                HomeHeader()
+                emptyState
+            }
         } else {
             grid
         }
@@ -121,6 +134,9 @@ struct VideoGalleryView: View {
 
     private var grid: some View {
         ScrollView {
+            // The header is scroll content, not chrome: it leads the grid and leaves
+            // the screen with the first row.
+            HomeHeader()
             LazyVGrid(columns: columns, spacing: Self.spacing) {
                 ForEach(
                     Array(viewModel.videos.enumerated()), id: \.element.localIdentifier
@@ -140,7 +156,6 @@ struct VideoGalleryView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(gridAccessibilityLabel)
         .accessibilityIdentifier("video-grid")
-        .modifier(HiddenTopScrollEdgeEffect())
     }
 
     private func tile(for asset: PHAsset, index: Int) -> some View {
@@ -255,18 +270,49 @@ struct PhotosAccessDeniedView: View {
     }
 }
 
+/// Home's nav bar: present, transparent, and visually empty. On iOS 26 a scroll view's
+/// top scroll-edge glass — the soft blur that keeps the status bar legible over tiles
+/// scrolling beneath it — is only drawn for a navigation bar that has content. A fully
+/// hidden bar, an empty title, and `scrollEdgeEffectStyle(.soft)` on the scroll view all
+/// leave the status bar dead sharp; the invisible principal item is the "content" that
+/// makes UIKit draw the glass, with the bar's own background hidden so nothing else
+/// shows. Pre-26 there is no glass to anchor, so the bar is hidden outright rather than
+/// reserving an empty band. Internal so the DEBUG screenshot harness and previews match.
+struct HomeNavigationBar: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                // Inline, or the root bar lays out for a large title and reserves that
+                // band too.
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .toolbar {
+                    ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) }
+                }
+        } else {
+            content.toolbar(.hidden, for: .navigationBar)
+        }
+    }
+}
+
 #Preview("Denied") {
     NavigationStack {
-        PhotosAccessDeniedView(restricted: false)
-            .navigationTitle("Turnip")
+        VStack(spacing: 0) {
+            HomeHeader()
+            PhotosAccessDeniedView(restricted: false)
+        }
+        .modifier(HomeNavigationBar())
     }
     .preferredColorScheme(.dark)
 }
 
 #Preview("Restricted") {
     NavigationStack {
-        PhotosAccessDeniedView(restricted: true)
-            .navigationTitle("Turnip")
+        VStack(spacing: 0) {
+            HomeHeader()
+            PhotosAccessDeniedView(restricted: true)
+        }
+        .modifier(HomeNavigationBar())
     }
     .preferredColorScheme(.dark)
 }

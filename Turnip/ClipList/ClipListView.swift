@@ -92,12 +92,11 @@ struct ClipListView: View {
             }
             .padding()
         }
-        .modifier(HiddenTopScrollEdgeEffect())
         .navigationTitle("Clips")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
-        // The grid runs edge-to-edge under the status bar/nav bar, same as Home; without
-        // hiding the bar's own background, its blur would opaque out the tiles underneath.
+        // The grid runs edge-to-edge under the status bar/nav bar; without hiding the
+        // bar's own background, its blur would opaque out the tiles underneath.
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             // The default back chevron would step back to the processing screen;

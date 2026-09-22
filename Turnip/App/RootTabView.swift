@@ -37,6 +37,12 @@ struct RootTabView: View {
                 .tag(MainTab.home)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        // A page-style `TabView` lays its pages out inside the safe area, so the nested
+        // `NavigationStack` never receives a top inset and its scroll views stop at the
+        // status bar instead of running under it. Ignoring the safe area here hands the
+        // full window to the pages; each page's own hosting controller then gets the real
+        // insets back from UIKit, so nav bars and `.safeAreaInset` content stay put.
+        .ignoresSafeArea()
         // An overlay, not a safe-area inset: the grid scrolls underneath it rather than
         // stopping short, so it reads as floating over the content instead of a docked
         // bar. Home-only and root-only (`viewModel.path.isEmpty`) per docs/UIUX.md — the

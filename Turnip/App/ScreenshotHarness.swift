@@ -60,8 +60,13 @@ struct ScreenshotHarness: View {
 struct ScreenshotHomeHarness: View {
     var body: some View {
         NavigationStack {
-            PhotosAccessDeniedView(restricted: false)
-                .navigationTitle("Turnip")
+            // Same composition as `HomeView`'s denied branch: the wordmark header as
+            // content under Home's empty, transparent bar.
+            VStack(spacing: 0) {
+                HomeHeader()
+                PhotosAccessDeniedView(restricted: false)
+            }
+            .modifier(HomeNavigationBar())
         }
     }
 }
