@@ -15,11 +15,19 @@ enum ProcessingError: LocalizedError {
 }
 
 /// One progress report from a pipeline run.
-struct ProcessingProgress: Equatable, Sendable {
+struct ProcessingProgress: Sendable {
     /// 1-based count of frames run through inference so far.
     let frame: Int
     /// Estimated from the track's duration × frame rate; nil when the track reports no frame rate.
     let totalFrames: Int?
+    /// The just-processed frame's position in the source video and the pose it scored
+    /// there — the processing screen scrubs its preview to this timestamp and draws the
+    /// skeleton over it, so the video visibly tracks the progress bar rather than sitting
+    /// static and paused. Defaulted so the pipeline's own reports are the only required
+    /// call site; a caller with no frame in hand (tests, the screenshot harness) gets an
+    /// inert progress report instead of a compile error.
+    var timestamp: TimeInterval = 0
+    var keypoints: [PoseKeypoint] = []
 
     /// 0...1 for `ProgressView`; nil when the total is unknown, in which case the view shows
     /// an indeterminate spinner next to the frame counter.
@@ -142,7 +150,9 @@ struct ProcessingPipeline: Sendable {
                 keypoints: keypoints
             ), renderSize: frame.renderSize)
             if await reportClock.shouldReport() {
-                await onProgress(ProcessingProgress(frame: processed, totalFrames: totalFrames))
+                await onProgress(ProcessingProgress(
+                    frame: processed, totalFrames: totalFrames,
+                    timestamp: frame.timestamp, keypoints: keypoints))
             }
         }
 

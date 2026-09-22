@@ -30,6 +30,18 @@ struct ProcessingView<Destination: View>: View {
 
     @StateObject private var viewModel: ProcessingViewModel
     @State private var player: AVPlayer?
+    /// The frame size as the player shows it (display orientation), loaded once in
+    /// `.task` alongside the player — this view owns the player, so it owns the geometry
+    /// the pose overlay needs to land on it too. Same computation as
+    /// `ClipEditorViewModel.displayedSize`/`PoseDiagnosticViewModel.displaySize`.
+    @State private var displaySize: CGSize?
+    /// Seek coalescing for the progress-driven scrub: `ProgressReportClock` fires up to
+    /// 10 times a second, and issuing an exact-tolerance seek per report would queue up
+    /// keyframe-to-frame decodes on the same file the pipeline's own `AVAssetReader` is
+    /// reading, slowing the very run the screen is showing. Only one seek is ever in
+    /// flight; a report that lands mid-seek just replaces the pending target.
+    @State private var pendingSeekTime: TimeInterval?
+    @State private var isSeeking = false
     @Environment(\.dismiss) private var dismiss
 
     init(
@@ -85,12 +97,56 @@ struct ProcessingView<Destination: View>: View {
                 // user's play action, Photos-app style — no separate tap needed.
                 newPlayer.play()
             }
+            if displaySize == nil,
+               let track = try? await video.asset.loadTracks(withMediaType: .video).first,
+               let naturalSize = try? await track.load(.naturalSize),
+               let preferredTransform = try? await track.load(.preferredTransform) {
+                displaySize = ClipEditorViewModel.displayedSize(
+                    naturalSize: naturalSize, preferredTransform: preferredTransform)
+            }
             if autostart {
                 viewModel.start(video: video)
             }
         }
+        .onChange(of: currentProgress?.timestamp) { newValue in
+            guard let newValue, let player else { return }
+            requestSeek(to: newValue, on: player)
+        }
         .onDisappear {
             viewModel.cancel()
+        }
+    }
+
+    /// The in-flight run's latest progress report, or `nil` outside `.processing` — the
+    /// scrub/overlay's single read of `viewModel.state`'s associated value.
+    private var currentProgress: ProcessingProgress? {
+        if case .processing(let progress) = viewModel.state { return progress }
+        return nil
+    }
+
+    /// Queues a scrub to `time`, coalescing with any seek already in flight (see the
+    /// `pendingSeekTime` doc comment). Also pauses the player: once analysis is driving
+    /// the picture, free-running playback would fight the scrub on every report.
+    private func requestSeek(to time: TimeInterval, on player: AVPlayer) {
+        player.pause()
+        pendingSeekTime = time
+        guard !isSeeking else { return }
+        isSeeking = true
+        performNextSeek(on: player)
+    }
+
+    private func performNextSeek(on player: AVPlayer) {
+        guard let time = pendingSeekTime else {
+            isSeeking = false
+            return
+        }
+        pendingSeekTime = nil
+        let tolerance = CMTime(seconds: 0.1, preferredTimescale: 600)
+        player.seek(
+            to: CMTime(seconds: time, preferredTimescale: 600),
+            toleranceBefore: tolerance, toleranceAfter: tolerance
+        ) { _ in
+            Task { @MainActor in performNextSeek(on: player) }
         }
     }
 
@@ -120,6 +176,9 @@ struct ProcessingView<Destination: View>: View {
             }
             if isAnalyzing {
                 Color.black.opacity(0.45).ignoresSafeArea()
+                if let progress = currentProgress, let displaySize {
+                    poseOverlay(keypoints: progress.keypoints, displaySize: displaySize)
+                }
             }
         }
         // `.safeAreaInset`, not `.overlay`: an overlay sizes its content at its own
@@ -133,6 +192,23 @@ struct ProcessingView<Destination: View>: View {
                 idleControls
             }
         }
+    }
+
+    /// The current frame's skeleton, positioned over the exact letterboxed rect
+    /// `BareVideoPlayerView`'s `.resizeAspect` gravity draws the video into — not a
+    /// full-bleed canvas, which would misalign against the video's own aspect-fit letterbox
+    /// whenever the source isn't exactly screen-shaped. `AVMakeRect` computes that same
+    /// letterbox math; `.ignoresSafeArea()` matches the `GeometryReader` proxy's frame to
+    /// the player's, since the player itself ignores the safe area.
+    private func poseOverlay(keypoints: [PoseKeypoint], displaySize: CGSize) -> some View {
+        GeometryReader { proxy in
+            let frame = AVMakeRect(aspectRatio: displaySize, insideRect: proxy.frame(in: .local))
+            PoseOverlayView(keypoints: keypoints)
+                .frame(width: frame.width, height: frame.height)
+                .position(x: frame.midX, y: frame.midY)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 
     private var idleControls: some View {

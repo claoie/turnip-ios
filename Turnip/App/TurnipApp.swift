@@ -14,10 +14,12 @@ struct TurnipApp: App {
         }
         #if DEBUG
         if CommandLine.arguments.contains("-screenshotClipEditor")
-            || CommandLine.arguments.contains("-screenshotClipListMedia") {
+            || CommandLine.arguments.contains("-screenshotClipListMedia")
+            || CommandLine.arguments.contains("-screenshotProcessingPose") {
             // Start the harness's sample-movie encode before any view appears, on
             // a background queue, so the first render usually doesn't stall on it.
-            // `-screenshotClipListMedia` shares the same generated movie.
+            // `-screenshotClipListMedia` and `-screenshotProcessingPose` share the
+            // same generated movie.
             ScreenshotClipEditorHarness.warmUpSampleMovie()
         }
         #endif
@@ -43,6 +45,8 @@ struct TurnipApp: App {
                     ScreenshotProcessingIdleHarness()
                 } else if CommandLine.arguments.contains("-screenshotProcessing") {
                     ScreenshotProcessingHarness()
+                } else if CommandLine.arguments.contains("-screenshotProcessingPose") {
+                    ScreenshotProcessingPoseHarness()
                 } else if CommandLine.arguments.contains("-screenshotPoseDiagnostic") {
                     ScreenshotPoseDiagnosticHarness()
                 } else {

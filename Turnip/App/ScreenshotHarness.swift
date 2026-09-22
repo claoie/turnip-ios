@@ -302,6 +302,53 @@ struct ScreenshotProcessingHarness: View {
     }
 }
 
+/// Processing mid-run with the pose overlay (`-screenshotProcessingPose`): real media
+/// (shares `ScreenshotClipEditorHarness`'s sample movie) so the scrub-to-progress and
+/// skeleton-overlay feature has an actual displayed frame to land on, unlike
+/// `-screenshotProcessing`'s `/dev/null` asset.
+struct ScreenshotProcessingPoseHarness: View {
+    var body: some View {
+        NavigationStack {
+            ProcessingView(
+                video: SelectedVideo(
+                    assetIdentifier: "screenshot",
+                    asset: AVURLAsset(url: ScreenshotClipEditorHarness.sampleMovieURL),
+                    duration: 6),
+                runner: ScreenshotProcessingPoseRunner(),
+                destination: { _, _ in EmptyView() })
+        }
+    }
+}
+
+/// Scripted `ProcessingRunning` for `-screenshotProcessingPose`: one mid-run report
+/// with a stick-figure's worth of keypoints at a fixed timestamp, then holds — same
+/// hold-and-let-the-UI-test-kill-it shape as `ScreenshotProcessingRunner`.
+private struct ScreenshotProcessingPoseRunner: ProcessingRunning {
+    func run(
+        video: SelectedVideo,
+        onProgress: @escaping @Sendable (ProcessingProgress) async -> Void
+    ) async throws -> ProcessingResult {
+        await onProgress(ProcessingProgress(
+            frame: 40, totalFrames: 90, timestamp: 3, keypoints: Self.sampleKeypoints))
+        try await Task.sleep(for: .seconds(60))
+        throw CancellationError()
+    }
+
+    /// A rough standing pose in frame-normalized (display-orientation) coordinates —
+    /// enough to show the overlay is landing on the video rather than proving pose
+    /// accuracy, which is `PoseDiagnosticView`'s job.
+    static let sampleKeypoints: [PoseKeypoint] = [
+        ("nose", 0.5, 0.15), ("left_eye", 0.47, 0.14), ("right_eye", 0.53, 0.14),
+        ("left_ear", 0.44, 0.15), ("right_ear", 0.56, 0.15),
+        ("left_shoulder", 0.4, 0.25), ("right_shoulder", 0.6, 0.25),
+        ("left_elbow", 0.35, 0.4), ("right_elbow", 0.65, 0.4),
+        ("left_wrist", 0.32, 0.53), ("right_wrist", 0.68, 0.53),
+        ("left_hip", 0.43, 0.55), ("right_hip", 0.57, 0.55),
+        ("left_knee", 0.42, 0.72), ("right_knee", 0.58, 0.72),
+        ("left_ankle", 0.41, 0.9), ("right_ankle", 0.59, 0.9)
+    ].map { name, x, y in PoseKeypoint(name: name, y: Float(y), x: Float(x), confidence: 0.9) }
+}
+
 /// Processing's resting state (`-screenshotProcessingIdle`): the picked video filling
 /// the screen with no native playback chrome, the thin scrub bar, and the manual
 /// "Start analysis" button. `autostart: false` so the pipeline never actually runs.
