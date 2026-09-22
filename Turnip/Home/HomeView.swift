@@ -71,22 +71,15 @@ struct HomeView: View {
     }
 }
 
-/// The nav bar's custom title: the app mark beside "Turnip", the mark sized relative to the
-/// title text (1.2x its height) rather than an independent constant, so the two stay
-/// proportional if the title style ever changes.
+/// The nav bar's custom title: the "Turnip" wordmark image (mark + text baked into one asset).
 private struct TitleView: View {
-    private static let fontSize: CGFloat = 17
-    private static let fontWeight: Font.Weight = .semibold
+    private static let height: CGFloat = 20
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image("SplashLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(height: Self.fontSize * 1.2)
-            Text("Turnip")
-                .font(.system(size: Self.fontSize, weight: Self.fontWeight))
-        }
+        Image("TitleLogo")
+            .resizable()
+            .scaledToFit()
+            .frame(height: Self.height)
     }
 }
 
