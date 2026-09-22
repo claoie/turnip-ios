@@ -206,6 +206,15 @@ private struct ClipCardView: View {
     @State private var duration: TimeInterval?
     @State private var player: AVQueuePlayer?
     @State private var looper: AVPlayerLooper?
+    /// A `@State` mirror of `isSuspended`. `startPlayback()` reads this rather than the
+    /// `let` property directly: SwiftUI can invoke `.onChange(of:)`'s action closure with
+    /// a `self` captured from an earlier render than the one that produced the new value,
+    /// so `self.isSuspended` inside a method called from that closure can read stale —
+    /// observed as every tile bailing out of resume with `suspended` still `true` right
+    /// after the editor's `fullScreenCover` reported it as `false`. `@State`'s storage is
+    /// identity-bound rather than render-bound, so it reads live regardless of which
+    /// snapshot of `self` touches it — the same property already relied on for `player`.
+    @State private var suspended = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -223,10 +232,14 @@ private struct ClipCardView: View {
             thumbnail = await image
             duration = await assetDuration
         }
-        .onAppear { startPlayback() }
+        .onAppear {
+            suspended = isSuspended
+            startPlayback()
+        }
         .onDisappear { teardownPlayback() }
-        .onChange(of: isSuspended) { suspended in
-            if suspended {
+        .onChange(of: isSuspended) { newValue in
+            suspended = newValue
+            if newValue {
                 player?.pause()
             } else {
                 startPlayback()
@@ -287,7 +300,7 @@ private struct ClipCardView: View {
     /// static poster) or the editor is currently covering the grid. Safe to call
     /// repeatedly — an existing player is just resumed.
     private func startPlayback() {
-        guard UIAccessibility.isVideoAutoplayEnabled, !isSuspended else { return }
+        guard UIAccessibility.isVideoAutoplayEnabled, !suspended else { return }
         if player == nil {
             let templateItem = AVPlayerItem(sdrAsset: viewModel.sourceAsset)
             let queuePlayer = AVQueuePlayer()
