@@ -221,6 +221,11 @@ section.features {
   margin-bottom: 0;
 }
 
+.section-link {
+  margin: 16px 0 0;
+  font-size: 15px;
+}
+
 main.page {
   padding: 56px 0 24px;
 }

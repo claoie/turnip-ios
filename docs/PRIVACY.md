@@ -5,6 +5,12 @@ time, so nobody has to reverse-engineer them later. v1 is the fully
 on-device release; anything that changes with v2 (upload, accounts) is
 marked as such below.
 
+The plain-language version users and reviewers see is
+[`site/privacy.html`](../site/privacy.html), published at
+<https://hoiekim.github.io/turnip-ios/privacy.html> and used as the
+Privacy Policy URL in App Store Connect. This doc is the technical source
+it's summarized from — keep both in sync when data handling changes.
+
 ## App Store "nutrition label" answers (v1)
 
 **Data Not Collected.** The v1 app collects no data, full stop:
