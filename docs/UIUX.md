@@ -90,11 +90,15 @@ scrollable grid (`Turnip/Home/HomeView.swift`, `VideoGalleryView`), newest
 videos first, top-to-bottom, three columns. The "Turnip" wordmark (app mark
 beside the title, the mark 1.2x the title text's height) heads the grid as
 scroll content, so it scrolls away with the tiles rather than floating over
-them, and the tiles run under the status bar. Home's nav bar is empty and
-transparent — it exists only so iOS 26 draws its scroll-edge glass over the
-status bar as tiles pass beneath, the same blur Clip List gets from its titled
-bar — no custom landing state, no swipe-to-reveal. Tapping a tile goes straight
-to Processing for that video.
+them, and the tiles run under the status bar. Home's nav bar is empty,
+transparent, and takes no space: the content ignores the band the bar would
+reserve, so at rest the wordmark sits directly under the status bar with no
+empty gap above it. The bar exists only so iOS 26 draws its scroll-edge glass
+over the status bar and that band as tiles pass beneath, the same blur Clip
+List gets from its titled bar (nothing else draws it: a hidden bar gets no
+glass, and neither does a `safeAreaBar` standing in for one) — no custom
+landing state, no swipe-to-reveal. Tapping a tile goes straight to Processing
+for that video.
 
 **Permission model** (shipped, in `Turnip/Home/`): because Home *is* the
 gallery, it enumerates video `PHAsset`s itself rather than delegating to an
