@@ -4,7 +4,7 @@ import Photos
 /// Failures saving an exported clip to Photos, typed so the caller can tell "send the
 /// user to Settings" apart from "retry" without string-matching — the outcome
 /// `ClipExportError`'s docstring says the exporter's typed errors exist to prevent.
-enum ClipPhotosSaveError: Error, Equatable {
+enum ClipPhotosSaveError: LocalizedError, Equatable {
     /// The exported file was missing when the save was attempted.
     case missingInputFile(URL)
     /// The user denied the add-only Photos prompt. `restricted` is true when a
@@ -13,6 +13,19 @@ enum ClipPhotosSaveError: Error, Equatable {
     case authorizationDenied(restricted: Bool)
     /// PhotoKit rejected the save after authorization was granted.
     case saveRejected(reason: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingInputFile:
+            return "This video is no longer available to save."
+        case .authorizationDenied(let restricted):
+            return restricted
+                ? "Photos access is restricted on this device, so Turnip can't save to it."
+                : "Turnip needs access to Photos to save this video. Allow access in Settings."
+        case .saveRejected(let reason):
+            return "Couldn't save this video to Photos. (\(reason))"
+        }
+    }
 }
 
 /// Writes exported clips into the user's Photos library.

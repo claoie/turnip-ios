@@ -28,6 +28,7 @@ enum FloatingTabBarMetrics {
 struct RootTabView: View {
     @StateObject private var viewModel = VideoLibraryViewModel()
     @State private var selectedTab: MainTab = .home
+    @State private var recordingSaveError: String?
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -55,27 +56,46 @@ struct RootTabView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: selectedTab == .home && viewModel.path.isEmpty)
+        // A distinct alert from Home's "Couldn't open video" — that one is about
+        // resolving an existing library asset, not about this just-recorded file
+        // failing to save. Sharing it would misname the failure to the user.
+        .alert("Couldn't Save Recording", isPresented: recordingSaveErrorPresented) {
+            Button("OK") {}
+        } message: {
+            Text(recordingSaveError ?? "")
+        }
     }
 
     /// A recording finished: save it to Photos (reusing the same `ClipPhotosSaver` the
     /// export flow already uses), then hand the resulting `PHAsset` to `viewModel.select`
     /// — the exact call a tapped gallery tile makes — and switch to the gallery tab so the
     /// user sees the pick land, Photos-app style.
+    ///
+    /// The temp file is only removed once it's safely in Photos — deleting it
+    /// unconditionally (e.g. in a `defer`) would destroy the user's only copy of the
+    /// footage if the save fails, such as when Photos access is denied.
     private func handleRecorded(_ fileURL: URL) {
         Task {
-            defer { try? FileManager.default.removeItem(at: fileURL) }
             do {
                 let identifier = try await ClipPhotosSaver().saveVideo(at: fileURL)
+                try? FileManager.default.removeItem(at: fileURL)
                 guard let asset = PHAsset.fetchAssets(
                     withLocalIdentifiers: [identifier], options: nil
                 ).firstObject else { return }
                 selectedTab = .home
                 viewModel.select(asset)
             } catch {
-                viewModel.errorMessage = (error as? LocalizedError)?.errorDescription
+                recordingSaveError = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
             }
         }
+    }
+
+    private var recordingSaveErrorPresented: Binding<Bool> {
+        Binding(
+            get: { recordingSaveError != nil },
+            set: { if !$0 { recordingSaveError = nil } }
+        )
     }
 }
 
