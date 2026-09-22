@@ -22,6 +22,23 @@ step() {
   echo "[ci_post_clone] $label took $((SECONDS - start))s"
 }
 
+# Runs a command up to N times with a growing pause between attempts. For steps
+# whose only failure mode worth surviving is the network: a real error still
+# fails the build once the attempts run out, just later.
+retry() {
+  local attempts="$1"; shift
+  local attempt=1
+  until "$@"; do
+    if (( attempt >= attempts )); then
+      echo "[ci_post_clone] '$*' failed on attempt $attempt of $attempts; giving up"
+      return 1
+    fi
+    echo "[ci_post_clone] '$*' failed on attempt $attempt of $attempts; retrying in $((attempt * 15))s"
+    sleep $((attempt * 15))
+    attempt=$((attempt + 1))
+  done
+}
+
 # Shared with GitHub Actions CI (see .github/workflows/ci.yml) so the two
 # pipelines can't silently drift — Homebrew only bottles the latest formula,
 # so `brew install xcodegen`/`cocoapods` here would float independently.
@@ -108,4 +125,9 @@ step "install xcodegen" install_xcodegen
 step "xcodegen generate" xcodegen generate
 step "install ruby (homebrew)" install_ruby
 step "bundle install (cocoapods 1.17.0)" bundle install
-step "pod install" bundle exec pod install
+# CocoaPods' CDN source fetches every candidate podspec for a dependency with
+# its own request to raw.githubusercontent.com, and one timeout among them fails
+# the whole install ("CDN: trunk Repo update failed - N error(s) ... Timeout was
+# reached"). The Xcode Cloud VM hits that intermittently; pod install is
+# idempotent, so a retry is safe.
+step "pod install" retry 3 bundle exec pod install
