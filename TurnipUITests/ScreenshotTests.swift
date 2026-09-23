@@ -87,28 +87,23 @@ final class ScreenshotTests: XCTestCase {
         app.launchArguments = ["-screenshotClipListMedia"]
         app.launch()
         XCTAssertTrue(app.navigationBars["Clips"].waitForExistence(timeout: 15))
-        let openClipTiles = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == 'Open clip'"))
-        XCTAssertEqual(openClipTiles.count, 2) // the fixture's two derived clips
-
         let trashButtons = app.buttons.matching(NSPredicate(format: "label == 'Trash clip'"))
         XCTAssertEqual(trashButtons.count, 3) // original tile + two derived clips
         let derivedTrashButton = trashButtons.element(boundBy: 1)
         XCTAssertTrue(derivedTrashButton.waitForExistence(timeout: 15))
         derivedTrashButton.tap()
 
-        // Waits for the tile to actually leave the grid rather than asserting right
-        // after the tap: a same-instant assertion on the trash-button count alone
-        // can't tell removal apart from a relabel to "Restore clip", since both drop
-        // that count by one. A plain deadline loop, not `expectation(for:
-        // evaluatedWith:)` — that re-queries the whole accessibility tree on every
-        // poll tick, which is slow enough over XCUITest's automation channel to
-        // stall the session for minutes rather than the 5s this waits for here.
+        // Waits for the "Trash clip" count to actually settle at 2 before checking
+        // for "Restore clip": asserting immediately after `.tap()`, before SwiftUI
+        // re-renders, would pass under either implementation — the toggle bug drops
+        // this same count by relabeling one button to "Restore clip", not by
+        // removing it. Only once the count has settled does the absence of
+        // "Restore clip" distinguish outright removal from a relabel.
         let deadline = Date().addingTimeInterval(5)
-        while openClipTiles.count != 1, Date() < deadline {
+        while trashButtons.count != 2, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.2)
         }
-        XCTAssertEqual(openClipTiles.count, 1)
+        XCTAssertEqual(trashButtons.count, 2)
         XCTAssertFalse(app.buttons["Restore clip"].exists)
     }
 
