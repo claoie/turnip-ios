@@ -213,7 +213,8 @@ final class ClipListTests: XCTestCase {
         let viewModel = makeViewModel(items: [item], asset: asset, duration: 1.0 / 30)
         let target = viewModel.items[1]
 
-        let before = try XCTUnwrap(await viewModel.thumbnail(for: target))
+        let beforeImage = await viewModel.thumbnail(for: target)
+        let before = try XCTUnwrap(beforeImage)
         XCTAssertEqual(before.width, 64)
 
         let halfWidth = NormalizedRect(minX: 0, maxX: 0.5, minY: 0, maxY: 1)
@@ -222,7 +223,8 @@ final class ClipListTests: XCTestCase {
         let updated = viewModel.items[1]
         XCTAssertEqual(updated.cropRect, halfWidth)
 
-        let after = try XCTUnwrap(await viewModel.thumbnail(for: updated))
+        let afterImage = await viewModel.thumbnail(for: updated)
+        let after = try XCTUnwrap(afterImage)
         XCTAssertEqual(after.width, 32)
     }
 
