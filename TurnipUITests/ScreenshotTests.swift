@@ -97,6 +97,12 @@ final class ScreenshotTests: XCTestCase {
     /// rect, the trim slider, and the keep toggle. The trim range's accessibility
     /// label ("Trim range 2.0s to 5.0s") only appears once the movie's duration
     /// loads, so it also proves the editor reached its loaded state.
+    ///
+    /// The wait is longer than this file's usual 15s: unlike every other wait
+    /// here, which is on SwiftUI state already computed in memory, this element
+    /// waits on `ScreenshotClipEditorHarness`'s `AVAssetWriter` encode plus the
+    /// player's async duration load — real wall-clock work whose duration swings
+    /// with host CPU contention on a shared CI runner.
     func testClipEditor() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotClipEditor"]
@@ -104,7 +110,7 @@ final class ScreenshotTests: XCTestCase {
         let trimRange = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == 'Trim range 2.0s to 5.0s'"))
             .firstMatch
-        XCTAssertTrue(trimRange.waitForExistence(timeout: 15))
+        XCTAssertTrue(trimRange.waitForExistence(timeout: 45))
         addScreenshot(named: "clip-editor")
     }
 
