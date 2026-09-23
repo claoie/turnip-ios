@@ -100,8 +100,15 @@ final class ScreenshotTests: XCTestCase {
         // Waits for the tile to actually leave the grid rather than asserting right
         // after the tap: a same-instant assertion on the trash-button count alone
         // can't tell removal apart from a relabel to "Restore clip", since both drop
-        // that count by one.
-        wait(for: [expectation(for: NSPredicate(format: "count == 1"), evaluatedWith: openClipTiles)], timeout: 5)
+        // that count by one. A plain deadline loop, not `expectation(for:
+        // evaluatedWith:)` — that re-queries the whole accessibility tree on every
+        // poll tick, which is slow enough over XCUITest's automation channel to
+        // stall the session for minutes rather than the 5s this waits for here.
+        let deadline = Date().addingTimeInterval(5)
+        while openClipTiles.count != 1, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        XCTAssertEqual(openClipTiles.count, 1)
         XCTAssertFalse(app.buttons["Restore clip"].exists)
     }
 
