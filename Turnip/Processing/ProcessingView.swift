@@ -170,8 +170,10 @@ struct ProcessingView<Destination: View>: View {
     }
 
     /// How far a drag has to travel before it counts as a page swipe rather than an
-    /// incidental touch on the video.
-    private static let swipeThreshold: CGFloat = 60
+    /// incidental touch on the video. Computed, not a stored constant: `ProcessingView` is
+    /// generic over `Destination`, and Swift doesn't allow static stored properties on a
+    /// generic type.
+    private static var swipeThreshold: CGFloat { 60 }
 
     /// A right drag browses to the previous video, a left drag to the next — same mapping
     /// as `MainTab`'s Home/Camera pages, and disabled mid-run so a swipe never abandons an
