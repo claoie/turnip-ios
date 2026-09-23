@@ -247,6 +247,38 @@ final class FramePreprocessorTests: XCTestCase {
         }
     }
 
+    /// A physically unambiguous rendered fixture, independent of the corner-math test above: a
+    /// 4x2 source lit only in its top-left quadrant, rendered through the real `CIContext`. Where
+    /// the lit region lands is checked against physically rotating a marked corner by hand — 90°
+    /// clockwise sends top-left to top-right, 180° to bottom-right, 270° to bottom-left — not
+    /// against a second derivation of the same formula, so a bug shared between the transform and
+    /// its own analytic check can't hide here.
+    func testUprightTransformRotatesAMarkedCornerClockwiseWhenRendered() throws {
+        let width = 4
+        let height = 2
+        let source = try makeQuadrantMarkedImage(width: width, height: height)
+
+        let cases: [(degrees: Int, isBright: (_ row: Int, _ col: Int) -> Bool)] = [
+            (90, { row, col in row < 2 && col == 1 }),   // top-right of the rotated 2x4 frame
+            (180, { row, col in row == 1 && col >= 2 }), // bottom-right of the rotated 4x2 frame
+            (270, { row, col in row >= 2 && col == 0 })  // bottom-left of the rotated 2x4 frame
+        ]
+
+        for testCase in cases {
+            let (transform, extent) = FramePreprocessor.uprightTransform(
+                forExtent: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)),
+                clockwiseDegrees: testCase.degrees)
+
+            try assertRendered(
+                source.transformed(by: transform), width: Int(extent.width), height: Int(extent.height)
+            ) { row, col, isBright in
+                XCTAssertEqual(
+                    isBright, testCase.isBright(row, col),
+                    "\(testCase.degrees)\u{b0}: pixel (row \(row), col \(col))")
+            }
+        }
+    }
+
     // MARK: - Render
 
     /// The render must leave the letterbox pad a known constant: a non-square source rendered
@@ -442,6 +474,63 @@ final class FramePreprocessorTests: XCTestCase {
     }
 
     // MARK: - Fixture
+
+    /// A `width`x`height` BGRA image, bright only where `row == 0 && col < width / 2` — the
+    /// top-left quadrant, a mark asymmetric on both axes so all four quarter turns land it
+    /// somewhere different. Backed by an allocator-owned `CVPixelBuffer` (not test-owned storage
+    /// like `withBGRABuffer` below) so the `CIImage` returned can safely outlive this call.
+    private func makeQuadrantMarkedImage(width: Int, height: Int) throws -> CIImage {
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+            [kCVPixelBufferCGImageCompatibilityKey: true] as CFDictionary, &buffer
+        )
+        guard status == kCVReturnSuccess, let buffer else {
+            throw FixtureFailure(message: "could not allocate a \(width)x\(height) fixture buffer")
+        }
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+        for row in 0..<height {
+            for col in 0..<width {
+                let value: UInt8 = (row == 0 && col < width / 2) ? 255 : 0
+                let offset = row * bytesPerRow + col * 4
+                base[offset] = value
+                base[offset + 1] = value
+                base[offset + 2] = value
+                base[offset + 3] = 255
+            }
+        }
+        return CIImage(cvPixelBuffer: buffer)
+    }
+
+    /// Renders `image` into a fresh `width`x`height` buffer and hands each pixel's brightness to
+    /// `body` as `(row, col)` in the same top-down, left-right order the fixtures above fill in.
+    private func assertRendered(
+        _ image: CIImage, width: Int, height: Int, body: (_ row: Int, _ col: Int, _ isBright: Bool) -> Void
+    ) throws {
+        var buffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+            [kCVPixelBufferCGImageCompatibilityKey: true] as CFDictionary, &buffer
+        )
+        guard status == kCVReturnSuccess, let buffer else {
+            throw FixtureFailure(message: "could not allocate a \(width)x\(height) render target")
+        }
+        CIContext().render(image, to: buffer)
+
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+        for row in 0..<height {
+            for col in 0..<width {
+                let isBright = base[row * bytesPerRow + col * 4] > 128
+                body(row, col, isBright)
+            }
+        }
+    }
 
     /// Builds a BGRA pixel buffer over test-owned storage so `bytesPerRow` is chosen by the test
     /// rather than by the allocator. The storage outlives `body` and nothing escapes it.
