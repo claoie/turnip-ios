@@ -22,11 +22,23 @@ struct PoseInputPreparer: @unchecked Sendable {
         self.ciContext = ciContext
     }
 
-    func prepare(_ pixelBuffer: CVPixelBuffer) throws -> PoseModelInput {
+    /// `rotationDegrees` uprights the source before letterboxing it — clockwise, in
+    /// `AVCaptureConnection.videoRotationAngle` terms. The file path's frames are already upright
+    /// (`VideoFrameSampler` renders through the track's `preferredTransform` first) and uses the
+    /// default of 0; the live path's frames arrive in the sensor's own orientation and pass the
+    /// rotation from the data connection to the movie connection, so MoveNet always scores an
+    /// upright frame instead of a sideways one — it is trained on upright subjects and degrades
+    /// noticeably otherwise. Rotating before the letterbox rather than after means only kept frames
+    /// pay for it, and it makes `mapping.sourceExtent` already the movie connection's orientation, so
+    /// the returned keypoints need no separate rotation once they are frame-normalized.
+    func prepare(_ pixelBuffer: CVPixelBuffer, rotationDegrees: Int = 0) throws -> PoseModelInput {
         let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let (transform, mapping) = try preprocessor.letterboxGeometry(forSourceExtent: sourceImage.extent)
+        let (uprightTransform, uprightExtent) = FramePreprocessor.uprightTransform(
+            forExtent: sourceImage.extent, clockwiseDegrees: rotationDegrees)
+        let (letterboxTransform, mapping) = try preprocessor.letterboxGeometry(forSourceExtent: uprightExtent)
         let outputBuffer = try preprocessor.makeTargetBuffer()
-        ciContext.render(sourceImage.transformed(by: transform), to: outputBuffer)
+        ciContext.render(
+            sourceImage.transformed(by: uprightTransform.concatenating(letterboxTransform)), to: outputBuffer)
         return PoseModelInput(tensor: try preprocessor.packRGB(from: outputBuffer), mapping: mapping)
     }
 }

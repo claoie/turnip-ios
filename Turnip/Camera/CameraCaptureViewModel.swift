@@ -679,7 +679,6 @@ extension CameraCaptureViewModel {
         let recording = LivePoseRecording(
             inference: { try await poseModel.runInference(on: $0) },
             channel: LivePoseSampleChannel(),
-            rotationDegrees: rotation,
             onResult: { [weak self] result in
                 let keypoints = LivePoseKeypointRotation.rotated(result.keypoints, clockwiseDegrees: toDeviceSpace)
                 Task { @MainActor in
@@ -690,7 +689,8 @@ extension CameraCaptureViewModel {
         livePoseTap.arm(
             recording: recording,
             preparer: poseModel.inputPreparer,
-            frameRate: Self.activeFrameRate(of: device) ?? 30)
+            frameRate: Self.activeFrameRate(of: device) ?? 30,
+            rotationDegrees: rotation)
     }
 
     /// The movie output finished. Waits for the consumer to score what is still queued — one

@@ -43,6 +43,34 @@ final class PoseInputPreparerTests: XCTestCase {
         XCTAssertEqual(pad.blue, 0)
     }
 
+    /// The crux of `prepare`'s live-path change: a rotated sensor buffer is uprighted before the
+    /// letterbox runs, so the mapping (and therefore the frame-normalized keypoints it later
+    /// inverts) is computed against the rotated dimensions, not the raw sensor ones — matching
+    /// what the file path already gets for free from `VideoFrameSampler`'s `preferredTransform`.
+    func testRotationUprightsBeforeLetterboxingSoTheMappingReflectsTheRotatedExtent() throws {
+        let source = try makeBuffer(width: 640, height: 360, format: kCVPixelFormatType_32BGRA)
+
+        let input = try preparer.prepare(source, rotationDegrees: 90)
+
+        // 640x360 rotated 90° clockwise is 360x640 — portrait, the same shape a portrait
+        // recording's movie connection reports — so the letterbox pads left/right, not top/bottom.
+        XCTAssertEqual(input.mapping.sourceExtent, CGRect(x: 0, y: 0, width: 360, height: 640))
+        XCTAssertEqual(input.mapping.scale, 256.0 / 640, accuracy: 1e-6)
+        XCTAssertEqual(input.mapping.offsetY, 0, accuracy: 1e-6)
+        XCTAssertEqual(input.mapping.offsetX, (256 - 360 * 256.0 / 640) / 2, accuracy: 1e-6)
+    }
+
+    /// The default matches the unrotated call exactly, so the file path (which never passes
+    /// `rotationDegrees`) is unaffected by this parameter existing.
+    func testRotationDefaultsToZeroMatchingTheUnrotatedCall() throws {
+        let source = try makeBuffer(width: 640, height: 360, format: kCVPixelFormatType_32BGRA)
+
+        let implicit = try preparer.prepare(source)
+        let explicitZero = try preparer.prepare(source, rotationDegrees: 0)
+
+        XCTAssertEqual(implicit.mapping, explicitZero.mapping)
+    }
+
     func testDegenerateSourceThrowsInsteadOfProducingGeometry() throws {
         // A 1x1 source is valid; the degenerate case is exercised through the preprocessor's
         // own guard, which `prepare` reaches with the CIImage extent.

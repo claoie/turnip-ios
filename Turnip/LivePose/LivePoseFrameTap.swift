@@ -32,6 +32,10 @@ final class LivePoseFrameTap: NSObject, @unchecked Sendable {
         let recording: LivePoseRecording
         let preparer: PoseInputPreparer
         let frameRate: Double
+        /// Clockwise degrees, `videoRotationAngle` terms, from the data connection to the movie
+        /// connection — passed to `preparer.prepare` so every kept frame is uprighted before it is
+        /// letterboxed into the model's input.
+        let rotationDegrees: Int
         var phase = Phase.armed
         var gate: LivePoseFrameGate
         var anchor = LivePoseTimestampAnchor()
@@ -70,6 +74,7 @@ final class LivePoseFrameTap: NSObject, @unchecked Sendable {
         let preparer: PoseInputPreparer
         let frameIndex: Int
         let timestamp: TimeInterval
+        let rotationDegrees: Int
     }
 
     private let captureQueue = DispatchQueue(label: "com.hoiekim.turnip.livepose.capture", qos: .userInitiated)
@@ -92,9 +97,12 @@ final class LivePoseFrameTap: NSObject, @unchecked Sendable {
     }
 
     /// Record was tapped. Frames are counted from `recordingDidStart()`, not from here.
-    func arm(recording: LivePoseRecording, preparer: PoseInputPreparer, frameRate: Double) {
+    func arm(
+        recording: LivePoseRecording, preparer: PoseInputPreparer, frameRate: Double, rotationDegrees: Int
+    ) {
         var fresh = Session(
-            recording: recording, preparer: preparer, frameRate: frameRate, gate: LivePoseFrameGate())
+            recording: recording, preparer: preparer, frameRate: frameRate,
+            rotationDegrees: rotationDegrees, gate: LivePoseFrameGate())
         fresh.apply(
             LivePoseThermalPolicy.response(to: ProcessInfo.processInfo.thermalState),
             at: ProcessInfo.processInfo.systemUptime)
@@ -165,7 +173,7 @@ extension LivePoseFrameTap: AVCaptureVideoDataOutputSampleBufferDelegate {
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let start = ProcessInfo.processInfo.systemUptime
         do {
-            let input = try admission.preparer.prepare(pixelBuffer)
+            let input = try admission.preparer.prepare(pixelBuffer, rotationDegrees: admission.rotationDegrees)
             let elapsed = ProcessInfo.processInfo.systemUptime - start
             session.withLock { $0?.metrics.preprocess.record(elapsed) }
             admission.recording.channel.push(LivePoseSample(
@@ -199,7 +207,8 @@ extension LivePoseFrameTap: AVCaptureVideoDataOutputSampleBufferDelegate {
                 recording: current.recording,
                 preparer: current.preparer,
                 frameIndex: Int((timestamp * current.frameRate).rounded()),
-                timestamp: timestamp)
+                timestamp: timestamp,
+                rotationDegrees: current.rotationDegrees)
         }
     }
 }

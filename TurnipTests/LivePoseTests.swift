@@ -301,7 +301,6 @@ final class LivePoseTests: XCTestCase {
         let recording = LivePoseRecording(
             inference: { _ in [PoseKeypoint(name: "nose", y: 0.2, x: 0.1, confidence: 0.9)] },
             channel: channel,
-            rotationDegrees: 90,
             onResult: { result in streamed.append(result) })
         var producer = LivePoseMetrics()
         producer.framesKept = 3
@@ -311,9 +310,9 @@ final class LivePoseTests: XCTestCase {
         let outcome = await recording.outcome()
 
         XCTAssertEqual(outcome.results.map(\.frameIndex), [0, 1, 2])
-        // Each result also went to the live consumer, rotated the same way, as it was scored.
+        // Each result also went to the live consumer, unmodified, as it was scored.
         XCTAssertEqual(streamed.frameIndices, [0, 1, 2])
-        XCTAssertEqual(streamed.firstKeypointX, 0.8, accuracy: 1e-6)
+        XCTAssertEqual(streamed.firstKeypointX, 0.1, accuracy: 1e-6)
         XCTAssertEqual(outcome.results.map(\.timestamp), [0, 0.1, 0.2])
         XCTAssertNil(outcome.errorMessage)
         XCTAssertFalse(outcome.metrics.wasCancelled)
@@ -321,9 +320,10 @@ final class LivePoseTests: XCTestCase {
         XCTAssertEqual(outcome.metrics.framesInferred, 3)
         XCTAssertEqual(outcome.metrics.inference.count, 3)
         XCTAssertEqual(outcome.metrics.maxQueueDepth, 3)
-        // The rotation is applied at the consumer: (0.1, 0.2) → (0.8, 0.1) under a quarter turn.
-        XCTAssertEqual(outcome.results[0].keypoints[0].x, 0.8, accuracy: 1e-6)
-        XCTAssertEqual(outcome.results[0].keypoints[0].y, 0.1, accuracy: 1e-6)
+        // Keypoints pass through the drain unmodified: uprighting now happens in
+        // PoseInputPreparer, before inference, not as a post-hoc rotation here.
+        XCTAssertEqual(outcome.results[0].keypoints[0].x, 0.1, accuracy: 1e-6)
+        XCTAssertEqual(outcome.results[0].keypoints[0].y, 0.2, accuracy: 1e-6)
     }
 
     /// A model failure is a reviewable ending, not an abandoned one: the error is reported and
@@ -335,8 +335,7 @@ final class LivePoseTests: XCTestCase {
                 guard input.tensor.isEmpty else { throw PoseError.inferenceFailed("op unsupported") }
                 return []
             },
-            channel: channel,
-            rotationDegrees: 0)
+            channel: channel)
         channel.push(sample(0))
         channel.push(LivePoseSample(frameIndex: 1, timestamp: 0.1, input: PoseModelInput(
             tensor: Data([1]), mapping: sample(0).input.mapping)))
@@ -353,7 +352,7 @@ final class LivePoseTests: XCTestCase {
 
     func testRecordingCancelledMidDrainIsMarkedCancelled() async {
         let channel = LivePoseSampleChannel(capacity: 10)
-        let recording = LivePoseRecording(inference: { _ in [] }, channel: channel, rotationDegrees: 0)
+        let recording = LivePoseRecording(inference: { _ in [] }, channel: channel)
         var producer = LivePoseMetrics()
         producer.framesKept = 5
         recording.cancel(producer: producer)
