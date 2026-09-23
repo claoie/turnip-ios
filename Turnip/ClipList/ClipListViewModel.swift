@@ -210,21 +210,36 @@ final class ClipListViewModel: ObservableObject {
             isTrashed: items[index].isTrashed)
     }
 
-    /// Removes the item with the given id entirely — the editor's Delete action,
-    /// distinct from trashing: a trashed clip still shows in the grid (excluded from
-    /// saving only), while a deleted clip is gone. The original item can never be
-    /// removed this way — it can only be trashed — since deleting a `PHAsset` needs
-    /// `save()`'s confirmation-and-cleanup flow, not an in-memory removal. A no-op
-    /// for unknown ids.
+    /// Removes the item with the given id entirely: the editor's Delete action, and
+    /// — for a derived clip — also what the list's own trash button now routes to
+    /// via `trash(_:)`, since a derived clip has no restore once trashed. The
+    /// original item can never be removed this way — it can only be soft-trashed —
+    /// since deleting a `PHAsset` needs `save()`'s confirmation-and-cleanup flow, not
+    /// an in-memory removal. A no-op for unknown ids.
     func delete(_ id: UUID) {
         items.removeAll { $0.id == id && !$0.isOriginal }
     }
 
-    /// The per-card trash quick action. A no-op for unknown ids — the card that
-    /// fired it may have been removed by a re-run of detection.
+    /// Flips one item's reversible trash flag. `trash(_:)` is the per-card button's
+    /// entry point; this stays its own method because the original tile's flag is
+    /// also read directly by `save()`. A no-op for unknown ids — the card that fired
+    /// it may have been removed by a re-run of detection.
     func toggleTrash(_ item: ClipListItem) {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[index].isTrashed.toggle()
+    }
+
+    /// The per-card trash button's action: the original tile's trash is reversible
+    /// (`toggleTrash`, read by `save()` to decide whether to delete the source video
+    /// from Photos), while a derived clip's trash removes its tile from the grid
+    /// immediately (`delete(_:)`) — there is no restore for a derived clip once
+    /// trashed.
+    func trash(_ item: ClipListItem) {
+        if item.isOriginal {
+            toggleTrash(item)
+        } else {
+            delete(item.id)
+        }
     }
 
     /// A write-through binding to one item, for a destination that edits a clip in place.

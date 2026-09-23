@@ -321,12 +321,13 @@ private struct ClipCardView: View {
     /// The diameter every top-corner icon circle renders at.
     private static let iconButtonDiameter: CGFloat = 28
 
-    /// The per-tile trash toggle: a solid red circle while trashed, the same
+    /// The per-tile trash button: a solid red circle while trashed, the same
     /// semi-transparent grey circle the other tile buttons use otherwise. For the
-    /// original item, trashing it is what tells "Done" to delete the source video
-    /// from Photos; for a derived clip, it's excluded from the save.
+    /// original item, tapping it is the reversible toggle that tells "Done" to
+    /// delete the source video from Photos; for a derived clip, tapping it removes
+    /// the tile from the grid immediately, with no restore.
     private var trashButton: some View {
-        Button(action: toggleTrash) {
+        Button(action: trash) {
             ZStack {
                 Circle().fill(item.isTrashed ? Color.red : Color.black.opacity(0.4))
                 Image(systemName: "trash")
@@ -340,8 +341,8 @@ private struct ClipCardView: View {
         .accessibilityLabel(item.isTrashed ? "Restore clip" : "Trash clip")
     }
 
-    private func toggleTrash() {
-        viewModel.toggleTrash(item)
+    private func trash() {
+        viewModel.trash(item)
     }
 
     @ViewBuilder

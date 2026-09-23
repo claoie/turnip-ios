@@ -133,6 +133,46 @@ final class ClipListTests: XCTestCase {
         XCTAssertTrue(viewModel.items[0].isTrashed)
     }
 
+    // MARK: - ClipListViewModel: trash button routing
+
+    @MainActor
+    func testTrashOnADerivedClipRemovesItImmediately() {
+        let first = makeItem(), second = makeItem()
+        let viewModel = makeViewModel(items: [first, second])
+
+        viewModel.trash(viewModel.items[1])
+
+        // Removed, not toggled: a `toggleTrash` call would have left the item in
+        // place with `isTrashed` flipped and the count unchanged.
+        XCTAssertEqual(viewModel.items.count, 2)
+        XCTAssertEqual(viewModel.items[1].id, second.id)
+    }
+
+    @MainActor
+    func testTrashOnTheOriginalItemTogglesInsteadOfRemoving() {
+        let viewModel = makeViewModel(items: [])
+        let original = viewModel.items[0]
+
+        viewModel.trash(original)
+
+        // Toggled, not removed: a `delete` call would have dropped the item, but
+        // `delete(_:)` never removes the original regardless.
+        XCTAssertEqual(viewModel.items.count, 1)
+        XCTAssertTrue(viewModel.items[0].isTrashed)
+
+        viewModel.trash(original)
+        XCTAssertFalse(viewModel.items[0].isTrashed)
+    }
+
+    @MainActor
+    func testTrashIgnoresUnknownItems() {
+        let viewModel = makeViewModel(items: [makeItem()])
+
+        viewModel.trash(makeItem())
+
+        XCTAssertEqual(viewModel.items.count, 2)
+    }
+
     @MainActor
     func testBindingWritesThroughToTheListEntry() {
         let target = makeItem()
