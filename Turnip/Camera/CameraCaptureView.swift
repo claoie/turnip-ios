@@ -1,4 +1,3 @@
-import AVFoundation
 import SwiftUI
 
 /// The camera-recording screen, one of the two pages `RootTabView` swipes between:
@@ -20,7 +19,7 @@ struct CameraCaptureView: View {
             Color.black.ignoresSafeArea()
             switch viewModel.authorization {
             case .authorized:
-                CameraPreviewView(session: viewModel.session)
+                CameraPreviewView(session: viewModel.session, poseKeypoints: viewModel.livePoseKeypoints)
                     .ignoresSafeArea()
                     .overlay {
                         // A transparent gesture catcher, not `.gesture` directly on the
@@ -59,18 +58,6 @@ struct CameraCaptureView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
-        #if DEBUG
-        .sheet(item: $viewModel.livePoseReview, onDismiss: viewModel.livePoseReviewDismissed) { review in
-            NavigationStack {
-                PoseDiagnosticView(
-                    video: SelectedVideo(
-                        assetIdentifier: "live-pose-review",
-                        asset: AVURLAsset(url: review.fileURL),
-                        duration: review.outcome.metrics.recordingDuration),
-                    liveOutcome: review.outcome)
-            }
-        }
-        #endif
     }
 
     private var cancelButton: some View {
@@ -148,11 +135,6 @@ struct CameraCaptureView: View {
 
     private var topRightControls: some View {
         HStack(spacing: 12) {
-            #if DEBUG
-            if viewModel.hasCaptureDevice {
-                livePoseButton
-            }
-            #endif
             if viewModel.exposureBiasRange.lowerBound < viewModel.exposureBiasRange.upperBound {
                 exposureToggleButton
             }
@@ -182,22 +164,6 @@ struct CameraCaptureView: View {
             accessibilityLabel: viewModel.isTorchOn ? "Turn off flash" : "Turn on flash",
             action: viewModel.toggleTorch)
     }
-
-    #if DEBUG
-    /// The prototype flag from docs/LIVE_POSE.md. Filled glyph while on; dimmed while the model
-    /// is still loading, when Record is ignored.
-    private var livePoseButton: some View {
-        let loading = viewModel.isLivePoseEnabled && !viewModel.isLivePoseReady
-        return ScrimIconButton(
-            systemImage: viewModel.isLivePoseEnabled ? "figure.run.circle.fill" : "figure.run.circle",
-            accessibilityLabel: viewModel.isLivePoseEnabled
-                ? (loading ? "Live pose loading" : "Turn off live pose")
-                : "Turn on live pose",
-            action: viewModel.toggleLivePose)
-            .opacity(viewModel.isRecording || loading ? 0.4 : 1)
-            .disabled(viewModel.isRecording)
-    }
-    #endif
 
     private var flipButton: some View {
         ScrimIconButton(

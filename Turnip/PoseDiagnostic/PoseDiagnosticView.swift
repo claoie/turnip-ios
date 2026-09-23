@@ -10,12 +10,9 @@ import SwiftUI
 /// over it, and tapping a row pauses on that frame — the numbers are only a diagnosis if they
 /// can be checked against the picture they describe.
 ///
-/// Reached from Home by tapping a video tile, and from the camera screen's live-pose prototype
-/// with the results a recording produced while it was being filmed.
+/// Reached from Home by tapping a video tile.
 struct PoseDiagnosticView: View {
     let video: SelectedVideo
-    /// Results scored live during recording, shown on arrival instead of waiting for a run.
-    var liveOutcome: LivePoseOutcome?
     @StateObject private var viewModel = PoseDiagnosticViewModel()
 
     var body: some View {
@@ -48,10 +45,6 @@ struct PoseDiagnosticView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let liveMetrics = viewModel.liveMetrics {
-                liveMetricsSection(liveMetrics)
-            }
-
             resultList
         }
         .padding()
@@ -59,9 +52,6 @@ struct PoseDiagnosticView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await viewModel.prepare(with: video.asset)
-            if let liveOutcome {
-                viewModel.adoptLive(liveOutcome, asset: video.asset)
-            }
         }
         .onDisappear {
             viewModel.teardown()
@@ -80,18 +70,6 @@ struct PoseDiagnosticView: View {
         }
         .aspectRatio(viewModel.displaySize ?? CGSize(width: 16, height: 9), contentMode: .fit)
         .frame(maxHeight: 300)
-    }
-
-    /// The acceptance-gate figures from docs/LIVE_POSE.md: what the live path measured, then the
-    /// written file's frame count once the audit has read it.
-    private func liveMetricsSection(_ metrics: LivePoseMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(metrics.summaryLine)
-            Text(viewModel.fileAudit?.summaryLine ?? "File: counting samples…")
-        }
-        .font(.footnote.monospacedDigit())
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var resultList: some View {

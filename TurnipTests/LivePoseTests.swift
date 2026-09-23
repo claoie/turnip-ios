@@ -292,13 +292,17 @@ final class LivePoseTests: XCTestCase {
 
     func testRecordingScoresEverySampleInOrderAndMergesMetrics() async {
         let channel = LivePoseSampleChannel(capacity: 10)
-        let recording = LivePoseRecording(
-            inference: { _ in [PoseKeypoint(name: "nose", y: 0.2, x: 0.1, confidence: 0.9)] },
-            channel: channel,
-            rotationDegrees: 90)
+        let streamed = StreamedResults()
+        // Queued before the consumer exists, so the queue's high-water mark is deterministic:
+        // a parked consumer takes a push directly and it never counts as depth.
         for index in 0..<3 {
             channel.push(sample(index))
         }
+        let recording = LivePoseRecording(
+            inference: { _ in [PoseKeypoint(name: "nose", y: 0.2, x: 0.1, confidence: 0.9)] },
+            channel: channel,
+            rotationDegrees: 90,
+            onResult: { result in streamed.append(result) })
         var producer = LivePoseMetrics()
         producer.framesKept = 3
         producer.recordingDuration = 0.3
@@ -307,6 +311,9 @@ final class LivePoseTests: XCTestCase {
         let outcome = await recording.outcome()
 
         XCTAssertEqual(outcome.results.map(\.frameIndex), [0, 1, 2])
+        // Each result also went to the live consumer, rotated the same way, as it was scored.
+        XCTAssertEqual(streamed.frameIndices, [0, 1, 2])
+        XCTAssertEqual(streamed.firstKeypointX, 0.8, accuracy: 1e-6)
         XCTAssertEqual(outcome.results.map(\.timestamp), [0, 0.1, 0.2])
         XCTAssertNil(outcome.errorMessage)
         XCTAssertFalse(outcome.metrics.wasCancelled)
@@ -359,36 +366,66 @@ final class LivePoseTests: XCTestCase {
         XCTAssertTrue(outcome.results.isEmpty)
     }
 
-    // MARK: - File audit
+    // MARK: - Overlay geometry
 
-    func testFileAuditCountsEveryVideoSample() async throws {
-        let url = try await TestVideoWriter.writeTestVideo(frameCount: 12, width: 64, height: 64, fps: 30)
-        defer { try? FileManager.default.removeItem(at: url) }
+    /// Only confident joints are drawn, and a limb needs both of its joints; the conversion the
+    /// caller supplies is applied to every emitted point.
+    func testOverlayGeometryDrawsConfidentJointsAndFullyConfidentLimbs() {
+        let keypoints = [
+            PoseKeypoint(name: "left_shoulder", y: 0.2, x: 0.1, confidence: 0.9),
+            PoseKeypoint(name: "right_shoulder", y: 0.2, x: 0.3, confidence: 0.9),
+            PoseKeypoint(name: "left_elbow", y: 0.4, x: 0.05, confidence: 0.1),
+            PoseKeypoint(name: "left_hip", y: 0.5, x: 0.12, confidence: 0.8)
+        ]
 
-        let audit = try await LivePoseFileAudit.audit(AVURLAsset(url: url))
+        // Rounded: a `Float` 0.1 widened to `CGFloat` is 0.10000000149, and the assertion is about
+        // which points are emitted, not about the widening.
+        let geometry = LivePoseOverlayGeometry(keypoints: keypoints) { keypoint in
+            CGPoint(x: (CGFloat(keypoint.x) * 100).rounded(), y: (CGFloat(keypoint.y) * 100).rounded())
+        }
 
-        XCTAssertEqual(audit.sampleCount, 12)
-        XCTAssertEqual(audit.expectedSampleCount, 12)
-        XCTAssertEqual(audit.missingSamples, 0)
-        XCTAssertEqual(audit.duration, 0.4, accuracy: 0.001)
-        XCTAssertEqual(audit.nominalFrameRate, 30, accuracy: 0.01)
-        XCTAssertEqual(audit.summaryLine, "File: 12 samples, 12 expected at 30 fps over 0.4 s")
+        XCTAssertEqual(geometry.joints.count, 3, "the low-confidence elbow is not drawn")
+        XCTAssertEqual(geometry.joints[0], CGPoint(x: 10, y: 20))
+        XCTAssertEqual(
+            geometry.limbs,
+            [
+                .init(start: CGPoint(x: 10, y: 20), end: CGPoint(x: 30, y: 20)),
+                .init(start: CGPoint(x: 10, y: 20), end: CGPoint(x: 12, y: 50))
+            ],
+            "shoulder-shoulder and left shoulder-hip are drawable; shoulder-elbow is not")
     }
 
-    func testFileAuditExpectedCountRoundsDurationTimesRate() {
-        XCTAssertEqual(LivePoseFileAudit.expectedSampleCount(duration: 180, nominalFrameRate: 240), 43_200)
-        XCTAssertEqual(LivePoseFileAudit.expectedSampleCount(duration: 1.0 / 3, nominalFrameRate: 30), 10)
-        XCTAssertEqual(
-            LivePoseFileAudit(sampleCount: 43_190, expectedSampleCount: 43_200, duration: 180, nominalFrameRate: 240)
-                .missingSamples,
-            10)
-        XCTAssertEqual(
-            LivePoseFileAudit(sampleCount: 43_210, expectedSampleCount: 43_200, duration: 180, nominalFrameRate: 240)
-                .missingSamples,
-            0, "more samples than the nominal rate predicts is not a drop")
+    func testOverlayGeometryIsEmptyForNoPose() {
+        XCTAssertEqual(LivePoseOverlayGeometry.empty.joints, [])
+        XCTAssertEqual(LivePoseOverlayGeometry.empty.limbs, [])
     }
 
     // MARK: - Fixtures
+
+    /// Collects what the recording's live result handler receives. A class with a lock rather
+    /// than an actor: the handler is synchronous and called from the drain's task.
+    private final class StreamedResults: @unchecked Sendable {
+        private let lock = NSLock()
+        private var results: [PoseFrameResult] = []
+
+        func append(_ result: PoseFrameResult) {
+            lock.lock()
+            defer { lock.unlock() }
+            results.append(result)
+        }
+
+        var frameIndices: [Int] {
+            lock.lock()
+            defer { lock.unlock() }
+            return results.map(\.frameIndex)
+        }
+
+        var firstKeypointX: Float {
+            lock.lock()
+            defer { lock.unlock() }
+            return results.first?.keypoints.first?.x ?? .nan
+        }
+    }
 
     private func sample(_ index: Int) -> LivePoseSample {
         LivePoseSample(

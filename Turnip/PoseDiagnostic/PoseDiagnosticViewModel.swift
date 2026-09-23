@@ -12,11 +12,6 @@ final class PoseDiagnosticViewModel: ObservableObject {
     /// map onto the player by a plain multiply once the player stack has this aspect ratio.
     @Published private(set) var displaySize: CGSize?
     @Published private(set) var playbackTime: TimeInterval = 0
-    /// What a live-inference recording measured, when this screen is reviewing one; nil for a
-    /// plain post-hoc run. Kept through a later "Run diagnostic" so the two can be compared.
-    @Published private(set) var liveMetrics: LivePoseMetrics?
-    /// The recording's frame-count audit, loaded alongside `liveMetrics`.
-    @Published private(set) var fileAudit: LivePoseFileAudit?
 
     /// Created up front so `VideoPlayer` never sees a nil player; the item is attached in
     /// `prepare`.
@@ -24,7 +19,6 @@ final class PoseDiagnosticViewModel: ObservableObject {
 
     private let sampler = VideoFrameSampler()
     private var runTask: Task<Void, Never>?
-    private var auditTask: Task<Void, Never>?
     private var timeObserver: Any?
 
     /// Popping the screen has to stop the run. Without this a swipe-back would leave a full decode
@@ -32,7 +26,6 @@ final class PoseDiagnosticViewModel: ObservableObject {
     /// stack another one against the same cooperative pool.
     deinit {
         runTask?.cancel()
-        auditTask?.cancel()
     }
 
     var summary: PoseDiagnosticSummary? {
@@ -84,30 +77,6 @@ final class PoseDiagnosticViewModel: ObservableObject {
             to: CMTime(seconds: result.timestamp, preferredTimescale: 600),
             toleranceBefore: .zero, toleranceAfter: .zero)
         playbackTime = result.timestamp
-    }
-
-    /// Shows what a live-inference recording produced (docs/LIVE_POSE.md) and audits the written
-    /// file's frame count against its duration. "Run diagnostic" stays available on the same
-    /// file as the post-hoc baseline the acceptance gate compares against; the live metrics stay
-    /// on screen when it replaces the rows. Idempotent so a re-appearing view does not undo a
-    /// baseline run.
-    func adoptLive(_ outcome: LivePoseOutcome, asset: AVURLAsset) {
-        guard liveMetrics == nil else { return }
-        results = outcome.results
-        liveMetrics = outcome.metrics
-        errorMessage = outcome.errorMessage
-        auditTask = Task { [weak self] in
-            do {
-                let audit = try await LivePoseFileAudit.audit(asset)
-                self?.fileAudit = audit
-            } catch is CancellationError {
-                // The screen went away; nobody is waiting for the count.
-            } catch let error as PoseError {
-                self?.errorMessage = error.errorDescription
-            } catch {
-                self?.errorMessage = error.localizedDescription
-            }
-        }
     }
 
     /// Runs MoveNet Thunder over `asset`, the video Home resolved from the tapped tile (see

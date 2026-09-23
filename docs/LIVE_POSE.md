@@ -1,12 +1,12 @@
 # Live pose inference during recording
 
-*Rev 2 · 2026-09-22 · Prototype implemented in `Turnip/LivePose/`; device gate not yet run. Rev 1 was the design draft.*
+*Rev 3 · 2026-09-23 · Live on every recording, with the skeleton drawn on the camera preview; device gate not yet run. Rev 1 was the design draft, Rev 2 the flag-gated prototype.*
 
 *Companion to [`DESIGN.md`](DESIGN.md). This doc covers one question: can the pose pass start when recording starts, instead of after the file is written? Pipeline shape, budgets and model choice stay as recorded in `DESIGN.md`.*
 
 ## Decision
 
-**Go, gated on one on-device test.** Add an `AVCaptureVideoDataOutput` alongside the existing `AVCaptureMovieFileOutput`, sample the live frames at the same 10 samples/sec the file path uses, and let inference lag behind the recording and finish after it. Prototype behind a DEBUG-only flag on the camera screen, reviewed on the pose diagnostic screen. Ship only when the gate in "Acceptance gate" passes on the oldest supported device at 240 fps.
+**Go, gated on one on-device test.** Add an `AVCaptureVideoDataOutput` alongside the existing `AVCaptureMovieFileOutput`, sample the live frames at the same 10 samples/sec the file path uses, and let inference lag behind the recording and finish after it. It runs on every recording and draws the scored skeleton on the camera preview while the take is being filmed. The gate in "Acceptance gate" still has to pass on the oldest supported device at 240 fps; until it does, the recording's own frame count is the thing to watch.
 
 The recorder itself does not change. If the gate fails on the recording side, the fallback is the `AVCaptureVideoDataOutput` + `AVAssetWriter` rewrite described under "Alternatives", not a weaker version of this design.
 
@@ -46,21 +46,23 @@ The tensor is 256 × 256 × 3 bytes ≈ 196 KB. At 10 samples/sec that is ≈ 11
 
 ### Capture side
 
-1. Add an `AVCaptureVideoDataOutput` to the session next to `movieOutput`, ahead of it. The flag toggles this at runtime, so the toggle does it in one `beginConfiguration` block: remove the movie output, add or remove the data output, add the movie output back, re-apply the mirroring policy to both. With the flag off the session is exactly what a release build runs, which is what the gate's flag-off baseline needs.
+1. Add an `AVCaptureVideoDataOutput` to the session next to `movieOutput`, ahead of it, in the same `beginConfiguration` block that builds the session, so the recorder's connection is formed after it. The mirroring policy is applied to both outputs, and re-applied to both on a front/rear flip.
 2. Set `videoSettings` to an **empty dictionary**, not nil. Rev 1 said nil; the header says nil asks for a default *uncompressed* format and the empty dictionary asks for the device's native format. The device format is 420v, and forcing a conversion would make the ISP convert all 240 frames/sec for the 10 that are kept. `CIImage(cvPixelBuffer:)` accepts 420v; `PoseInputPreparerTests` checks that on a 420v buffer.
 3. `alwaysDiscardsLateVideoFrames = true`. A dedicated serial queue with `.userInitiated` QoS, separate from `sessionQueue`. Session mutations and frame delivery must not block each other.
 4. In `captureOutput(_:didOutput:from:)`, keep frames by **presentation time**, not by counting them: a frame is kept when it is at or past the next 100 ms slot on a grid anchored at the first kept frame (`LivePoseFrameGate`). Rev 1 said to reuse the file path's frame-count stride, but with late frames discarded the callback never sees the frames that arrive while a kept one is being letterboxed, so counting would undersample by however many were skipped. Time cannot be skipped. A gap longer than one slot re-anchors the grid rather than admitting a burst. Non-kept frames return after one lock and a compare.
 5. For kept frames: read the presentation timestamp, run the letterbox to the 256×256 tensor, push `(timestamp, tensor)` to the per-recording queue, return. Never retain the sample buffer or the pixel buffer. The letterbox runs outside the lock.
 6. Frames arrive only while the movie output is recording. The data output delivers whenever the session runs; gate on the recording state so preview-only time costs nothing. The tap is armed on the Record tap and starts counting at `fileOutput(_:didStartRecordingTo:from:)`.
 7. The data output delivers buffers in the sensor's orientation; the movie output writes its orientation as a track matrix, and the file path renders through it. So live keypoints are rotated at the consumer by the angle between the two connections (`LivePoseKeypointRotation`), read at record start. Rotating the data output's connection instead would physically rotate every buffer. The sign convention (clockwise, `videoRotationAngle` terms) is unit-tested but the pairing with what the two connections actually report needs the device run.
+8. The overlay takes a different route to the screen. Each result is rotated back into capture-device coordinates (the movie connection's rotation undone) and handed to `AVCaptureVideoPreviewLayer.layerPointConverted(fromCaptureDevicePoint:)`, which folds in the preview's own rotation, the front camera's mirroring and the aspect-fill crop. That is why the skeleton is drawn in UIKit, as shape layers on the preview view, rather than in a SwiftUI canvas that cannot see any of those. Only joints above the confidence threshold are drawn; on a live preview a hollow "guess" reads as a wrong detection.
 
 ### Inference side
 
-1. `MoveNetThunderModel` is loaded once, when the flag is first turned on, and reused across recordings. Record is ignored until it has loaded (the flag button dims meanwhile), so a take never silently runs without live pose. The diagnostic screen's own "Run diagnostic" still loads per run.
+1. `MoveNetThunderModel` is loaded once, when the camera first starts, and reused across recordings. A take that starts before it has loaded records normally without live pose; a load failure is a build problem (the `.tflite` is not bundled) and is logged, never shown as a recording error. The diagnostic screen's own "Run diagnostic" still loads per run.
 2. The letterbox and RGB repack live in `PoseInputPreparer`, a synchronous function callable from the capture queue and exposed off the actor as `MoveNetThunderModel.inputPreparer`. The actor takes a `PoseModelInput` (tensor plus letterbox mapping). The pixel-buffer overload the file path calls delegates to the same preparer, so there is one preprocess implementation.
 3. A per-recording queue (`LivePoseSampleChannel` over `BoundedSampleQueue`), bounded to 30 entries ≈ 3 s ≈ 6 MB. Drop-oldest on overflow; drops and the high-water mark are counted. `LivePoseRecording` drains it through the model actor and appends results in dequeue order, which is timestamp order because the queue is FIFO and the capture callback is serial.
-4. The queue is created on the Record tap and owned by the recording, not the screen. Stop finishes the producer and lets the consumer drain; leaving the camera tab and session teardown cancel it, and the finished file is still handed on. A Record tap during the drain is ignored rather than cancelling it (Rev 1 said cancel): the drain lasts seconds, and a take started under it would have left the previous file with nowhere to go. A consumer that outlives the recording is always the one for that recording, never a shared one.
-5. Per-sample preprocess time and inference time are recorded separately (`LivePoseMetrics`). The prototype runs as a Debug build, so the unoptimized letterbox loop must not be mistaken for a slow model when the gate is read.
+4. The queue is created on the Record tap and owned by the recording, not the screen. Stop finishes the producer and lets the consumer drain, then logs the recording's metrics; the finished file is handed on immediately, not after the drain. Leaving the camera tab, session teardown and a new Record tap cancel a drain still in progress: its results only fed the overlay, which is gone by then. A consumer that outlives the recording is always the one for that recording, never a shared one.
+5. Results reach the overlay through the recording's result handler as each one is scored, so the skeleton lags the picture by one inference plus whatever is queued — tens of milliseconds when the queue sits empty. The overlay clears when the recording ends.
+6. Per-sample preprocess time and inference time are recorded separately (`LivePoseMetrics`). A Debug build runs the letterbox loop unoptimized, so when the gate is read from a Debug run the two must not be conflated.
 
 ### Timestamps
 
@@ -80,23 +82,23 @@ Coverage under backoff is not deterministic. If a consumer needs full coverage, 
 
 ### Where it lives
 
-Prototype vehicle is the pose diagnostic screen. A DEBUG-only flag on the camera screen (the running-figure button, top right) attaches the data output and loads the model. When a recording made with the flag on finishes and its consumer has drained, the camera screen presents the diagnostic as a sheet over the recorded file with the live results already in its rows, plus two footnote lines: the live metrics (`LivePoseMetrics.summaryLine`) and the file's frame-count audit (`LivePoseFileAudit`). "Run diagnostic" on that sheet is the post-hoc baseline over the same file. Dismissing the sheet hands the file on to Photos exactly as a flag-off recording would.
+The camera screen. `CameraCaptureViewModel` owns the tap and the model, arms a recording on each Record tap, publishes the latest pose for `CameraPreviewView` to draw, and logs each recording's metrics (`LivePoseLogger`, log category `LivePose`) once the consumer has drained. There is no flag and no review screen: the metrics line is the gate's readout, collected from the device log.
 
-Everything live-specific is in `Turnip/LivePose/`; the only shared change is the preprocess seam in `Turnip/Pose/`. Deleting the directory and the `#if DEBUG` blocks in the camera screen removes the prototype.
+Everything live-specific is in `Turnip/LivePose/`; the only shared change is the preprocess seam in `Turnip/Pose/`.
 
 The payoff is `ProcessingPipeline`. Its `FrameSampling` protocol takes an `AVURLAsset`, so a live source cannot conform to it as written. The pipeline needs a second source abstraction that yields `(timestamp, tensor)` and feeds the same inference closure. That refactor is out of scope for the prototype and in scope for shipping.
 
 ## Acceptance gate
 
-The unverified combination is a movie file output and a video data output both active **at 240 fps in 420v**. Apple's statement about iOS 16 is general and one format-dependent failure exists, so the general statement is not enough. Run on an A11 device (iPhone 8), 240 fps, a take of at least three minutes, with the debug flag on. All three must pass:
+The unverified combination is a movie file output and a video data output both active **at 240 fps in 420v**. Apple's statement about iOS 16 is general and one format-dependent failure exists, so the general statement is not enough. Run on an A11 device (iPhone 8), 240 fps, a take of at least three minutes, then collect the device log (`log collect` or Console.app, subsystem `com.hoiekim.turnip`, category `LivePose`). All three must pass:
 
-1. **The recording has no dropped frames.** `AVCaptureMovieFileOutput` does not report drops. The diagnostic's "File:" line reads the written file's video track and compares its sample count against duration × nominal frame rate. Also compare against the same take with the flag off (the flag detaches the data output entirely, so the flag-off take is the release configuration).
-2. **Inference sustains about 10 samples/sec** with the queue near empty. The "Live:" line reports samples/sec, queue drops, maximum queue depth, late-frame discards, and preprocess and inference times separately.
+1. **The recording has no dropped frames.** `AVCaptureMovieFileOutput` does not report drops. Read the saved file's video track (`ffprobe -count_frames`, or `AVAssetReader` in passthrough) and compare its sample count against duration × nominal frame rate. The baseline to compare against is the same take on a build with the data output's `addOutput` line removed.
+2. **Inference sustains about 10 samples/sec** with the queue near empty. The "Live:" log line reports samples/sec, queue drops, maximum queue depth, late-frame discards, and preprocess and inference times separately.
 3. **Thermal state stays at or below `.fair`** for the whole take, and the recording keeps its frame rate under `.serious` if it is reached. The "Live:" line reports seconds spent at `.serious` and whether `.critical` stopped sampling.
 
-Also check on the device, since no test here can: that the overlaid live skeleton lands on the athlete in the file's portrait orientation (the keypoint rotation's sign pairing), and that a Record tap while the previous recording is still draining is ignored and the review for that recording still appears.
+Also check on the device, since no test here can: that the skeleton lands on the athlete on the preview in portrait, on both the rear and the mirrored front camera (the keypoint rotation's sign pairing and the preview layer's device-point mapping).
 
-Pass all three: ship behind the flag, then remove the flag. Fail (1): the recorder is the constraint; move to the `AVAssetWriter` alternative. Fail (2) or (3) only: the model is the constraint; try `Interpreter.Options.threadCount` first, then the Core ML delegate, and rerun the gate. The Core ML delegate brings the Neural Engine into play and has its own op-support risk for MoveNet, so it is the second lever, not the first.
+Fail (1): the recorder is the constraint; move to the `AVAssetWriter` alternative. Fail (2) or (3) only: the model is the constraint; try `Interpreter.Options.threadCount` first, then the Core ML delegate, and rerun the gate. The Core ML delegate brings the Neural Engine into play and has its own op-support risk for MoveNet, so it is the second lever, not the first.
 
 ## Alternatives
 
@@ -114,8 +116,9 @@ Pass all three: ship behind the flag, then remove the flag. Fail (1): the record
 - Coverage is not deterministic under thermal backoff or drops. Backfill from the file is the recovery, not part of this change.
 - Two frame sources feed one model. The preprocess step is shared; the sampling abstraction is not, until the pipeline refactor.
 - A lagging consumer has an explicit lifecycle. Stop finishes its queue and lets it drain; every path that abandons a recording cancels it.
-- The simulator has no camera. Every change on the capture side needs a device run; `LivePoseTests` covers the frame gate, the queue bound and drop policy, the channel hand-off, the timestamp offset, the thermal policy, the keypoint rotation and the file audit as pure functions, and `PoseInputPreparerTests` covers the shared preprocess on 420v and BGRA buffers.
+- The simulator has no camera. Every change on the capture side needs a device run; `LivePoseTests` covers the frame gate, the queue bound and drop policy, the channel hand-off, the drain loop's endings, the timestamp offset, the thermal policy, the keypoint rotation and the overlay geometry as pure functions, and `PoseInputPreparerTests` covers the shared preprocess on 420v and BGRA buffers.
+- The live results are consumed only by the overlay so far. The post-recording analysis still decodes the file; feeding it the live results is the `ProcessingPipeline` work below.
 
 ## Out of scope
 
-Live pose overlay on the preview, on-screen inference metrics for users, changing the recording format or codec, and the `ProcessingPipeline` source abstraction beyond noting that it is needed.
+On-screen inference metrics for users, changing the recording format or codec, and the `ProcessingPipeline` source abstraction beyond noting that it is needed.

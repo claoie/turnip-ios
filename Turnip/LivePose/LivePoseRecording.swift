@@ -14,6 +14,9 @@ import os
 /// model itself only exists on a device with the bundled `.tflite`.
 final class LivePoseRecording: Sendable {
     typealias Inference = @Sendable (PoseModelInput) async throws -> [PoseKeypoint]
+    /// Called with each result as soon as it is scored, off the main actor, so a live consumer
+    /// (the camera preview overlay) can show it while the recording is still running.
+    typealias ResultHandler = @Sendable (PoseFrameResult) -> Void
 
     let channel: LivePoseSampleChannel
     private let producerMetrics: OSAllocatedUnfairLock<LivePoseMetrics?>
@@ -21,14 +24,19 @@ final class LivePoseRecording: Sendable {
 
     /// `rotationDegrees` is the clockwise rotation from the data output's connection to the movie
     /// output's, applied to every result so live keypoints land in the file's display orientation.
-    init(inference: @escaping Inference, channel: LivePoseSampleChannel, rotationDegrees: Int) {
+    init(
+        inference: @escaping Inference,
+        channel: LivePoseSampleChannel,
+        rotationDegrees: Int,
+        onResult: @escaping ResultHandler = { _ in }
+    ) {
         self.channel = channel
         let producerMetrics = OSAllocatedUnfairLock<LivePoseMetrics?>(initialState: nil)
         self.producerMetrics = producerMetrics
         drain = Task(priority: .userInitiated) {
             await Self.drain(
                 channel: channel, inference: inference, rotationDegrees: rotationDegrees,
-                producerMetrics: producerMetrics)
+                onResult: onResult, producerMetrics: producerMetrics)
         }
     }
 
@@ -58,6 +66,7 @@ final class LivePoseRecording: Sendable {
         channel: LivePoseSampleChannel,
         inference: Inference,
         rotationDegrees: Int,
+        onResult: ResultHandler,
         producerMetrics: OSAllocatedUnfairLock<LivePoseMetrics?>
     ) async -> LivePoseOutcome {
         var results: [PoseFrameResult] = []
@@ -74,6 +83,7 @@ final class LivePoseRecording: Sendable {
                     keypoints: LivePoseKeypointRotation.rotated(keypoints, clockwiseDegrees: rotationDegrees))
                 PoseResultLogger.log(result)
                 results.append(result)
+                onResult(result)
             } catch {
                 errorMessage = (error as? PoseError)?.errorDescription ?? error.localizedDescription
                 channel.cancel()

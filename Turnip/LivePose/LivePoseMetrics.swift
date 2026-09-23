@@ -54,7 +54,7 @@ struct LivePoseMetrics: Equatable, Sendable {
         recordingDuration > 0 ? Double(framesKept) / recordingDuration : 0
     }
 
-    /// One footnote for the diagnostic screen, gate figures first.
+    /// One log line per recording, gate figures first.
     var summaryLine: String {
         var parts = [
             "Live: \(framesKept) samples in \(String(format: "%.1f", recordingDuration)) s "
@@ -79,19 +79,10 @@ struct LivePoseMetrics: Equatable, Sendable {
     }
 }
 
-/// Everything one live-inference recording produced, handed from the camera screen to the
-/// diagnostic once the consumer has drained.
+/// Everything one live-inference recording produced, available once the consumer has drained.
 struct LivePoseOutcome: Sendable {
     /// In timestamp order: the capture callback is serial and the queue is FIFO.
     let results: [PoseFrameResult]
     let metrics: LivePoseMetrics
     let errorMessage: String?
-}
-
-/// A finished recording waiting to be reviewed on the pose diagnostic screen before the camera
-/// screen hands the file on. `Identifiable` so it can drive a `sheet(item:)`.
-struct LivePoseReview: Identifiable {
-    let id = UUID()
-    let fileURL: URL
-    let outcome: LivePoseOutcome
 }
