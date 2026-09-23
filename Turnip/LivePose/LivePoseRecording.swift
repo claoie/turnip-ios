@@ -22,12 +22,9 @@ final class LivePoseRecording: Sendable {
     private let producerMetrics: OSAllocatedUnfairLock<LivePoseMetrics?>
     private let drain: Task<LivePoseOutcome, Never>
 
-    /// `rotationDegrees` is the clockwise rotation from the data output's connection to the movie
-    /// output's, applied to every result so live keypoints land in the file's display orientation.
     init(
         inference: @escaping Inference,
         channel: LivePoseSampleChannel,
-        rotationDegrees: Int,
         onResult: @escaping ResultHandler = { _ in }
     ) {
         self.channel = channel
@@ -35,8 +32,7 @@ final class LivePoseRecording: Sendable {
         self.producerMetrics = producerMetrics
         drain = Task(priority: .userInitiated) {
             await Self.drain(
-                channel: channel, inference: inference, rotationDegrees: rotationDegrees,
-                onResult: onResult, producerMetrics: producerMetrics)
+                channel: channel, inference: inference, onResult: onResult, producerMetrics: producerMetrics)
         }
     }
 
@@ -65,7 +61,6 @@ final class LivePoseRecording: Sendable {
     private static func drain(
         channel: LivePoseSampleChannel,
         inference: Inference,
-        rotationDegrees: Int,
         onResult: ResultHandler,
         producerMetrics: OSAllocatedUnfairLock<LivePoseMetrics?>
     ) async -> LivePoseOutcome {
@@ -78,9 +73,7 @@ final class LivePoseRecording: Sendable {
                 let keypoints = try await inference(sample.input)
                 inferenceStats.record(ProcessInfo.processInfo.systemUptime - start)
                 let result = PoseFrameResult(
-                    frameIndex: sample.frameIndex,
-                    timestamp: sample.timestamp,
-                    keypoints: LivePoseKeypointRotation.rotated(keypoints, clockwiseDegrees: rotationDegrees))
+                    frameIndex: sample.frameIndex, timestamp: sample.timestamp, keypoints: keypoints)
                 PoseResultLogger.log(result)
                 results.append(result)
                 onResult(result)
