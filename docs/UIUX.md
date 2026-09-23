@@ -178,10 +178,11 @@ out-of-process picker, so it needs real Photos access. As built:
   roughly which part of the video each clip is from. It isn't draggable —
   trimming happens in the editor (§4). The original tile has no timeline,
   since its window is the whole video.
-- One control overlays each tile's top-trailing corner: a trash toggle,
-  filled red while trashed. Trashing a derived clip excludes it from the
-  save; trashing the original tile marks the source video itself for
-  deletion from Photos once Done runs.
+- One control overlays each tile's top-trailing corner: a trash button,
+  filled red while trashed. Trashing a derived clip removes its tile from
+  the grid immediately, with no restore. Trashing the original tile is a
+  reversible toggle — tap again to restore it — that marks the source video
+  itself for deletion from Photos once Done runs.
 - Tapping a derived clip's tile opens the full Clip Detail / Editor (§4)
   directly — the single entry point into "view large" and "edit," not a
   separate pencil icon. The original tile isn't tappable — there's nothing
@@ -221,8 +222,9 @@ out-of-process picker, so it needs real Photos access. As built:
     away and the same finger movement moves it a smaller fraction of the way,
     for fine control. Moving back to the track snaps to full speed again.
   - A Delete button at the top-right corner removes the clip from the list
-    entirely — distinct from trashing, which stays the list's own toggle and
-    still shows the clip (excluded from the save) rather than removing it.
+    entirely — the same removal the list's own trash button already performs
+    on a derived clip's tile (§3). Trashing stays a reversible toggle only
+    for the original tile.
   - Back to Clip List commits the edits; no separate "save" step needed if
     edits are held in view state until back-navigation.
 

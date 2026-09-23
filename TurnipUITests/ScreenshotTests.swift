@@ -58,22 +58,53 @@ final class ScreenshotTests: XCTestCase {
         addScreenshot(named: "clip-list-media")
     }
 
-    /// Trashing a clip flips its icon button's accessibility label, and the screen
-    /// carries no leftover select-all affordance — the triage screen's toolbar now
-    /// has only the back chevron, and "Done" replaced "Export N clips".
-    func testTrashButtonTogglesToRestore() throws {
+    /// Trashing the original tile flips its icon button's accessibility label rather
+    /// than removing it, and the screen carries no leftover select-all affordance —
+    /// the triage screen's toolbar now has only the back chevron, and "Done"
+    /// replaced "Export N clips". The original tile is always the first of the
+    /// grid's "Trash clip" buttons, since `ClipListViewModel` prepends it to `items`.
+    func testTrashButtonTogglesToRestoreOnTheOriginalTile() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotClipListMedia"]
         app.launch()
         XCTAssertTrue(app.navigationBars["Clips"].waitForExistence(timeout: 15))
-        let trashButton = app.buttons["Trash clip"].firstMatch
-        XCTAssertTrue(trashButton.waitForExistence(timeout: 15))
-        trashButton.tap()
+        let trashButtons = app.buttons.matching(NSPredicate(format: "label == 'Trash clip'"))
+        let originalTrashButton = trashButtons.element(boundBy: 0)
+        XCTAssertTrue(originalTrashButton.waitForExistence(timeout: 15))
+        originalTrashButton.tap()
 
         XCTAssertTrue(app.buttons["Restore clip"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Select All"].exists)
         XCTAssertFalse(app.buttons["Deselect All"].exists)
         XCTAssertTrue(app.buttons["Done"].exists)
+    }
+
+    /// A derived clip's trash button removes its tile from the grid immediately,
+    /// unlike the original tile's reversible toggle above — no "Restore clip" label
+    /// ever appears for it.
+    func testTrashButtonRemovesADerivedClipImmediately() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotClipListMedia"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Clips"].waitForExistence(timeout: 15))
+        let trashButtons = app.buttons.matching(NSPredicate(format: "label == 'Trash clip'"))
+        XCTAssertEqual(trashButtons.count, 3) // original tile + two derived clips
+        let derivedTrashButton = trashButtons.element(boundBy: 1)
+        XCTAssertTrue(derivedTrashButton.waitForExistence(timeout: 15))
+        derivedTrashButton.tap()
+
+        // Waits for the "Trash clip" count to actually settle at 2 before checking
+        // for "Restore clip": asserting immediately after `.tap()`, before SwiftUI
+        // re-renders, would pass under either implementation — the toggle bug drops
+        // this same count by relabeling one button to "Restore clip", not by
+        // removing it. Only once the count has settled does the absence of
+        // "Restore clip" distinguish outright removal from a relabel.
+        let deadline = Date().addingTimeInterval(5)
+        while trashButtons.count != 2, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        XCTAssertEqual(trashButtons.count, 2)
+        XCTAssertFalse(app.buttons["Restore clip"].exists)
     }
 
     /// Tapping a tile opens the full `ClipEditorView` directly — the tile itself is

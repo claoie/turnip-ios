@@ -9,7 +9,7 @@ import UIKit
 /// than static frames, draws a read-only timeline over the bottom showing where its
 /// window sits in the full source video (not adjustable here — that's what the
 /// editor is for, and the original tile has none since its window is the whole
-/// video), and carries the trash toggle. Tapping a derived clip's tile opens the
+/// video), and carries the trash button. Tapping a derived clip's tile opens the
 /// full `ClipEditorView` directly — "view large" and "edit" are the same entry
 /// point, not a separate icon; the original tile isn't tappable, since editing the
 /// source video isn't a thing this screen does.
@@ -170,7 +170,7 @@ private struct AddClipTile: View {
 
 /// One triage tile: a square clip surface (an autoplay-looping preview layered over its
 /// poster thumbnail, so there's no blank flash while the loop's player becomes ready)
-/// with the trash toggle at the top-trailing corner and, for a derived clip, a
+/// with the trash button at the top-trailing corner and, for a derived clip, a
 /// read-only range timeline overlaid on the bottom edge — siblings drawn as overlays
 /// on the tap-driven media layer rather than nested inside a shared `Button`, so each
 /// keeps its own hit target instead of racing the tile's tap.
@@ -323,12 +323,13 @@ private struct ClipCardView: View {
     /// The diameter every top-corner icon circle renders at.
     private static let iconButtonDiameter: CGFloat = 28
 
-    /// The per-tile trash toggle: a solid red circle while trashed, the same
+    /// The per-tile trash button: a solid red circle while trashed, the same
     /// semi-transparent grey circle the other tile buttons use otherwise. For the
-    /// original item, trashing it is what tells "Done" to delete the source video
-    /// from Photos; for a derived clip, it's excluded from the save.
+    /// original item, tapping it is the reversible toggle that tells "Done" to
+    /// delete the source video from Photos; for a derived clip, tapping it removes
+    /// the tile from the grid immediately, with no restore.
     private var trashButton: some View {
-        Button(action: toggleTrash) {
+        Button(action: trash) {
             ZStack {
                 Circle().fill(item.isTrashed ? Color.red : Color.black.opacity(0.4))
                 Image(systemName: "trash")
@@ -342,8 +343,8 @@ private struct ClipCardView: View {
         .accessibilityLabel(item.isTrashed ? "Restore clip" : "Trash clip")
     }
 
-    private func toggleTrash() {
-        viewModel.toggleTrash(item)
+    private func trash() {
+        viewModel.trash(item)
     }
 
     @ViewBuilder
