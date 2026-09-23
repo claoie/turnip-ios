@@ -106,7 +106,7 @@ struct HomeView: View {
 struct HomeHeader: View {
     /// `nil` renders no gear — every caller except Home's own states (denied and the video
     /// gallery) that can actually reach Settings.
-    var onSettingsTapped: (() -> Void)? = nil
+    var onSettingsTapped: (() -> Void)?
 
     private static let logoHeight: CGFloat = 36
     private static let rowHeight: CGFloat = 44
@@ -142,7 +142,7 @@ struct VideoGalleryView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
     /// Threaded straight to every `HomeHeader()` this view constructs (loading, empty, and grid
     /// states all show one) rather than each state re-deriving its own entry point.
-    var onSettingsTapped: (() -> Void)? = nil
+    var onSettingsTapped: (() -> Void)?
 
     private static let spacing: CGFloat = 2
     private let columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: 3)
