@@ -9,7 +9,7 @@ import UIKit
 /// than static frames, draws a read-only timeline over the bottom showing where its
 /// window sits in the full source video (not adjustable here — that's what the
 /// editor is for, and the original tile has none since its window is the whole
-/// video), and carries the trash toggle. Tapping a derived clip's tile opens the
+/// video), and carries the trash button. Tapping a derived clip's tile opens the
 /// full `ClipEditorView` directly — "view large" and "edit" are the same entry
 /// point, not a separate icon; the original tile isn't tappable, since editing the
 /// source video isn't a thing this screen does.
@@ -170,7 +170,7 @@ private struct AddClipTile: View {
 
 /// One triage tile: a square clip surface (an autoplay-looping preview layered over its
 /// poster thumbnail, so there's no blank flash while the loop's player becomes ready)
-/// with the trash toggle at the top-trailing corner and, for a derived clip, a
+/// with the trash button at the top-trailing corner and, for a derived clip, a
 /// read-only range timeline overlaid on the bottom edge — siblings drawn as overlays
 /// on the tap-driven media layer rather than nested inside a shared `Button`, so each
 /// keeps its own hit target instead of racing the tile's tap.
