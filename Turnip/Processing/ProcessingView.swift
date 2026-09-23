@@ -34,12 +34,14 @@ struct ProcessingView<Destination: View>: View {
     /// a run is in flight (`isAnalyzing`), since a swipe mid-run must not abandon it.
     let previousVideo: (() -> Void)?
     let nextVideo: (() -> Void)?
-    /// A browsed-to neighbor is resolving (possibly downloading from iCloud) and hasn't
-    /// replaced this screen yet — shows a blocking spinner so the swipe that triggered it
-    /// doesn't just look ignored, and so a second swipe here is a deliberate no-op rather than
-    /// a silently dropped one (`VideoLibraryViewModel.resolveAndInsert`'s own `resolution == nil`
-    /// guard drops it either way; this only makes that visible).
-    let isBrowsingNeighbor: Bool
+    /// A browsed-to neighbor's resolution state — non-nil blocks the screen with the same
+    /// determinate progress `ResolutionBanner` already renders on the grid (`Home`), so the
+    /// swipe that triggered it doesn't just look ignored, and a second swipe here is a
+    /// deliberate no-op rather than a silently dropped one (`VideoLibraryViewModel`'s own
+    /// `resolution == nil` guard drops it either way; this only makes that visible).
+    let browsingNeighbor: VideoLibraryViewModel.Resolution?
+    /// Cancels a browse in progress. Nil (never shown) in previews and the screenshot harness.
+    let cancelBrowsing: (() -> Void)?
 
     @StateObject private var viewModel: ProcessingViewModel
     @State private var player: AVPlayer?
@@ -64,7 +66,8 @@ struct ProcessingView<Destination: View>: View {
         popToRoot: @escaping () -> Void = {},
         previousVideo: (() -> Void)? = nil,
         nextVideo: (() -> Void)? = nil,
-        isBrowsingNeighbor: Bool = false,
+        browsingNeighbor: VideoLibraryViewModel.Resolution? = nil,
+        cancelBrowsing: (() -> Void)? = nil,
         destination: @escaping (ProcessingResult, @escaping () -> Void) -> Destination
     ) {
         self.video = video
@@ -72,7 +75,8 @@ struct ProcessingView<Destination: View>: View {
         self.popToRoot = popToRoot
         self.previousVideo = previousVideo
         self.nextVideo = nextVideo
-        self.isBrowsingNeighbor = isBrowsingNeighbor
+        self.browsingNeighbor = browsingNeighbor
+        self.cancelBrowsing = cancelBrowsing
         self.destination = destination
         _viewModel = StateObject(wrappedValue: ProcessingViewModel(runner: runner))
     }
@@ -85,27 +89,33 @@ struct ProcessingView<Destination: View>: View {
                 // — see its own comment for why the other three branches attach it here instead.
                 videoStage
             case .empty:
+                // `.frame` before `.contentShape`: `StatusStateView` sizes to its own content
+                // otherwise, and both the swipe's hit region and the browsing overlay below
+                // need the full screen, the same as every other consumer of this view
+                // (`HomeView`'s empty grid and denied states apply the same frame externally).
                 emptyState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(swipeShape)
                     .highPriorityGesture(videoSwipeGesture)
             case .failed(let message):
                 errorState(message: message)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(swipeShape)
                     .highPriorityGesture(videoSwipeGesture)
             case .succeeded:
                 // Covered by the pushed destination; only visible when navigating back here.
                 Text("Analysis complete.")
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(swipeShape)
                     .highPriorityGesture(videoSwipeGesture)
             }
         }
         // A neighbor resolving from a swipe blocks the whole screen, not just the video area —
-        // `isBrowsingNeighbor` can be true from any of the four branches above.
+        // `browsingNeighbor` can be set from any of the four branches above.
         .overlay {
-            if isBrowsingNeighbor {
-                ZStack {
-                    Color.black.opacity(0.45).ignoresSafeArea()
-                    ProgressView().tint(.white)
-                }
-                .allowsHitTesting(true)
+            if let browsingNeighbor {
+                browsingOverlay(browsingNeighbor)
             }
         }
         .navigationBarBackButtonHidden(isAnalyzing)
@@ -200,10 +210,19 @@ struct ProcessingView<Destination: View>: View {
     /// generic type.
     private static var swipeThreshold: CGFloat { 60 }
 
-    /// A drag starting within this many points of the leading edge is left alone, so it
-    /// doesn't compete with the system's own edge-swipe-to-pop gesture for the same
-    /// rightward drag `NavigationStack`'s back chevron already offers.
+    /// How many points of the leading edge the swipe gesture's hit region leaves uncovered,
+    /// so a touch starting there is never part of this recognition in the first place and
+    /// falls through to whatever the system's own edge-swipe-to-pop gesture wants —
+    /// `NavigationStack`'s back chevron already offers the same rightward drag.
     private static var leadingEdgeExclusion: CGFloat { 24 }
+
+    /// The swipe gesture's hit-testable region — the full view minus `leadingEdgeExclusion`
+    /// off the leading edge. `.contentShape` is what narrows a view's gesture-recognized area,
+    /// not a check inside the gesture's own handler: by the time a handler runs, recognition
+    /// has already happened, so excluding the edge has to happen here.
+    private var swipeShape: some Shape {
+        LeadingInsetShape(inset: Self.leadingEdgeExclusion)
+    }
 
     /// A right drag browses to the previous video, a left drag to the next — same mapping
     /// as `MainTab`'s Home/Camera pages. Disabled while a run is in flight (a swipe must not
@@ -213,9 +232,7 @@ struct ProcessingView<Destination: View>: View {
     private var videoSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 20)
             .onEnded { value in
-                guard !isAnalyzing, !isBrowsingNeighbor,
-                      value.startLocation.x > Self.leadingEdgeExclusion
-                else { return }
+                guard !isAnalyzing, browsingNeighbor == nil else { return }
                 if value.translation.width > Self.swipeThreshold {
                     browse(previousVideo)
                 } else if value.translation.width < -Self.swipeThreshold {
@@ -231,6 +248,36 @@ struct ProcessingView<Destination: View>: View {
         guard let navigate else { return }
         player?.pause()
         navigate()
+    }
+
+    /// Mirrors `ResolutionBanner`'s two-state rendering of the same `Resolution` type — an
+    /// iCloud download shows its real progress, a local/composition resolve shows an
+    /// indeterminate spinner — so a swipe-triggered browse reports the same way the grid's
+    /// own tile-tap resolution already does.
+    private func browsingOverlay(_ resolution: VideoLibraryViewModel.Resolution) -> some View {
+        VStack(spacing: 12) {
+            if let progress = resolution.downloadProgress {
+                Text("Downloading from iCloud…")
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
+                ProgressView(value: progress)
+                    .tint(.white)
+            } else {
+                Text("Preparing video…")
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
+                ProgressView()
+                    .tint(.white)
+            }
+            if let cancelBrowsing {
+                Button("Cancel", role: .cancel, action: cancelBrowsing)
+                    .tint(.white)
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.55).ignoresSafeArea())
+        .allowsHitTesting(true)
     }
 
     /// The video stage: the picked video fills the screen with no native playback
@@ -258,8 +305,11 @@ struct ProcessingView<Destination: View>: View {
         // `.highPriorityGesture`, not `.gesture`: this view sits inside the app's own
         // page-style `TabView` (`RootTabView`), whose horizontal swipe would otherwise win
         // the recognition race and switch tabs to Camera instead of browsing videos here.
-        // Scoped to the video stage itself, not the whole screen, so it never competes with
-        // `VideoScrubBar`'s own drag in the safe-area inset below.
+        // Attached to the video stage itself, not the whole screen, so it never competes with
+        // `VideoScrubBar`'s own drag in the safe-area inset below; `.contentShape` further
+        // excludes the leading edge (see `swipeShape`) so the system's edge-swipe-to-pop still
+        // gets those touches.
+        .contentShape(swipeShape)
         .highPriorityGesture(videoSwipeGesture)
         // `.safeAreaInset`, not `.overlay`: an overlay sizes its content at its own
         // ideal width and aligns it, so `PrimaryActionBar`'s full-width button has no
@@ -362,6 +412,17 @@ struct ProcessingView<Destination: View>: View {
             }
             .padding(.top, 8)
         }
+    }
+}
+
+/// A full-height rectangle inset from its container's leading edge — `ProcessingView`'s
+/// `swipeShape`, so the swipe gesture's recognized region leaves a strip for the system's own
+/// edge-swipe-to-pop.
+private struct LeadingInsetShape: Shape {
+    let inset: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(CGRect(x: rect.minX + inset, y: rect.minY, width: max(0, rect.width - inset), height: rect.height))
     }
 }
 

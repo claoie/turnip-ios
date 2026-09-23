@@ -89,8 +89,8 @@ final class VideoLibraryPagingTests: XCTestCase {
             VideoLibraryViewModel.growthRange(loadedCount: 60, total: 500, minimumCount: 65), 60..<65)
     }
 
-    /// A browse can ask for an index past a full page's worth — the grid was scrolled far
-    /// ahead of where the user is browsing from — and growth still reaches it in one step.
+    /// The range math isn't limited to one page at a time, even though the only real caller
+    /// (`browseToNeighbor(of:offset:)`) only ever asks for a single asset past the loaded prefix.
     func testGrowthCanReachPastAFullPage() {
         XCTAssertEqual(
             VideoLibraryViewModel.growthRange(loadedCount: 60, total: 500, minimumCount: 150),

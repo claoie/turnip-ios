@@ -172,8 +172,9 @@ final class VideoLibraryViewModel: ObservableObject {
 
     /// The slice of a fetch result that materializing up to `minimumCount` needs, capped at the
     /// library's real size — nil once the loaded prefix already reaches it. Unlike `pageRange`,
-    /// the target isn't a fixed page size: `neighbor(of:offset:)` asks for exactly the index a
-    /// browse needs, which may be less than a full page or (rarely) more than one.
+    /// the target is an arbitrary count rather than a fixed page size, so this covers any gap a
+    /// caller asks for in one call; `browseToNeighbor(of:offset:)`, the only caller today, only
+    /// ever asks for one asset past the loaded prefix.
     static func growthRange(loadedCount: Int, total: Int, minimumCount: Int) -> Range<Int>? {
         let end = min(total, minimumCount)
         guard end > loadedCount else { return nil }
@@ -181,7 +182,7 @@ final class VideoLibraryViewModel: ObservableObject {
     }
 
     /// Materializes exactly enough of the fetch result to reach `minimumCount` —
-    /// `neighbor(of:offset:)`'s on-demand counterpart to the grid's own page-at-a-time
+    /// `browseToNeighbor(of:offset:)`'s on-demand counterpart to the grid's own page-at-a-time
     /// `loadNextPage()`, since a browse can ask for an index the grid hasn't scrolled to yet.
     private func growPrefix(toAtLeast minimumCount: Int) {
         guard let fetchResult,
@@ -286,25 +287,38 @@ final class VideoLibraryViewModel: ObservableObject {
         resolveAndInsert(asset, detectedClips: nil, replacingTop: true)
     }
 
-    /// The video next to `assetIdentifier` in `videos`' loaded order — `offset: -1` for the one
-    /// before it in the grid (`videos` is newest-first, so that's the chronologically newer
-    /// video), `+1` for the one after (older). Nil past either end; no wraparound. Grows the
-    /// loaded prefix first when the neighbor sits past it but is still in the library, so
-    /// browsing isn't capped at wherever the grid happened to be scrolled to.
-    func neighbor(of assetIdentifier: String, offset: Int) -> PHAsset? {
+    /// Whether a neighbor exists at `offset` from `assetIdentifier` — `-1` for the one before it
+    /// in the grid (`videos` is newest-first, so that's the chronologically newer video), `+1`
+    /// for the one after (older). Bounded by the real library size (`fetchResult`), not just the
+    /// loaded prefix, so this doesn't undercount before the grid has scrolled that far. Read-only
+    /// — never grows `videos` — so it's safe to call from a view body; `browseToNeighbor(of:offset:)`
+    /// is the mutating counterpart for when the swipe actually lands.
+    func hasNeighbor(of assetIdentifier: String, offset: Int) -> Bool {
         guard let currentIndex = videos.firstIndex(where: { $0.localIdentifier == assetIdentifier })
-        else { return nil }
+        else { return false }
+        let total = fetchResult?.count ?? videos.count
+        return Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: total) != nil
+    }
+
+    /// Resolves the neighbor at `offset` from `assetIdentifier` and browses to it, growing the
+    /// loaded prefix first if it sits past what's currently materialized. Call only in response
+    /// to user action (the swipe gesture), never from a view body: growing the prefix publishes
+    /// into `videos`, which SwiftUI disallows from within a view update.
+    func browseToNeighbor(of assetIdentifier: String, offset: Int) {
+        guard let currentIndex = videos.firstIndex(where: { $0.localIdentifier == assetIdentifier })
+        else { return }
         let candidate = currentIndex + offset
         if candidate >= videos.count {
             growPrefix(toAtLeast: candidate + 1)
         }
         guard let index = Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: videos.count)
-        else { return nil }
-        return videos[index]
+        else { return }
+        browse(to: videos[index])
     }
 
-    /// The index arithmetic behind `neighbor(of:offset:)`, split out as the reachable, testable
-    /// seam — `videos` itself only comes from a live `PHFetchResult`.
+    /// The index arithmetic behind `hasNeighbor(of:offset:)` and `browseToNeighbor(of:offset:)`,
+    /// split out as the reachable, testable seam — `videos` itself only comes from a live
+    /// `PHFetchResult`.
     static func neighborIndex(currentIndex: Int, offset: Int, count: Int) -> Int? {
         let candidate = currentIndex + offset
         guard candidate >= 0, candidate < count else { return nil }
