@@ -46,14 +46,17 @@ Steps 4-6 of the pipeline — turning pose keypoints into trick windows and
 a crop rect — are library code under `Turnip/TrickDetection/`, unit-tested
 and driven by `Processing`'s pipeline rather than by a screen of their own.
 
-Two directories sit outside that flow. `PoseDiagnostic` — the design doc's
+Three directories sit outside that flow. `PoseDiagnostic` — the design doc's
 "empirical test" first work item, which runs MoveNet Thunder over a video
 and overlays per-frame keypoints — is no longer pushed from Home, which
-goes to `Processing` instead. It is constructed by its own Xcode preview
-and by the `#if DEBUG` screenshot harness that `TurnipUITests` launches
-with `-screenshotPoseDiagnostic`. `ModelUpdates` holds an OTA client no
-app code constructs. Read those two as tested components, not as features
-you can run.
+goes to `Processing` instead. It is constructed by its own Xcode preview,
+by the `#if DEBUG` screenshot harness that `TurnipUITests` launches with
+`-screenshotPoseDiagnostic`, and by the camera screen's `#if DEBUG`
+live-pose flag. `LivePose` is that flag's prototype: pose inference that
+runs on the camera's live frames while a take is being recorded, per
+[`docs/LIVE_POSE.md`](docs/LIVE_POSE.md), pending an on-device acceptance
+gate. `ModelUpdates` holds an OTA client no app code constructs. Read
+those three as tested components, not as features you can run.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full architecture plan
 including the community labeling + continuous ML training that will

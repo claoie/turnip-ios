@@ -1,4 +1,3 @@
-import CoreImage
 import CoreVideo
 import Foundation
 import TensorFlowLite
@@ -8,9 +7,10 @@ import TensorFlowLite
 ///
 /// An `actor` rather than a class for two reasons: TFLite's `Interpreter` is not thread-safe, so
 /// inference calls must be serialized, and actors run on the cooperative pool — never the main
-/// thread — so `runInference` (CIContext resize, BGRA→RGB repack, `invoke()`, dequantize) is
-/// structurally kept off the UI thread. Being an actor also makes the model `Sendable`, so it can
-/// be captured by the `@Sendable` frame handler in `VideoFrameSampler.sampleFrames`.
+/// thread — so `runInference` (`invoke()` and dequantize, plus the letterbox and RGB repack for
+/// the pixel-buffer overload) is structurally kept off the UI thread. Being an actor also makes
+/// the model `Sendable`, so it can be captured by the `@Sendable` frame handler in
+/// `VideoFrameSampler.sampleFrames`.
 ///
 /// One consequence to keep in mind: `runInference` is synchronous compute (tens of ms per frame)
 /// running on a cooperative-pool thread, so it occupies one of the pool's threads (pool width ==
@@ -24,8 +24,10 @@ import TensorFlowLite
 /// on the UI thread. `init` is private to make that impossible to do by accident.
 actor MoveNetThunderModel {
     private let interpreter: Interpreter
-    private let preprocessor: FramePreprocessor
-    private let ciContext = CIContext()
+    /// The preprocess step, sized from the bundled model's input tensor. Exposed off the actor so
+    /// the live capture path can reduce frames to tensors on its own queue and only cross into the
+    /// actor for `invoke()`; the file path reaches it through `runInference(on pixelBuffer:)`.
+    nonisolated let inputPreparer: PoseInputPreparer
 
     /// Loads the bundled model off the main thread. A `nonisolated async` function runs on the
     /// generic executor regardless of the caller's isolation, so the `Interpreter` construction and
@@ -92,33 +94,26 @@ actor MoveNetThunderModel {
         try Self.validateShape(inputTensor.shape.dimensions, expected: Self.expectedInputShape, named: "input")
         let outputTensor = try interpreter.output(at: 0)
         try Self.validateShape(outputTensor.shape.dimensions, expected: Self.expectedOutputShape, named: "output")
-        preprocessor = try FramePreprocessor(inputShape: inputTensor.shape.dimensions)
+        inputPreparer = PoseInputPreparer(
+            preprocessor: try FramePreprocessor(inputShape: inputTensor.shape.dimensions))
+    }
+
+    /// Preprocesses on the actor, then infers. The file-based callers (`ProcessingPipeline`, the
+    /// diagnostic run) hold a decoded pixel buffer and nothing else is contending for the actor,
+    /// so paying the letterbox here costs them nothing over doing it themselves.
+    func runInference(on pixelBuffer: CVPixelBuffer) throws -> [PoseKeypoint] {
+        try runInference(on: inputPreparer.prepare(pixelBuffer))
     }
 
     /// The keypoints come back frame-normalized: the letterbox inversion happens here, at the
     /// producer, because every consumer reads `PoseKeypoint.x/y` as frame fractions and nothing
     /// in the type system distinguishes converted keypoints from unconverted ones.
-    func runInference(on pixelBuffer: CVPixelBuffer) throws -> [PoseKeypoint] {
-        let (inputData, mapping) = try resizedRGBData(from: pixelBuffer)
-        try interpreter.copy(inputData, toInputAt: 0)
+    func runInference(on input: PoseModelInput) throws -> [PoseKeypoint] {
+        try interpreter.copy(input.tensor, toInputAt: 0)
         try interpreter.invoke()
         let outputTensor = try interpreter.output(at: 0)
         let values = Self.dequantize(outputTensor)
-        return mapping.frameNormalized(keypoints: try PoseKeypoint.parse(from: values))
-    }
-
-    /// Letterboxes the source frame into the model's input size (uniform scale, centered) and
-    /// packs it as interleaved RGB uint8, matching MoveNet Thunder's expected [1, height, width, 3]
-    /// input tensor. Returns the packing together with the geometry that placed it, so keypoints
-    /// can be mapped back to the source frame.
-    private func resizedRGBData(from pixelBuffer: CVPixelBuffer) throws -> (
-        data: Data, mapping: LetterboxMapping
-    ) {
-        let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let (transform, mapping) = try preprocessor.letterboxGeometry(forSourceExtent: sourceImage.extent)
-        let outputBuffer = try preprocessor.makeTargetBuffer()
-        ciContext.render(sourceImage.transformed(by: transform), to: outputBuffer)
-        return (try preprocessor.packRGB(from: outputBuffer), mapping)
+        return input.mapping.frameNormalized(keypoints: try PoseKeypoint.parse(from: values))
     }
 
     /// The int8 build quantizes the weights and the input, but its output tensor is

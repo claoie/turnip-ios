@@ -1,0 +1,404 @@
+import AVFoundation
+import XCTest
+@testable import Turnip
+
+/// The live pose path's pure pieces (docs/LIVE_POSE.md "Tradeoffs recorded"): the frame gate, the
+/// queue bound and drop policy, the timestamp offset, the thermal policy, the keypoint rotation
+/// and the channel hand-off. The capture side itself needs a device.
+final class LivePoseTests: XCTestCase {
+    // MARK: - Bounded queue
+
+    func testQueueIsFIFOAndDropsOldestOnOverflow() {
+        var queue = BoundedSampleQueue<Int>(capacity: 3)
+
+        XCTAssertNil(queue.push(1))
+        XCTAssertNil(queue.push(2))
+        XCTAssertNil(queue.push(3))
+        XCTAssertEqual(queue.push(4), 1, "the oldest element is the one shed")
+        XCTAssertEqual(queue.push(5), 2)
+
+        XCTAssertEqual(queue.count, 3)
+        XCTAssertEqual(queue.dropCount, 2)
+        XCTAssertEqual(queue.pushCount, 5)
+        XCTAssertEqual(queue.pop(), 3)
+        XCTAssertEqual(queue.pop(), 4)
+        XCTAssertEqual(queue.pop(), 5)
+        XCTAssertNil(queue.pop())
+    }
+
+    func testQueueTracksItsHighWaterMark() {
+        var queue = BoundedSampleQueue<Int>(capacity: 10)
+
+        queue.push(1)
+        queue.push(2)
+        queue.push(3)
+        _ = queue.pop()
+        _ = queue.pop()
+        queue.push(4)
+
+        XCTAssertEqual(queue.count, 2)
+        XCTAssertEqual(queue.maxDepth, 3, "max depth is the deepest the queue ever got, not its current size")
+        XCTAssertEqual(queue.dropCount, 0)
+    }
+
+    // MARK: - Thermal policy
+
+    func testThermalPolicyHalvesAtSeriousAndStopsAtCritical() {
+        XCTAssertEqual(LivePoseThermalPolicy.response(to: .nominal), .normal)
+        XCTAssertEqual(LivePoseThermalPolicy.response(to: .fair), .normal)
+        XCTAssertEqual(LivePoseThermalPolicy.response(to: .serious), .halved)
+        XCTAssertEqual(LivePoseThermalPolicy.response(to: .critical), .stopped)
+
+        XCTAssertEqual(LivePoseThermalPolicy.sampleInterval(base: 0.1, response: .normal), 0.1)
+        XCTAssertEqual(LivePoseThermalPolicy.sampleInterval(base: 0.1, response: .halved), 0.2)
+        XCTAssertNil(LivePoseThermalPolicy.sampleInterval(base: 0.1, response: .stopped))
+    }
+
+    // MARK: - Frame gate
+
+    /// The default interval is the file sampler's rate, so the two paths sample alike.
+    func testGateDefaultsToTheFileSamplerRate() {
+        XCTAssertEqual(LivePoseFrameGate.defaultInterval, 1.0 / Double(VideoFrameSampler.targetSamplesPerSecond))
+    }
+
+    /// 240 fps frames, 4.1667 ms apart: the gate keeps one per 100 ms and is insensitive to the
+    /// per-frame jitter that a frame-counting stride would compound.
+    func testGateKeepsTenPerSecondAt240fps() {
+        var gate = LivePoseFrameGate()
+        let frameDuration = 1.0 / 240
+        var kept: [Int] = []
+        for frame in 0..<480 where gate.admits(presentationTime: Double(frame) * frameDuration) {
+            kept.append(frame)
+        }
+
+        XCTAssertEqual(kept.count, 20, "two seconds at 10 samples/sec")
+        XCTAssertEqual(kept.first, 0)
+        // Every kept frame is 24 frames after the last, the stride the file path uses at 240 fps.
+        for (earlier, later) in zip(kept, kept.dropFirst()) {
+            XCTAssertEqual(later - earlier, 24, "kept frames \(earlier) and \(later) are not one slot apart")
+        }
+    }
+
+    /// Skipped frames do not shift the grid: when the capture output discards the frames after a
+    /// kept one, the next kept frame is still the one at the next slot.
+    func testGateStaysOnItsGridWhenFramesAreSkipped() {
+        var gate = LivePoseFrameGate(baseInterval: 0.1)
+
+        XCTAssertTrue(gate.admits(presentationTime: 0))
+        // The frames at 0.004..0.03 were discarded while frame 0 was being preprocessed.
+        XCTAssertFalse(gate.admits(presentationTime: 0.033))
+        XCTAssertFalse(gate.admits(presentationTime: 0.096))
+        XCTAssertTrue(gate.admits(presentationTime: 0.104))
+        // Still anchored at 0: the next slot is 0.2, not 0.204.
+        XCTAssertFalse(gate.admits(presentationTime: 0.196))
+        XCTAssertTrue(gate.admits(presentationTime: 0.2))
+    }
+
+    /// A gap longer than one interval re-anchors instead of admitting a burst to catch up.
+    func testGateReanchorsAfterAGapInsteadOfBursting() {
+        var gate = LivePoseFrameGate(baseInterval: 0.1)
+
+        XCTAssertTrue(gate.admits(presentationTime: 0))
+        XCTAssertTrue(gate.admits(presentationTime: 1.0))
+        XCTAssertFalse(gate.admits(presentationTime: 1.004), "a burst of catch-up samples is what a queue drains into")
+        XCTAssertFalse(gate.admits(presentationTime: 1.096))
+        XCTAssertTrue(gate.admits(presentationTime: 1.1))
+    }
+
+    func testGateDoublesItsIntervalUnderSeriousAndStopsUnderCritical() {
+        var gate = LivePoseFrameGate(baseInterval: 0.1)
+
+        XCTAssertTrue(gate.admits(presentationTime: 0))
+        gate.thermal = .halved
+        XCTAssertFalse(gate.admits(presentationTime: 0.1))
+        XCTAssertTrue(gate.admits(presentationTime: 0.2))
+        gate.thermal = .stopped
+        XCTAssertNil(gate.currentInterval)
+        for time in stride(from: 0.3, through: 2.0, by: 0.1) {
+            XCTAssertFalse(gate.admits(presentationTime: time), "t=\(time): nothing is kept under critical")
+        }
+        gate.thermal = .normal
+        XCTAssertTrue(gate.admits(presentationTime: 2.1), "sampling resumes when the state cools")
+    }
+
+    // MARK: - Timestamp anchor
+
+    func testAnchorRebasesOntoTheFirstTimestampItSees() {
+        var anchor = LivePoseTimestampAnchor()
+
+        XCTAssertNil(anchor.anchor)
+        XCTAssertEqual(anchor.fileRelative(1234.5), 0)
+        XCTAssertEqual(anchor.anchor, 1234.5)
+        XCTAssertEqual(anchor.fileRelative(1234.6), 0.1, accuracy: 1e-9)
+        XCTAssertEqual(anchor.fileRelative(1237.5), 3.0, accuracy: 1e-9)
+    }
+
+    // MARK: - Keypoint rotation
+
+    func testRelativeDegreesWrapsAround() {
+        XCTAssertEqual(LivePoseKeypointRotation.relativeDegrees(producer: 0, consumer: 90), 90)
+        XCTAssertEqual(LivePoseKeypointRotation.relativeDegrees(producer: 90, consumer: 0), 270)
+        XCTAssertEqual(LivePoseKeypointRotation.relativeDegrees(producer: 180, consumer: 180), 0)
+        XCTAssertEqual(LivePoseKeypointRotation.relativeDegrees(producer: 270, consumer: 90), 180)
+    }
+
+    /// A joint near the top-left of a landscape sensor frame lands near the top-right after the
+    /// quarter-turn clockwise that makes the frame portrait; the other turns follow.
+    func testRotatedPointFollowsAClockwiseQuarterTurn() {
+        let (x90, y90) = LivePoseKeypointRotation.rotatedPoint(x: 0.1, y: 0.2, clockwiseDegrees: 90)
+        XCTAssertEqual(x90, 0.8, accuracy: 1e-6)
+        XCTAssertEqual(y90, 0.1, accuracy: 1e-6)
+
+        let (x180, y180) = LivePoseKeypointRotation.rotatedPoint(x: 0.1, y: 0.2, clockwiseDegrees: 180)
+        XCTAssertEqual(x180, 0.9, accuracy: 1e-6)
+        XCTAssertEqual(y180, 0.8, accuracy: 1e-6)
+
+        let (x270, y270) = LivePoseKeypointRotation.rotatedPoint(x: 0.1, y: 0.2, clockwiseDegrees: 270)
+        XCTAssertEqual(x270, 0.2, accuracy: 1e-6)
+        XCTAssertEqual(y270, 0.9, accuracy: 1e-6)
+
+        let fullTurn = LivePoseKeypointRotation.rotatedPoint(x: 0.1, y: 0.2, clockwiseDegrees: 360)
+        XCTAssertEqual(fullTurn.x, 0.1)
+        XCTAssertEqual(fullTurn.y, 0.2)
+    }
+
+    /// Four quarter-turns compose to the identity, which pins the four cases against each other.
+    func testFourQuarterTurnsComposeToIdentity() {
+        var point = (x: Float(0.3), y: Float(0.7))
+        for _ in 0..<4 {
+            point = LivePoseKeypointRotation.rotatedPoint(x: point.x, y: point.y, clockwiseDegrees: 90)
+        }
+        XCTAssertEqual(point.x, 0.3, accuracy: 1e-6)
+        XCTAssertEqual(point.y, 0.7, accuracy: 1e-6)
+    }
+
+    func testRotatedKeypointsKeepNameAndConfidence() {
+        let source = [PoseKeypoint(name: "nose", y: 0.2, x: 0.1, confidence: 0.85)]
+
+        let rotated = LivePoseKeypointRotation.rotated(source, clockwiseDegrees: 90)
+
+        XCTAssertEqual(rotated.count, 1)
+        XCTAssertEqual(rotated[0].name, "nose")
+        XCTAssertEqual(rotated[0].confidence, 0.85)
+        XCTAssertEqual(rotated[0].x, 0.8, accuracy: 1e-6)
+        XCTAssertEqual(rotated[0].y, 0.1, accuracy: 1e-6)
+    }
+
+    // MARK: - Metrics
+
+    func testMetricsSummaryLeadsWithTheGateFigures() {
+        var metrics = LivePoseMetrics()
+        metrics.framesKept = 1800
+        metrics.framesInferred = 1798
+        metrics.recordingDuration = 180
+        metrics.queueDrops = 2
+        metrics.maxQueueDepth = 5
+        metrics.lateFrameDrops = 3
+        metrics.preprocess.record(0.006)
+        metrics.inference.record(0.040)
+        metrics.inference.record(0.060)
+
+        let line = metrics.summaryLine
+
+        XCTAssertEqual(metrics.samplesPerSecond, 10, accuracy: 1e-9)
+        XCTAssertTrue(line.hasPrefix("Live: 1800 samples in 180.0 s (10.0/s)"), line)
+        XCTAssertTrue(line.contains("inferred 1798"), line)
+        XCTAssertTrue(line.contains("queue drops 2 (max depth 5)"), line)
+        XCTAssertTrue(line.contains("late frames 3"), line)
+        XCTAssertTrue(line.contains("preprocess 6.0 ms avg / 6.0 max"), line)
+        XCTAssertTrue(line.contains("inference 50.0 ms avg / 60.0 max"), line)
+        XCTAssertFalse(line.contains("cancelled"), line)
+        XCTAssertFalse(line.contains("critical"), line)
+    }
+
+    func testMetricsSummaryNamesTheAbnormalEndings() {
+        var metrics = LivePoseMetrics()
+        metrics.stoppedForThermal = true
+        metrics.wasCancelled = true
+        metrics.preprocessFailures = 1
+
+        let line = metrics.summaryLine
+
+        XCTAssertTrue(line.contains("stopped: critical thermal state"), line)
+        XCTAssertTrue(line.contains("cancelled"), line)
+        XCTAssertTrue(line.contains("preprocess failures 1"), line)
+        XCTAssertEqual(metrics.samplesPerSecond, 0, "no duration means no rate, not a division by zero")
+    }
+
+    // MARK: - Channel
+
+    func testChannelDeliversInOrderAndDrainsAfterFinish() async {
+        let channel = LivePoseSampleChannel(capacity: 10)
+        for index in 0..<3 {
+            channel.push(sample(index))
+        }
+        channel.finish()
+
+        var received: [Int] = []
+        while let next = await channel.next() {
+            received.append(next.frameIndex)
+        }
+
+        XCTAssertEqual(received, [0, 1, 2], "finish() lets the consumer drain what was queued")
+        XCTAssertFalse(channel.isCancelled)
+        XCTAssertEqual(channel.stats, .init(dropCount: 0, maxDepth: 3, pushCount: 3))
+    }
+
+    func testChannelWakesAParkedConsumerWithTheNextPush() async {
+        let channel = LivePoseSampleChannel(capacity: 10)
+
+        let consumer = Task { await channel.next()?.frameIndex }
+        // Let the consumer park before anything is pushed. If it had not parked yet, push() would
+        // simply queue and next() would find the element — either way the assertion holds.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        channel.push(sample(7))
+
+        let received = await consumer.value
+        XCTAssertEqual(received, 7)
+    }
+
+    func testChannelCancelDropsWhatIsQueued() async {
+        let channel = LivePoseSampleChannel(capacity: 10)
+        channel.push(sample(0))
+        channel.push(sample(1))
+
+        channel.cancel()
+        channel.push(sample(2))
+
+        let next = await channel.next()
+        XCTAssertNil(next, "cancel() discards queued samples and refuses later ones")
+        XCTAssertTrue(channel.isCancelled)
+        XCTAssertEqual(channel.stats.pushCount, 2, "a push after cancel is not counted as queued work")
+    }
+
+    func testChannelShedsTheOldestSampleWhenFull() async {
+        let channel = LivePoseSampleChannel(capacity: 2)
+        channel.push(sample(0))
+        channel.push(sample(1))
+        channel.push(sample(2))
+        channel.finish()
+
+        var received: [Int] = []
+        while let next = await channel.next() {
+            received.append(next.frameIndex)
+        }
+
+        XCTAssertEqual(received, [1, 2])
+        XCTAssertEqual(channel.stats.dropCount, 1)
+        XCTAssertEqual(channel.stats.maxDepth, 2)
+    }
+
+    // MARK: - Recording (drain loop)
+
+    func testRecordingScoresEverySampleInOrderAndMergesMetrics() async {
+        let channel = LivePoseSampleChannel(capacity: 10)
+        let recording = LivePoseRecording(
+            inference: { _ in [PoseKeypoint(name: "nose", y: 0.2, x: 0.1, confidence: 0.9)] },
+            channel: channel,
+            rotationDegrees: 90)
+        for index in 0..<3 {
+            channel.push(sample(index))
+        }
+        var producer = LivePoseMetrics()
+        producer.framesKept = 3
+        producer.recordingDuration = 0.3
+        recording.finish(producer: producer)
+
+        let outcome = await recording.outcome()
+
+        XCTAssertEqual(outcome.results.map(\.frameIndex), [0, 1, 2])
+        XCTAssertEqual(outcome.results.map(\.timestamp), [0, 0.1, 0.2])
+        XCTAssertNil(outcome.errorMessage)
+        XCTAssertFalse(outcome.metrics.wasCancelled)
+        XCTAssertEqual(outcome.metrics.framesKept, 3, "the capture side's figures survive the merge")
+        XCTAssertEqual(outcome.metrics.framesInferred, 3)
+        XCTAssertEqual(outcome.metrics.inference.count, 3)
+        XCTAssertEqual(outcome.metrics.maxQueueDepth, 3)
+        // The rotation is applied at the consumer: (0.1, 0.2) → (0.8, 0.1) under a quarter turn.
+        XCTAssertEqual(outcome.results[0].keypoints[0].x, 0.8, accuracy: 1e-6)
+        XCTAssertEqual(outcome.results[0].keypoints[0].y, 0.1, accuracy: 1e-6)
+    }
+
+    /// A model failure is a reviewable ending, not an abandoned one: the error is reported and
+    /// `wasCancelled` stays false so the camera screen presents the review instead of skipping it.
+    func testRecordingReportsAnInferenceFailureWithoutClaimingCancellation() async {
+        let channel = LivePoseSampleChannel(capacity: 10)
+        let recording = LivePoseRecording(
+            inference: { input in
+                guard input.tensor.isEmpty else { throw PoseError.inferenceFailed("op unsupported") }
+                return []
+            },
+            channel: channel,
+            rotationDegrees: 0)
+        channel.push(sample(0))
+        channel.push(LivePoseSample(frameIndex: 1, timestamp: 0.1, input: PoseModelInput(
+            tensor: Data([1]), mapping: sample(0).input.mapping)))
+        channel.push(sample(2))
+        recording.finish(producer: LivePoseMetrics())
+
+        let outcome = await recording.outcome()
+
+        XCTAssertEqual(outcome.results.map(\.frameIndex), [0], "scoring stops at the failure")
+        XCTAssertEqual(outcome.errorMessage, "Pose inference failed: op unsupported")
+        XCTAssertFalse(outcome.metrics.wasCancelled)
+        XCTAssertEqual(outcome.metrics.framesInferred, 1)
+    }
+
+    func testRecordingCancelledMidDrainIsMarkedCancelled() async {
+        let channel = LivePoseSampleChannel(capacity: 10)
+        let recording = LivePoseRecording(inference: { _ in [] }, channel: channel, rotationDegrees: 0)
+        var producer = LivePoseMetrics()
+        producer.framesKept = 5
+        recording.cancel(producer: producer)
+
+        let outcome = await recording.outcome()
+
+        XCTAssertTrue(outcome.metrics.wasCancelled)
+        XCTAssertNil(outcome.errorMessage)
+        XCTAssertEqual(outcome.metrics.framesKept, 5, "what the capture side measured is kept")
+        XCTAssertTrue(outcome.results.isEmpty)
+    }
+
+    // MARK: - File audit
+
+    func testFileAuditCountsEveryVideoSample() async throws {
+        let url = try await TestVideoWriter.writeTestVideo(frameCount: 12, width: 64, height: 64, fps: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let audit = try await LivePoseFileAudit.audit(AVURLAsset(url: url))
+
+        XCTAssertEqual(audit.sampleCount, 12)
+        XCTAssertEqual(audit.expectedSampleCount, 12)
+        XCTAssertEqual(audit.missingSamples, 0)
+        XCTAssertEqual(audit.duration, 0.4, accuracy: 0.001)
+        XCTAssertEqual(audit.nominalFrameRate, 30, accuracy: 0.01)
+        XCTAssertEqual(audit.summaryLine, "File: 12 samples, 12 expected at 30 fps over 0.4 s")
+    }
+
+    func testFileAuditExpectedCountRoundsDurationTimesRate() {
+        XCTAssertEqual(LivePoseFileAudit.expectedSampleCount(duration: 180, nominalFrameRate: 240), 43_200)
+        XCTAssertEqual(LivePoseFileAudit.expectedSampleCount(duration: 1.0 / 3, nominalFrameRate: 30), 10)
+        XCTAssertEqual(
+            LivePoseFileAudit(sampleCount: 43_190, expectedSampleCount: 43_200, duration: 180, nominalFrameRate: 240)
+                .missingSamples,
+            10)
+        XCTAssertEqual(
+            LivePoseFileAudit(sampleCount: 43_210, expectedSampleCount: 43_200, duration: 180, nominalFrameRate: 240)
+                .missingSamples,
+            0, "more samples than the nominal rate predicts is not a drop")
+    }
+
+    // MARK: - Fixtures
+
+    private func sample(_ index: Int) -> LivePoseSample {
+        LivePoseSample(
+            frameIndex: index,
+            timestamp: Double(index) / 10,
+            input: PoseModelInput(
+                tensor: Data(),
+                mapping: LetterboxMapping(
+                    scale: 1, offsetX: 0, offsetY: 0,
+                    inputSize: CGSize(width: 256, height: 256),
+                    sourceExtent: CGRect(x: 0, y: 0, width: 256, height: 256))))
+    }
+}

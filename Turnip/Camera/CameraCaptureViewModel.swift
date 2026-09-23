@@ -73,6 +73,27 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
     private var pinchBaseZoomFactor: CGFloat?
     private let sessionQueue = DispatchQueue(label: "com.hoiekim.turnip.camera.session")
 
+    #if DEBUG
+    /// Live pose inference alongside recording (docs/LIVE_POSE.md), a DEBUG-only prototype behind
+    /// this flag until the on-device acceptance gate passes. On: a video data output sits on the
+    /// session ahead of the movie output, and each finished recording is reviewed on the pose
+    /// diagnostic screen before the file is handed on.
+    @Published private(set) var isLivePoseEnabled = false
+    /// False from the first enable until the model has loaded; a Record tap in that window is
+    /// ignored rather than silently producing a take without live pose.
+    @Published private(set) var isLivePoseReady = false
+    /// The finished recording being reviewed; `livePoseReviewDismissed()` hands its file on.
+    @Published var livePoseReview: LivePoseReview?
+    /// `nonisolated` so the recording delegate, which AVFoundation calls off the main actor, can
+    /// reach it; the tap is `Sendable` and does its own locking.
+    nonisolated let livePoseTap = LivePoseFrameTap()
+    /// Loaded once, on the first enable, and reused across recordings.
+    private var poseModel: MoveNetThunderModel?
+    /// The consumer of the last stopped recording while it drains. A new recording cancels it.
+    private var drainingLivePose: LivePoseRecording?
+    private var pendingLivePoseFileURL: URL?
+    #endif
+
     /// Candidate frame rates to probe each format against, rather than only reading off
     /// each range's `maxFrameRate` — a format whose range is (say) 1...30 would otherwise
     /// never offer 24fps even though it's a perfectly valid rate within that range.
@@ -136,16 +157,28 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
             }
         }
         isTorchOn = false
+        #if DEBUG
+        cancelLivePose()
+        #endif
     }
 
+    /// With live pose on, a Record tap is ignored while the model is still loading and while the
+    /// previous take's consumer is still draining: both last seconds, and a take started under
+    /// either would either miss live pose silently or leave the finished file with nowhere to go.
     func toggleRecording() {
         if isRecording {
             movieOutput.stopRecording()
         } else {
+            #if DEBUG
+            guard drainingLivePose == nil, !isLivePoseEnabled || isLivePoseReady else { return }
+            #endif
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("turnip-recording-\(UUID().uuidString)")
                 .appendingPathExtension("mov")
             recordedFileURL = nil
+            #if DEBUG
+            armLivePose()
+            #endif
             movieOutput.startRecording(to: url, recordingDelegate: self)
             isRecording = true
         }
@@ -427,9 +460,10 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
     /// correct orientation — readable text, correct left/right — regardless of which
     /// camera shot them. `isVideoMirroringSupported` is expected true for a camera ->
     /// movie-output connection, but guarded anyway since setting `isVideoMirrored` on an
-    /// unsupported connection raises rather than failing silently.
-    private nonisolated static func applyMirroringPolicy(to movieOutput: AVCaptureMovieFileOutput) {
-        guard let connection = movieOutput.connection(with: .video) else { return }
+    /// unsupported connection raises rather than failing silently. Applied to every video
+    /// output on the session so frames analyzed live agree with the file left-to-right.
+    private nonisolated static func applyMirroringPolicy(to output: AVCaptureOutput) {
+        guard let connection = output.connection(with: .video) else { return }
         connection.automaticallyAdjustsVideoMirroring = false
         guard connection.isVideoMirroringSupported else { return }
         connection.isVideoMirrored = false
@@ -550,16 +584,32 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
 
     private nonisolated static func label(forActiveFormatOf device: AVCaptureDevice) -> String {
         let dimensions = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
-        let duration = device.activeVideoMinFrameDuration
-        guard duration.value > 0 else {
+        guard let frameRate = activeFrameRate(of: device) else {
             return "\(dimensions.width)\u{00D7}\(dimensions.height)"
         }
-        let fps = Int((Double(duration.timescale) / Double(duration.value)).rounded())
-        return "\(dimensions.width)\u{00D7}\(dimensions.height) \u{00B7} \(fps)fps"
+        return "\(dimensions.width)\u{00D7}\(dimensions.height) \u{00B7} \(Int(frameRate.rounded()))fps"
+    }
+
+    /// The frame rate the device is capturing at, from its active frame duration; nil when the
+    /// device reports no duration.
+    private nonisolated static func activeFrameRate(of device: AVCaptureDevice) -> Double? {
+        let duration = device.activeVideoMinFrameDuration
+        guard duration.value > 0 else { return nil }
+        return Double(duration.timescale) / Double(duration.value)
     }
 }
 
 extension CameraCaptureViewModel: AVCaptureFileOutputRecordingDelegate {
+    nonisolated func fileOutput(
+        _ output: AVCaptureFileOutput,
+        didStartRecordingTo fileURL: URL,
+        from connections: [AVCaptureConnection]
+    ) {
+        #if DEBUG
+        livePoseTap.recordingDidStart()
+        #endif
+    }
+
     nonisolated func fileOutput(
         _ output: AVCaptureFileOutput,
         didFinishRecordingTo outputFileURL: URL,
@@ -570,9 +620,133 @@ extension CameraCaptureViewModel: AVCaptureFileOutputRecordingDelegate {
             isRecording = false
             if let error {
                 errorMessage = error.localizedDescription
+                #if DEBUG
+                livePoseTap.cancel()
+                #endif
                 return
             }
+            #if DEBUG
+            if reviewLivePoseIfNeeded(for: outputFileURL) {
+                return
+            }
+            #endif
             recordedFileURL = outputFileURL
         }
     }
 }
+
+#if DEBUG
+// MARK: - Live pose (prototype)
+
+extension CameraCaptureViewModel {
+    /// Attaches or detaches the live-pose data output. The movie output is removed and re-added
+    /// around it so the data output always sits ahead of the movie output on the session and the
+    /// movie output's connection is formed the same way whether or not the flag is on — with the
+    /// flag off, the session is exactly what a release build runs. Only while not recording.
+    func toggleLivePose() {
+        guard !isRecording else { return }
+        let enable = !isLivePoseEnabled
+        isLivePoseEnabled = enable
+        if enable, poseModel == nil {
+            loadPoseModel()
+        }
+        let session = self.session
+        let movieOutput = self.movieOutput
+        let dataOutput = livePoseTap.output
+        sessionQueue.async {
+            guard !movieOutput.isRecording else { return }
+            session.beginConfiguration()
+            if session.outputs.contains(movieOutput) {
+                session.removeOutput(movieOutput)
+            }
+            if enable {
+                if session.canAddOutput(dataOutput) {
+                    session.addOutput(dataOutput)
+                }
+            } else if session.outputs.contains(dataOutput) {
+                session.removeOutput(dataOutput)
+            }
+            if session.canAddOutput(movieOutput) {
+                session.addOutput(movieOutput)
+            }
+            session.commitConfiguration()
+            Self.applyMirroringPolicy(to: movieOutput)
+            Self.applyMirroringPolicy(to: dataOutput)
+        }
+    }
+
+    /// The review sheet closed: hand the recording on exactly as a recording without live pose
+    /// would have been.
+    func livePoseReviewDismissed() {
+        guard let url = pendingLivePoseFileURL else { return }
+        pendingLivePoseFileURL = nil
+        recordedFileURL = url
+    }
+
+    /// A load failure (the `.tflite` is not bundled) turns the flag back off, so the screen does
+    /// not sit waiting for a model that will never arrive.
+    private func loadPoseModel() {
+        Task { [weak self] in
+            do {
+                let model = try await MoveNetThunderModel.load()
+                self?.poseModel = model
+                self?.isLivePoseReady = true
+            } catch {
+                self?.errorMessage = (error as? PoseError)?.errorDescription ?? error.localizedDescription
+                if self?.isLivePoseEnabled == true {
+                    self?.toggleLivePose()
+                }
+            }
+        }
+    }
+
+    /// Record was tapped: give this recording its own consumer and arm the tap. The consumer is
+    /// never shared between recordings.
+    private func armLivePose() {
+        guard isLivePoseEnabled, let poseModel, let device = videoDevice,
+              let dataConnection = livePoseTap.output.connection(with: .video),
+              let movieConnection = movieOutput.connection(with: .video) else { return }
+        let rotation = LivePoseKeypointRotation.relativeDegrees(
+            producer: LivePoseFrameTap.rotationDegrees(of: dataConnection),
+            consumer: LivePoseFrameTap.rotationDegrees(of: movieConnection))
+        let recording = LivePoseRecording(
+            inference: { try await poseModel.runInference(on: $0) },
+            channel: LivePoseSampleChannel(),
+            rotationDegrees: rotation)
+        livePoseTap.arm(
+            recording: recording,
+            preparer: poseModel.inputPreparer,
+            frameRate: Self.activeFrameRate(of: device) ?? 30)
+    }
+
+    /// The movie output finished writing `url`. When a live-pose recording was running, waits for
+    /// its consumer to drain and then presents the review instead of handing the file on; returns
+    /// false when there was none and the caller should hand the file on itself. A drain that was
+    /// cancelled (the camera was left) has no review to show, so the file is handed on directly —
+    /// the recording itself finished fine.
+    private func reviewLivePoseIfNeeded(for url: URL) -> Bool {
+        guard let recording = livePoseTap.endRecording() else { return false }
+        drainingLivePose = recording
+        Task { [weak self] in
+            let outcome = await recording.outcome()
+            guard let self else { return }
+            if drainingLivePose === recording {
+                drainingLivePose = nil
+            }
+            if outcome.metrics.wasCancelled {
+                recordedFileURL = url
+            } else {
+                pendingLivePoseFileURL = url
+                livePoseReview = LivePoseReview(fileURL: url, outcome: outcome)
+            }
+        }
+        return true
+    }
+
+    private func cancelLivePose() {
+        livePoseTap.cancel()
+        drainingLivePose?.cancel(producer: nil)
+        drainingLivePose = nil
+    }
+}
+#endif

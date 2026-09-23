@@ -242,8 +242,8 @@ SwiftLint runs in CI on every PR (`lint + build + test` — see
 
 `Turnip/` is a single Xcode target; its subdirectories are flat, one per
 domain, named for the domain they own (`App`, `Camera`, `ClipEditor`,
-`ClipList`, `DesignSystem`, `Home`, `Media`, `ModelUpdates`, `Models`,
-`Photos`, `Pose`, `PoseDiagnostic`, `Processing`, `Resources`,
+`ClipList`, `DesignSystem`, `Home`, `LivePose`, `Media`, `ModelUpdates`,
+`Models`, `Photos`, `Pose`, `PoseDiagnostic`, `Processing`, `Resources`,
 `TrickDetection`).
 `ci_scripts/check-directory-list.sh` compares that list against the tree on
 every PR, so adding a directory without naming it here fails CI.

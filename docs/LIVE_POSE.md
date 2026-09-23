@@ -1,12 +1,12 @@
 # Live pose inference during recording
 
-*Rev 1 · 2026-09-22 · Draft for review.*
+*Rev 2 · 2026-09-22 · Prototype implemented in `Turnip/LivePose/`; device gate not yet run. Rev 1 was the design draft.*
 
 *Companion to [`DESIGN.md`](DESIGN.md). This doc covers one question: can the pose pass start when recording starts, instead of after the file is written? Pipeline shape, budgets and model choice stay as recorded in `DESIGN.md`.*
 
 ## Decision
 
-**Go, gated on one on-device test.** Add an `AVCaptureVideoDataOutput` alongside the existing `AVCaptureMovieFileOutput`, run the existing 10 samples/sec stride on the live frames, and let inference lag behind the recording and finish after it. Prototype in the DEBUG-only pose diagnostic screen. Ship only when the gate in "Acceptance gate" passes on the oldest supported device at 240 fps.
+**Go, gated on one on-device test.** Add an `AVCaptureVideoDataOutput` alongside the existing `AVCaptureMovieFileOutput`, sample the live frames at the same 10 samples/sec the file path uses, and let inference lag behind the recording and finish after it. Prototype behind a DEBUG-only flag on the camera screen, reviewed on the pose diagnostic screen. Ship only when the gate in "Acceptance gate" passes on the oldest supported device at 240 fps.
 
 The recorder itself does not change. If the gate fails on the recording side, the fallback is the `AVCaptureVideoDataOutput` + `AVAssetWriter` rewrite described under "Alternatives", not a weaker version of this design.
 
@@ -16,18 +16,18 @@ Today the pose pass is strictly post-hoc. `VideoFrameSampler` decodes the finish
 
 The goal is to have inference finish seconds after Stop rather than after a second decode. Deadlines are explicitly relaxed: inference is allowed to lag behind the recording and complete after it. What is not relaxed is the recording itself, which must stay drop-free.
 
-## What is already true
+## What was true before this change
 
-These facts shape the design more than any external reference.
+These facts, as of Rev 1, shaped the design more than any external reference. Where Rev 2 changed one, the "Design" section says so.
 
-- **Recording** is `AVCaptureMovieFileOutput` only. There is no `AVCaptureVideoDataOutput` anywhere in the app. The session runs `sessionPreset = .inputPriority`, formats are filtered to `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`, and frame rates offered go up to 240.
+- **Recording** was `AVCaptureMovieFileOutput` only, with no `AVCaptureVideoDataOutput` anywhere in the app. The session runs `sessionPreset = .inputPriority`, formats are filtered to `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`, and frame rates offered go up to 240. All of that still holds; the data output is the addition.
 - **Inference** is TensorFlow Lite on the CPU: `Interpreter(modelPath:)` with no options, no delegate, default thread count. The video encoder is hardware. So the two workloads share the CPU with the capture session's own CPU work; they do not fight over the GPU or Neural Engine.
-- **Preprocessing** is a Core Image letterbox rendered into a 32BGRA target, then an RGB repack into the 256×256×3 uint8 tensor. The 32BGRA guard is on the rendered target, not the source, so a 420v source buffer is fine.
-- **Sampling** is ~10 frames/sec of footage regardless of source fps (stride 3 at 30 fps, 24 at 240 fps). Inference is "tens of ms per frame" against a 100 ms per-sample budget.
+- **Preprocessing** is a Core Image letterbox rendered into a 32BGRA target, then an RGB repack into the 256×256×3 uint8 tensor. The 32BGRA guard is on the rendered target, not the source, so a 420v source buffer is fine. It lived on the model actor; Rev 2 moved it to `PoseInputPreparer`.
+- **Sampling** is ~10 frames/sec of footage regardless of source fps (stride 3 at 30 fps, 24 at 240 fps on the file path). Inference is "tens of ms per frame" against a 100 ms per-sample budget.
 - **Results** are appended to a per-frame array in timestamp order. `nearestResult` binary-searches by timestamp and depends on that order. `PoseDiagnosticSummary` does not care about order.
 - **Minimum iOS is 16.0.** This matters: before iOS 16, a movie file output and a video data output could not both be active on one session. Apple's `AVCaptureVideoDataOutput` documentation states that for apps linking against iOS 16 or later the restriction no longer exists.
-- **No thermal handling** exists anywhere. `ProcessInfo.thermalState` is unused.
-- The model is rebuilt via `load()` on every diagnostic run.
+- **No thermal handling** existed anywhere; `ProcessInfo.thermalState` was unused. Rev 2 observes it for the duration of a live-pose recording only.
+- The model was rebuilt via `load()` on every diagnostic run, and still is there; the camera screen loads it once.
 
 ## Prior art
 
@@ -46,19 +46,21 @@ The tensor is 256 × 256 × 3 bytes ≈ 196 KB. At 10 samples/sec that is ≈ 11
 
 ### Capture side
 
-1. Add an `AVCaptureVideoDataOutput` to the session next to `movieOutput`, in the same `beginConfiguration` block that builds the session today. Add it before the movie output so the movie output's connection settings are unaffected.
-2. Leave `videoSettings` nil. The device format is 420v. Forcing 32BGRA to match the file sampler's contract would make the ISP convert all 240 frames/sec for the 10 that are kept. `CIImage(cvPixelBuffer:)` accepts 420v.
+1. Add an `AVCaptureVideoDataOutput` to the session next to `movieOutput`, ahead of it. The flag toggles this at runtime, so the toggle does it in one `beginConfiguration` block: remove the movie output, add or remove the data output, add the movie output back, re-apply the mirroring policy to both. With the flag off the session is exactly what a release build runs, which is what the gate's flag-off baseline needs.
+2. Set `videoSettings` to an **empty dictionary**, not nil. Rev 1 said nil; the header says nil asks for a default *uncompressed* format and the empty dictionary asks for the device's native format. The device format is 420v, and forcing a conversion would make the ISP convert all 240 frames/sec for the 10 that are kept. `CIImage(cvPixelBuffer:)` accepts 420v; `PoseInputPreparerTests` checks that on a 420v buffer.
 3. `alwaysDiscardsLateVideoFrames = true`. A dedicated serial queue with `.userInitiated` QoS, separate from `sessionQueue`. Session mutations and frame delivery must not block each other.
-4. In `captureOutput(_:didOutput:from:)`, apply the same stride as the file path: keep frame `n` when `n % round(fps / 10) == 0`, computed from the active format's frame rate at record start. Non-kept frames return immediately. At 240 fps this callback fires 240 times a second, so the non-kept path is an increment and a return.
-5. For kept frames: read the presentation timestamp, run the letterbox to the 256×256 tensor, push `(timestamp, tensor)` to the per-recording queue, return. Never retain the sample buffer or the pixel buffer.
-6. Frames arrive only while the movie output is recording. The data output delivers whenever the session runs; gate on the recording state so preview-only time costs nothing.
+4. In `captureOutput(_:didOutput:from:)`, keep frames by **presentation time**, not by counting them: a frame is kept when it is at or past the next 100 ms slot on a grid anchored at the first kept frame (`LivePoseFrameGate`). Rev 1 said to reuse the file path's frame-count stride, but with late frames discarded the callback never sees the frames that arrive while a kept one is being letterboxed, so counting would undersample by however many were skipped. Time cannot be skipped. A gap longer than one slot re-anchors the grid rather than admitting a burst. Non-kept frames return after one lock and a compare.
+5. For kept frames: read the presentation timestamp, run the letterbox to the 256×256 tensor, push `(timestamp, tensor)` to the per-recording queue, return. Never retain the sample buffer or the pixel buffer. The letterbox runs outside the lock.
+6. Frames arrive only while the movie output is recording. The data output delivers whenever the session runs; gate on the recording state so preview-only time costs nothing. The tap is armed on the Record tap and starts counting at `fileOutput(_:didStartRecordingTo:from:)`.
+7. The data output delivers buffers in the sensor's orientation; the movie output writes its orientation as a track matrix, and the file path renders through it. So live keypoints are rotated at the consumer by the angle between the two connections (`LivePoseKeypointRotation`), read at record start. Rotating the data output's connection instead would physically rotate every buffer. The sign convention (clockwise, `videoRotationAngle` terms) is unit-tested but the pairing with what the two connections actually report needs the device run.
 
 ### Inference side
 
-1. `MoveNetThunderModel` is loaded once, when the camera screen appears, and reused across recordings. Today it is loaded per diagnostic run.
-2. The letterbox and RGB repack move out of the model actor's async path into a synchronous function callable from the capture queue. The model actor then takes a tensor, not a pixel buffer. The file-based path calls the same function from `VideoFrameSampler`'s handler, so there is one preprocess implementation.
-3. A per-recording queue, bounded to a few seconds of samples (30 entries ≈ 6 MB is a reasonable first bound). Drop-oldest on overflow, and count drops. The model actor drains it and appends results in dequeue order, which is timestamp order because the queue is FIFO and the capture callback is serial.
-4. The queue is created on record start and owned by the recording, not the screen. It is cancelled on a second Record tap, on leaving the camera tab, and on session teardown. A consumer that outlives the recording must be the one for that recording, never a shared one.
+1. `MoveNetThunderModel` is loaded once, when the flag is first turned on, and reused across recordings. Record is ignored until it has loaded (the flag button dims meanwhile), so a take never silently runs without live pose. The diagnostic screen's own "Run diagnostic" still loads per run.
+2. The letterbox and RGB repack live in `PoseInputPreparer`, a synchronous function callable from the capture queue and exposed off the actor as `MoveNetThunderModel.inputPreparer`. The actor takes a `PoseModelInput` (tensor plus letterbox mapping). The pixel-buffer overload the file path calls delegates to the same preparer, so there is one preprocess implementation.
+3. A per-recording queue (`LivePoseSampleChannel` over `BoundedSampleQueue`), bounded to 30 entries ≈ 3 s ≈ 6 MB. Drop-oldest on overflow; drops and the high-water mark are counted. `LivePoseRecording` drains it through the model actor and appends results in dequeue order, which is timestamp order because the queue is FIFO and the capture callback is serial.
+4. The queue is created on the Record tap and owned by the recording, not the screen. Stop finishes the producer and lets the consumer drain; leaving the camera tab and session teardown cancel it, and the finished file is still handed on. A Record tap during the drain is ignored rather than cancelling it (Rev 1 said cancel): the drain lasts seconds, and a take started under it would have left the previous file with nowhere to go. A consumer that outlives the recording is always the one for that recording, never a shared one.
+5. Per-sample preprocess time and inference time are recorded separately (`LivePoseMetrics`). The prototype runs as a Debug build, so the unoptimized letterbox loop must not be mistaken for a slow model when the gate is read.
 
 ### Timestamps
 
@@ -70,15 +72,17 @@ Anchor on the presentation timestamp of the first data-output frame delivered af
 
 Observe `ProcessInfo.thermalStateDidChangeNotification` for the duration of a recording.
 
-- `.nominal`, `.fair`: normal stride.
-- `.serious`: double the stride (5 samples/sec). Count the seconds spent here.
-- `.critical`: stop inference for this recording. The queue drains nothing further; drops are counted. The recording is never touched.
+- `.nominal`, `.fair`: the normal 100 ms sample interval.
+- `.serious`: double the interval (5 samples/sec), from the last kept frame onward. Count the seconds spent here.
+- `.critical`: stop sampling for this recording; the consumer still drains what was queued. The recording is never touched.
 
 Coverage under backoff is not deterministic. If a consumer needs full coverage, the post-recording backfill is `VideoFrameSampler` over the file restricted to the time ranges that were dropped or skipped. That is a follow-on, not part of this change.
 
 ### Where it lives
 
-Prototype vehicle is the DEBUG-only pose diagnostic screen, reached today only through the `-screenshotPoseDiagnostic` launch argument. It already renders per-frame results and a summary, so it can show live results with no new UI. A debug flag on the camera screen enables the data output.
+Prototype vehicle is the pose diagnostic screen. A DEBUG-only flag on the camera screen (the running-figure button, top right) attaches the data output and loads the model. When a recording made with the flag on finishes and its consumer has drained, the camera screen presents the diagnostic as a sheet over the recorded file with the live results already in its rows, plus two footnote lines: the live metrics (`LivePoseMetrics.summaryLine`) and the file's frame-count audit (`LivePoseFileAudit`). "Run diagnostic" on that sheet is the post-hoc baseline over the same file. Dismissing the sheet hands the file on to Photos exactly as a flag-off recording would.
+
+Everything live-specific is in `Turnip/LivePose/`; the only shared change is the preprocess seam in `Turnip/Pose/`. Deleting the directory and the `#if DEBUG` blocks in the camera screen removes the prototype.
 
 The payoff is `ProcessingPipeline`. Its `FrameSampling` protocol takes an `AVURLAsset`, so a live source cannot conform to it as written. The pipeline needs a second source abstraction that yields `(timestamp, tensor)` and feeds the same inference closure. That refactor is out of scope for the prototype and in scope for shipping.
 
@@ -86,9 +90,11 @@ The payoff is `ProcessingPipeline`. Its `FrameSampling` protocol takes an `AVURL
 
 The unverified combination is a movie file output and a video data output both active **at 240 fps in 420v**. Apple's statement about iOS 16 is general and one format-dependent failure exists, so the general statement is not enough. Run on an A11 device (iPhone 8), 240 fps, a take of at least three minutes, with the debug flag on. All three must pass:
 
-1. **The recording has no dropped frames.** `AVCaptureMovieFileOutput` does not report drops. Verify by reading the written file's video track and comparing its sample count against duration × nominal frame rate. Also compare against the same take with the flag off.
-2. **Inference sustains about 10 samples/sec** with the queue near empty. Report the drop count and the maximum queue depth.
-3. **Thermal state stays at or below `.fair`** for the whole take, and the recording keeps its frame rate under `.serious` if it is reached.
+1. **The recording has no dropped frames.** `AVCaptureMovieFileOutput` does not report drops. The diagnostic's "File:" line reads the written file's video track and compares its sample count against duration × nominal frame rate. Also compare against the same take with the flag off (the flag detaches the data output entirely, so the flag-off take is the release configuration).
+2. **Inference sustains about 10 samples/sec** with the queue near empty. The "Live:" line reports samples/sec, queue drops, maximum queue depth, late-frame discards, and preprocess and inference times separately.
+3. **Thermal state stays at or below `.fair`** for the whole take, and the recording keeps its frame rate under `.serious` if it is reached. The "Live:" line reports seconds spent at `.serious` and whether `.critical` stopped sampling.
+
+Also check on the device, since no test here can: that the overlaid live skeleton lands on the athlete in the file's portrait orientation (the keypoint rotation's sign pairing), and that a Record tap while the previous recording is still draining is ignored and the review for that recording still appears.
 
 Pass all three: ship behind the flag, then remove the flag. Fail (1): the recorder is the constraint; move to the `AVAssetWriter` alternative. Fail (2) or (3) only: the model is the constraint; try `Interpreter.Options.threadCount` first, then the Core ML delegate, and rerun the gate. The Core ML delegate brings the Neural Engine into play and has its own op-support risk for MoveNet, so it is the second lever, not the first.
 
@@ -107,8 +113,8 @@ Pass all three: ship behind the flag, then remove the flag. Fail (1): the record
 - Results are ready seconds after Stop, and the post-hoc decode of a 240 fps file is skipped.
 - Coverage is not deterministic under thermal backoff or drops. Backfill from the file is the recovery, not part of this change.
 - Two frame sources feed one model. The preprocess step is shared; the sampling abstraction is not, until the pipeline refactor.
-- A lagging consumer has an explicit lifecycle. Every path that ends a recording also cancels its inference queue.
-- The simulator has no camera. Every change on the capture side needs a device run; unit tests cover the stride, the queue bound and drop policy, the timestamp offset, and the thermal policy as pure functions.
+- A lagging consumer has an explicit lifecycle. Stop finishes its queue and lets it drain; every path that abandons a recording cancels it.
+- The simulator has no camera. Every change on the capture side needs a device run; `LivePoseTests` covers the frame gate, the queue bound and drop policy, the channel hand-off, the timestamp offset, the thermal policy, the keypoint rotation and the file audit as pure functions, and `PoseInputPreparerTests` covers the shared preprocess on 420v and BGRA buffers.
 
 ## Out of scope
 
