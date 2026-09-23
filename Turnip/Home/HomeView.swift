@@ -20,13 +20,6 @@ struct HomeView: View {
                 // scrolls away with the tiles (docs/UIUX.md). Root-only — pushed screens
                 // declare their own bars.
                 .modifier(HomeNavigationBar())
-                // A plain overlay, like the camera screen's own corner buttons, rather than
-                // nav-bar chrome: Home's bar is kept deliberately content-free everywhere
-                // else so iOS 26 draws its scroll-edge glass over it (see
-                // `HomeNavigationBar`), and a real toolbar item there would fight that.
-                // Root-only, matching `HomeNavigationBar` itself: a pushed screen draws its
-                // own back chevron in this corner.
-                .overlay(alignment: .topTrailing) { settingsButton }
                 .navigationDestination(for: SelectedVideo.self) { video in
                     // A video the camera already analyzed while recording it lands on the
                     // clip list directly. Otherwise the Processing screen shows the picked
@@ -61,14 +54,6 @@ struct HomeView: View {
         }
     }
 
-    private var settingsButton: some View {
-        ScrimIconButton(systemImage: "gearshape", accessibilityLabel: "Settings") {
-            showSettings = true
-        }
-        .padding()
-        .accessibilityIdentifier("settings-button")
-    }
-
     private func popToRoot() {
         viewModel.path = []
     }
@@ -93,11 +78,11 @@ struct HomeView: View {
             ProgressView()
         case .denied(let restricted):
             VStack(spacing: 0) {
-                HomeHeader()
+                HomeHeader(onSettingsTapped: { showSettings = true })
                 PhotosAccessDeniedView(restricted: restricted)
             }
         case .authorized, .limited:
-            VideoGalleryView(viewModel: viewModel)
+            VideoGalleryView(viewModel: viewModel, onSettingsTapped: { showSettings = true })
         }
     }
 
@@ -110,13 +95,25 @@ struct HomeView: View {
 }
 
 /// Home's title row: the "Turnip" wordmark image (mark + text baked into one asset),
-/// centered in a nav-bar-height band. Laid out as ordinary content — inside the grid's
-/// scroll view, or above a non-scrolling state — rather than as a nav bar title, so it
-/// scrolls away with the tiles instead of floating over them. Internal so the DEBUG
-/// screenshot harness can render the denied state exactly as Home does.
+/// centered in a nav-bar-height band, with the settings gear trailing it when
+/// `onSettingsTapped` is supplied. Laid out as ordinary content — inside the grid's scroll
+/// view, or above a non-scrolling state — rather than as a nav bar title, so both the wordmark
+/// and the gear scroll away with the tiles instead of floating fixed over them: a fixed overlay
+/// at this corner would otherwise permanently sit over whatever grid tile scrolls underneath it
+/// and intercept taps meant for that tile, the way the wordmark itself scrolling away avoids
+/// that problem for the header row as a whole. Internal so the DEBUG screenshot harness can
+/// render the denied state exactly as Home does.
 struct HomeHeader: View {
+    /// `nil` renders no gear — every caller except Home's own states (denied and the video
+    /// gallery) that can actually reach Settings.
+    var onSettingsTapped: (() -> Void)? = nil
+
     private static let logoHeight: CGFloat = 36
     private static let rowHeight: CGFloat = 44
+    /// Smaller than `ScrimIconButton`'s 44 pt default: this button sits in the same row as the
+    /// wordmark rather than alone in a corner, so a smaller tap target leaves more room for the
+    /// logo without the two visually colliding.
+    private static let settingsButtonDiameter: CGFloat = 32
 
     var body: some View {
         Image("TitleLogo")
@@ -126,15 +123,16 @@ struct HomeHeader: View {
             .frame(maxWidth: .infinity, minHeight: Self.rowHeight)
             .accessibilityLabel("Turnip")
             .accessibilityAddTraits(.isHeader)
+            .overlay(alignment: .trailing) {
+                if let onSettingsTapped {
+                    ScrimIconButton(
+                        systemImage: "gearshape", accessibilityLabel: "Settings",
+                        diameter: Self.settingsButtonDiameter, action: onSettingsTapped)
+                        .padding(.trailing)
+                        .accessibilityIdentifier("settings-button")
+                }
+            }
     }
-}
-
-/// The settings gear's footprint at Home's top-trailing corner (`ScrimIconButton`'s default
-/// 44 pt diameter plus the `.padding()` around it), reserved as top clearance on the grid below
-/// — mirroring `FloatingTabBarMetrics.clearance` at the bottom — so no tile ever renders under
-/// the fixed overlay button and silently eats a tap meant for it.
-private enum SettingsButtonMetrics {
-    static let clearance: CGFloat = 76
 }
 
 /// The grid plus its decorations: a "select more" banner under limited access, and a bottom
@@ -142,6 +140,9 @@ private enum SettingsButtonMetrics {
 /// scrollable grid, newest videos first — no landing/reveal state.
 struct VideoGalleryView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
+    /// Threaded straight to every `HomeHeader()` this view constructs (loading, empty, and grid
+    /// states all show one) rather than each state re-deriving its own entry point.
+    var onSettingsTapped: (() -> Void)? = nil
 
     private static let spacing: CGFloat = 2
     private let columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: 3)
@@ -165,13 +166,13 @@ struct VideoGalleryView: View {
         if !viewModel.hasLoaded {
             // Not yet the same thing as "no videos" — the first fetch hasn't run.
             VStack(spacing: 0) {
-                HomeHeader()
+                HomeHeader(onSettingsTapped: onSettingsTapped)
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else if viewModel.videos.isEmpty {
             VStack(spacing: 0) {
-                HomeHeader()
+                HomeHeader(onSettingsTapped: onSettingsTapped)
                 emptyState
             }
         } else {
@@ -181,9 +182,9 @@ struct VideoGalleryView: View {
 
     private var grid: some View {
         ScrollView {
-            // The header is scroll content, not chrome: it leads the grid and leaves
-            // the screen with the first row.
-            HomeHeader()
+            // The header (with the settings gear, when reachable) is scroll content, not
+            // chrome: it leads the grid and leaves the screen with the first row.
+            HomeHeader(onSettingsTapped: onSettingsTapped)
             LazyVGrid(columns: columns, spacing: Self.spacing) {
                 ForEach(
                     Array(viewModel.videos.enumerated()), id: \.element.localIdentifier
@@ -193,10 +194,7 @@ struct VideoGalleryView: View {
             }
             // The floating tab bar overlays this screen rather than reserving its own
             // safe-area space, so without this the bottom row would end up permanently
-            // stuck underneath it. Same reasoning at the top, for the fixed settings gear
-            // (`HomeView.settingsButton`): without this, tiles that scroll under that corner
-            // would intercept a tap meant for the button instead of opening the video.
-            .padding(.top, SettingsButtonMetrics.clearance)
+            // stuck underneath it.
             .padding(.bottom, FloatingTabBarMetrics.clearance)
         }
         // The grid announces its count when VoiceOver enters it — a VoiceOver user

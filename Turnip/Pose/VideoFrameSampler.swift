@@ -92,9 +92,9 @@ struct VideoFrameSampler: Sendable {
             throw PoseError.videoLoadFailed(underlying: nil)
         }
 
-        // Sample ~10 frames/sec of footage regardless of source fps (issue #21): a fixed stride
-        // of 3 matches the design doc only at 30 fps, and at 240 fps slo-mo it would run 8x the
-        // intended inferences per second of footage.
+        // Sample ~`sampleRate` frames/sec of footage regardless of source fps: a fixed stride of
+        // 3 matches the shipped default (10/sec) only at 30 fps, and at 240 fps slo-mo it would
+        // run 8x the intended inferences per second of footage.
         let nominalFrameRate = try await track.load(.nominalFrameRate)
         let sampleStride = Self.stride(forNominalFrameRate: nominalFrameRate, sampleRate: sampleRate)
 

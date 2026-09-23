@@ -10,8 +10,10 @@ import Foundation
 /// the grid rather than admitting a burst of frames to "catch up". A change of interval applies
 /// from the last kept frame, so halving the rate under thermal pressure takes effect at once.
 ///
-/// The interval is `1 / VideoFrameSampler.targetSamplesPerSecond`, so the live path samples at the
-/// same rate as the file path whatever the capture frame rate. Thermal backoff widens it.
+/// `defaultInterval` is `1 / VideoFrameSampler.targetSamplesPerSecond`; `LivePoseFrameTap.arm`
+/// passes `1 / sampleRate` instead when armed with the Settings screen's analysis granularity,
+/// so the live path samples at whatever rate the file path is configured for, not always the
+/// shipped default. Thermal backoff widens whichever interval is in force.
 struct LivePoseFrameGate: Equatable, Sendable {
     static let defaultInterval = 1.0 / Double(VideoFrameSampler.targetSamplesPerSecond)
 

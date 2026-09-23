@@ -20,7 +20,10 @@ final class ClipListTests: XCTestCase {
     }
 
     /// Builds a view model whose `items[0]` is always the injected original item —
-    /// the invariant `ClipListViewModel.init` enforces — followed by `items`.
+    /// the invariant `ClipListViewModel.init` enforces — followed by `items`. `settingsProvider`
+    /// defaults to a plain, deterministic `TurnipSettings()` rather than the production default
+    /// (`TurnipSettingsStore.shared.current`), so these tests never touch the real
+    /// `UserDefaults.standard`-backed singleton or its state from other tests.
     @MainActor
     private func makeViewModel(
         items: [ClipListItem],
@@ -29,7 +32,8 @@ final class ClipListTests: XCTestCase {
         duration: TimeInterval = 30,
         exportClip: @escaping ExportOneClip = { _, _, _, _ in URL(fileURLWithPath: "/tmp/fake.mp4") },
         saveToPhotos: @escaping SaveOneClipToPhotos = { _, _ in },
-        deleteOriginalAsset: @escaping DeleteOriginalAsset = { _ in }
+        deleteOriginalAsset: @escaping DeleteOriginalAsset = { _ in },
+        settingsProvider: @escaping @MainActor () -> TurnipSettings = { TurnipSettings() }
     ) -> ClipListViewModel {
         ClipListViewModel(
             items: items,
@@ -42,7 +46,8 @@ final class ClipListTests: XCTestCase {
             makeDirectory: {
                 FileManager.default.temporaryDirectory
                     .appendingPathComponent("turnip-test-\(UUID().uuidString)", isDirectory: true)
-            })
+            },
+            settingsProvider: settingsProvider)
     }
 
     /// A 90°-rotated track's preferredTransform: landscape-encoded portrait video.
@@ -263,6 +268,48 @@ final class ClipListTests: XCTestCase {
         let saved = await recorder.savedURLs
         XCTAssertEqual(saved.count, 1)
         XCTAssertNil(viewModel.saveFailureMessage)
+    }
+
+    /// The Settings screen's album destination reaches `saveToPhotos` — this is the one place
+    /// the setting takes effect, so the wiring needs a test that would fail if
+    /// `settingsProvider().albumDestination` were dropped on the way to the save call, the way a
+    /// stub discarding the argument would let happen silently.
+    @MainActor
+    func testSaveThreadsTheConfiguredAlbumDestinationToEveryPhotosSave() async {
+        actor Recorder {
+            var albumTitles: [String?] = []
+            func record(_ title: String?) { albumTitles.append(title) }
+        }
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            items: [makeItem()],
+            saveToPhotos: { _, albumTitle in await recorder.record(albumTitle) },
+            settingsProvider: { TurnipSettings(autoAddToAlbum: true, albumName: "Tricking Sessions") })
+
+        _ = await viewModel.save()
+
+        let titles = await recorder.albumTitles
+        XCTAssertEqual(titles, ["Tricking Sessions"])
+    }
+
+    /// The off default (`TurnipSettings()`, what every other `save()` test in this file uses)
+    /// must reach `saveToPhotos` as `nil`, not merely be "not on" — a mutation that hardcoded a
+    /// non-nil title would still pass every test above that ignores the argument.
+    @MainActor
+    func testSaveThreadsNilAlbumDestinationWhenTheSettingIsOff() async {
+        actor Recorder {
+            var albumTitles: [String?] = []
+            func record(_ title: String?) { albumTitles.append(title) }
+        }
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            items: [makeItem()],
+            saveToPhotos: { _, albumTitle in await recorder.record(albumTitle) })
+
+        _ = await viewModel.save()
+
+        let titles = await recorder.albumTitles
+        XCTAssertEqual(titles, [nil])
     }
 
     @MainActor

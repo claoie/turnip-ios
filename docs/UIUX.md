@@ -124,16 +124,15 @@ out-of-process picker, so it needs real Photos access. As built:
 - Four preferences, `UserDefaults`-backed (`Turnip/Settings/TurnipSettingsStore.swift`), each
   taking effect at its own integration point rather than needing a restart:
   - **Analysis mode** (segmented Real-time / Offline) — whether the camera scores pose live while
-    recording (§1b below) or always defers to Processing (§2). Real-time is the default and
-    matches the app's behavior before this screen existed.
-  - **Save to an album**, with a name field shown once it's on — whether a saved clip is added to
-    a named Photos album (created on first use) instead of landing with no album, the original
-    default.
+    recording (§1b below) or always defers to Processing (§2). Real-time is the default.
+  - **Save to an album**, with a name field shown once it's on — whether Clip List's Done action
+    (§3) adds each saved clip to a named Photos album (created on first use) instead of landing
+    with no album, the default. Scoped to the curated clip exports only: a camera recording's raw
+    take, saved to Photos the moment recording stops (§1b), never goes in the album.
   - **Analysis granularity** (stepper, 1-30, default 10) — frames sampled per second of footage,
     replacing the fixed rate `docs/DESIGN.md`'s "Performance targets" describes; both the file
     path and the live path (§1b) sample at this rate.
-- Out of scope here: which screen owns "5. etc." from the issue this shipped for — the issue
-  named exactly these four and left further settings to a follow-up.
+- Further settings beyond these four are out of scope for this doc's current revision.
 
 ### 1b. Camera
 

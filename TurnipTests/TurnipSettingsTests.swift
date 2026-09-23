@@ -4,7 +4,7 @@ import XCTest
 /// Pure `TurnipSettings` value-type tests: defaulting and granularity clamping, independent of
 /// `UserDefaults`. `TurnipSettingsStoreTests` covers the persistence round trip on top of this.
 final class TurnipSettingsTests: XCTestCase {
-    func testDefaultsMatchTheShippedBehaviorBeforeThisSettingExisted() {
+    func testDefaultInitializerValuesMatchTheAppsRealTimeNoAlbumTenPerSecondDefaults() {
         let settings = TurnipSettings()
 
         XCTAssertEqual(settings.analysisMode, .realTime)

@@ -34,11 +34,17 @@ enum ClipPhotosSaveError: LocalizedError, Equatable {
 /// (`NSPhotoLibraryAddUsageDescription` in Info.plist covers the usage string). The v1 "nothing
 /// leaves the device" promise still holds — every read this type does (`fetchAlbum(titled:)`
 /// below, checking for an existing album before creating a duplicate) stays inside the device's
-/// own Photos library, never the network. Per Apple's `PHAccessLevel.addOnly` documentation, an
-/// app granted add-only access has read visibility limited to the assets and collections *it
-/// created* — so that fetch can only ever find an album this saver made in an earlier call,
-/// never a user's own pre-existing album of the same name, which is exactly the scope the
-/// dedup needs.
+/// own Photos library, never the network.
+///
+/// **Unverified assumption, needs a device pass before this is trusted:** `fetchAlbum(titled:)`
+/// is written on the assumption that add-only authorization limits what it can find to albums
+/// this saver itself created in an earlier call — `PHAccessLevel.addOnly`'s general contract is
+/// read visibility scoped to what the app added, but `fetchAssetCollections(with:subtype:options:)`
+/// takes no parameter that states this, and it has not been run under either full or limited
+/// Photos access on a real device or Simulator (none available in this environment). If the
+/// assumption is wrong and the fetch instead sees nothing, every save with the same album name
+/// creates a new, separately-titled album instead of reusing the first one — the album feature
+/// would still add each clip *somewhere*, just not somewhere consolidated.
 struct ClipPhotosSaver: Sendable {
     /// Resolves the add-only Photos authorization, collapsed onto the app's
     /// shared Photos-domain authorization model (`PhotoLibraryAuthorization`,
@@ -104,9 +110,11 @@ struct ClipPhotosSaver: Sendable {
         return createdIdentifier
     }
 
-    /// An existing user album titled `title`, or `nil` when none exists yet — checked inside the
-    /// same change block that would otherwise create a duplicate, so re-saving with the same
-    /// album name adds to the one album instead of making a new one each time.
+    /// An existing album titled `title` this fetch can see, or `nil` when none is visible —
+    /// checked inside the same change block that would otherwise create a duplicate, so
+    /// re-saving with the same album name adds to the one album instead of making a new one
+    /// each time. See the type-level doc comment above for what "visible" means under add-only
+    /// authorization, and that this is unverified.
     private static func fetchAlbum(titled title: String) -> PHAssetCollection? {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "title = %@", title)

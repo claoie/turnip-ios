@@ -136,6 +136,12 @@ final class ClipListViewModel: ObservableObject {
     private let saveToPhotos: SaveOneClipToPhotos
     private let deleteOriginalAsset: DeleteOriginalAsset
     private let makeDirectory: @Sendable () -> URL
+    /// Read once per `save()` run for the album destination — injected (like
+    /// `CameraCaptureViewModel`'s own `settingsProvider`) so a test can drive the album-on
+    /// path without touching the real `UserDefaults.standard`-backed singleton. `@MainActor`-typed
+    /// so the default value's closure literal, which reads the main-actor-isolated
+    /// `TurnipSettingsStore.shared`, type-checks as a default argument.
+    private let settingsProvider: @MainActor () -> TurnipSettings
 
     /// The asset's duration in seconds, loaded once per asset and shared by every
     /// card's inline trim timeline. `nil` when the asset can't be read — the timeline
@@ -156,7 +162,8 @@ final class ClipListViewModel: ObservableObject {
         exportClip: @escaping ExportOneClip = exportOneClip,
         saveToPhotos: @escaping SaveOneClipToPhotos = saveOneClipToPhotos,
         deleteOriginalAsset: @escaping DeleteOriginalAsset = deleteOriginalVideo,
-        makeDirectory: @escaping @Sendable () -> URL = defaultExportDirectory
+        makeDirectory: @escaping @Sendable () -> URL = defaultExportDirectory,
+        settingsProvider: @escaping @MainActor () -> TurnipSettings = { TurnipSettingsStore.shared.current }
     ) {
         let original = ClipListItem(
             window: TrickWindow(startTime: 0, endTime: max(duration, 0)),
@@ -170,6 +177,7 @@ final class ClipListViewModel: ObservableObject {
         self.saveToPhotos = saveToPhotos
         self.deleteOriginalAsset = deleteOriginalAsset
         self.makeDirectory = makeDirectory
+        self.settingsProvider = settingsProvider
     }
 
     /// The analyzed asset, shared with the editor destination so it previews and
@@ -325,7 +333,7 @@ final class ClipListViewModel: ObservableObject {
         // Read once for the whole run rather than per clip: every clip in one Done tap saves to
         // the same destination, and a setting change mid-save shouldn't split a run across two
         // albums.
-        let albumTitle = TurnipSettingsStore.shared.current.albumDestination
+        let albumTitle = settingsProvider().albumDestination
         var failures: [String] = []
         for item in items where !item.isOriginal && !item.isTrashed {
             do {
