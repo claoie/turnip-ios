@@ -3,52 +3,6 @@ import AVFoundation
 import CoreVideo
 import SwiftUI
 
-/// UI-test screenshot harness for the export confirmation screen.
-///
-/// Shown only when the app is launched with `-screenshotExportConfirmation` (holds
-/// the first clip mid-export at 50% so the screenshot shows the progress UI) or
-/// `-screenshotExportConfirmationFinished` (the run completes instantly so the
-/// screenshot shows the summary). Driven by `TurnipUITests/ScreenshotTests.swift`;
-/// unreachable in normal use and compiled out of release builds.
-struct ScreenshotHarness: View {
-    let finishImmediately: Bool
-
-    var body: some View {
-        NavigationStack {
-            ExportConfirmationView(
-                items: [
-                    ExportConfirmationItem(
-                        window: TrickWindow(startTime: 2, endTime: 5),
-                        cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1)),
-                    ExportConfirmationItem(
-                        window: TrickWindow(startTime: 9, endTime: 11.5),
-                        cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1))
-                ],
-                asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
-                exportClip: { _, _, directory, progress in
-                    if finishImmediately {
-                        progress(1.0)
-                    } else {
-                        // Hold the run mid-export: the UI test screenshots the
-                        // progress state, then the test runner kills the app.
-                        progress(0.5)
-                        try await Task.sleep(for: .seconds(60))
-                    }
-                    // A real (empty) file rather than a fabricated path: the Share
-                    // action disables itself for a URL with nothing behind it, so a
-                    // fake path would screenshot every row's action greyed out and
-                    // leave the share sheet unreachable from the UI test.
-                    let url = directory.appendingPathComponent(
-                        "screenshot-clip-\(UUID().uuidString).mp4")
-                    _ = FileManager.default.createFile(atPath: url.path, contents: Data())
-                    return url
-                },
-                saveToPhotos: { _ in }
-            )
-        }
-    }
-}
-
 // MARK: - Home
 
 /// Home's Photos-denied empty state (`-screenshotHome`).
@@ -73,7 +27,7 @@ struct ScreenshotHomeHarness: View {
 
 // MARK: - Clip list
 
-/// Clip list triage (`-screenshotClipList`): three detected windows, one discarded.
+/// Clip list triage (`-screenshotClipList`): three detected windows, one trashed.
 /// Thumbnails render as their placeholder tiles — `/dev/null` decodes nothing, and
 /// the loader fails gracefully to the placeholder (the honest fallback).
 struct ScreenshotClipListHarness: View {
@@ -90,9 +44,11 @@ struct ScreenshotClipListHarness: View {
                     ClipListItem(
                         window: TrickWindow(startTime: 20, endTime: 22.4),
                         cropRect: NormalizedRect(minX: 0.1, maxX: 0.9, minY: 0.2, maxY: 0.8),
-                        isKept: false)
+                        isTrashed: true)
                 ],
-                asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")))
+                asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
+                assetIdentifier: "screenshot",
+                duration: 24)
         }
     }
 }
@@ -114,7 +70,9 @@ struct ScreenshotClipListMediaHarness: View {
                         window: TrickWindow(startTime: 3, endTime: 4.5),
                         cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1))
                 ],
-                asset: AVURLAsset(url: ScreenshotClipEditorHarness.sampleMovieURL))
+                asset: AVURLAsset(url: ScreenshotClipEditorHarness.sampleMovieURL),
+                assetIdentifier: "screenshot",
+                duration: 6)
         }
     }
 }

@@ -10,8 +10,8 @@ doc specifies the *screens* the v1 app needs to carry a user from "I have a
 recording" to "clips are in my Photos library," and is scoped to v1
 (auto-clip + auto-crop, iOS-only, on-device). It does not cover v2 (community
 labeling, following/feed) — those get their own flow notes once the v1 screens
-exist and v2 work starts. The Share Sheet and OTA models were scoped here as v2
-and have since been built ahead of that; see "Built ahead of this doc" below.
+exist and v2 work starts. OTA model updates were scoped here as v2 and have
+since been built ahead of that; see "Built ahead of this doc" below.
 
 ## Why this doc exists
 
@@ -40,12 +40,10 @@ flowchart TD
     B -->|cancel| A
     E1 -->|back to Home| A
     E2 -->|retry / back to Home| A
-    C -->|tap a tile| C
-    C -->|tap a tile's expand button| D[Clip Detail / Editor]
+    C -->|tap a derived clip's tile| D[Clip Detail / Editor]
     D -->|back, commits edits| C
     D -->|delete| C
-    C -->|export kept clips| F[Export Confirmation]
-    F -->|done / back| A
+    C -->|tap Done| A
     C -->|back| A
 ```
 
@@ -157,33 +155,41 @@ out-of-process picker, so it needs real Photos access. As built:
 
 ### 3. Clip List (triage)
 
-- A grid of square tiles, one per detected trick window, plus a trailing "+"
-  tile (grey square, centered plus sign) that appends a new full-frame clip at
-  the start of the asset for the user to trim.
-- Each tile shows the clip's thumbnail; tapping the tile plays it inline,
-  looping the window continuously, rather than navigating anywhere or opening
-  a full-screen player. A thin, read-only timeline overlays the bottom edge of
-  the tile: it spans the whole source video with the clip's window drawn as a
-  highlighted segment, so a glance at the grid shows roughly which part of the
-  video each clip is from. It isn't draggable — trimming happens in the editor
-  (§4).
-- Two small controls overlay the tile's top corners: an expand button
-  (top-leading) and the keep/discard toggle (top-trailing) — a quick action
-  that doesn't start playback.
-- The expand button opens the full Clip Detail / Editor (§4) directly — the
-  single entry point into "view large" and "edit," merged rather than a
-  separate pencil icon on the tile.
-- A "Select All" / "Deselect All" toolbar button at the top marks every clip
-  kept or clears every keep flag.
-- A visible "Export N clips" action, enabled once at least one clip is kept.
+- A grid of square tiles: the original source video first, then one tile per
+  detected trick window, then a trailing "+" tile (grey square, centered plus
+  sign) that appends a new full-frame clip at the start of the asset for the
+  user to trim.
+- Every tile autoplay-loops its window inline continuously (accessibility
+  permitting), layered over its poster thumbnail so there's no blank flash
+  while the loop starts. A derived clip's tile also draws a thin, read-only
+  timeline over its bottom edge: it spans the whole source video with the
+  clip's window drawn as a highlighted segment, so a glance at the grid shows
+  roughly which part of the video each clip is from. It isn't draggable —
+  trimming happens in the editor (§4). The original tile has no timeline,
+  since its window is the whole video.
+- One control overlays each tile's top-trailing corner: a trash toggle,
+  filled red while trashed. Trashing a derived clip excludes it from the
+  save; trashing the original tile marks the source video itself for
+  deletion from Photos once Done runs.
+- Tapping a derived clip's tile opens the full Clip Detail / Editor (§4)
+  directly — the single entry point into "view large" and "edit," not a
+  separate pencil icon. The original tile isn't tappable — there's nothing
+  to edit on the source video.
+- A "Done" action, always enabled: exports and saves every non-trashed
+  derived clip to Photos, deletes the original video from Photos if its tile
+  was trashed, and pops back to Home. A full-screen spinner covers the grid
+  while this runs. The original is deleted only once every derived clip has
+  confirmed it saved — a clip that fails leaves the original alone and shows
+  an alert naming the failure, so Done can be retried without risking the
+  user's only copy of a trick that never actually saved.
 - The back chevron pops to Home, not to Processing; the title sits centered
   inline on the same line as the chevron, Photos-app style.
-- This is the part of current issue #11 that's genuinely a list/grid screen.
 
 ### 4. Clip Detail / Editor
 
-- Reached from Clip List's expand button (§3) — the tile's single detail entry
-  point, not a separate pencil icon. Full-screen, one clip at a time:
+- Reached by tapping a derived clip's tile in Clip List (§3) — the tile's
+  single detail entry point, not a separate pencil icon. Full-screen, one
+  clip at a time:
   - Video player showing the trimmed clip looping, full frame, with the crop area's
     marker rectangle drawn over it at a fixed position — the dimmed surround marks
     what export cuts away. No default AVKit playback chrome; the only controls this
@@ -204,23 +210,10 @@ out-of-process picker, so it needs real Photos access. As built:
     away and the same finger movement moves it a smaller fraction of the way,
     for fine control. Moving back to the track snaps to full speed again.
   - A Delete button at the top-right corner removes the clip from the list
-    entirely — distinct from keep/discard, which stays the list's own toggle.
+    entirely — distinct from trashing, which stays the list's own toggle and
+    still shows the clip (excluded from the save) rather than removing it.
   - Back to Clip List commits the edits; no separate "save" step needed if
     edits are held in view state until back-navigation.
-
-### 5. Export Confirmation
-
-- Triggered from Clip List's "Export N clips" action. Runs issue
-  [#10](https://github.com/hoiekim/turnip-ios/issues/10)'s exporter for
-  every kept clip.
-- Per-clip progress (export + Photos-library write can fail independently
-  per clip — e.g. Photos permission revoked mid-flow).
-- Final state: "N of M clips saved to Photos" with any per-clip failures
-  called out individually, not just a total count. No further action
-  required — user can start over from Home.
-- The back chevron pops to Home, not to the clip list; Done pops to Home too —
-  the flow is finished and the list state is stale after export. The title sits
-  centered inline on the same line as the chevron, Photos-app style.
 
 ## Out of scope for this doc
 
@@ -235,20 +228,19 @@ out-of-process picker, so it needs real Photos access. As built:
 
 ## Built ahead of this doc
 
-Two features this doc scoped as v2 are on `main` already, so a contributor
-should start from that code rather than design it again. One of them a user can
-already reach:
+One feature this doc scoped as v2 is on `main` already, so a contributor
+should start from that code rather than design it again:
 
-- **Share Sheet** — `Turnip/Sharing/ClipShareButton.swift`, placed on each row
-  of Export Confirmation, which the flow above now reaches from Home. The Share
-  action disables itself unless the URL is a file URL that exists when the row
-  renders; that check is a render-time snapshot rather than an invariant, so
-  the caller owns the file's lifetime from then on.
 - **OTA model updates** — `Turnip/ModelUpdates/`: a manifest client, a version
   store with atomic replace, and a service that no-ops when no endpoint is
   configured, which is the case today. No screen this doc specifies surfaces
   it, no app code constructs it, and the doc does not yet say where one would
   go.
+
+A Share Sheet action lived briefly on the Export Confirmation screen this doc
+used to specify as §5, retired 2026-09-22 (see decision 6 below). It went with
+that screen rather than moving to Clip List, since saving now happens inline
+without an intermediate confirmation row to attach a Share action to.
 
 ## Decisions (formerly open questions)
 
@@ -283,3 +275,14 @@ Resolved 2026-09-04.
    existing `PHAsset` pipeline unchanged. Home also gained the
    collapsed/expanded two-state layout (§1) and the app forces dark
    appearance everywhere, dropping light-mode support.
+6. **Export Confirmation retired; Clip List saves inline → Changed.** Recorded
+   2026-09-22: the separate Export Confirmation screen (formerly §5) is gone.
+   Clip List's "Done" action now exports and saves every non-trashed derived
+   clip directly, with a full-screen spinner while it runs — no per-clip
+   progress rows, no summary screen, no Share action. Clip List also gained a
+   tile for the original source video (always first), and the per-card
+   keep/discard toggle became a trash toggle that applies to any tile,
+   including the original: trashing the original marks it for deletion from
+   Photos, which Done carries out once every derived clip has confirmed it
+   saved. The "Select All" / "Deselect All" toolbar action is gone along with
+   the keep/discard concept it bulk-toggled.

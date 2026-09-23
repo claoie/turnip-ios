@@ -4,10 +4,120 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
+/// Exports one clip: trims the source video to the window, crops to its rect, and
+/// writes an `.mp4` into `directory`. Failures surface as `ClipSaveError.exportFailed`
+/// so a save failure names the step; cancellation propagates untouched.
+///
+/// A closure rather than a protocol so `ClipListViewModel`'s only seam is one value:
+/// the real clip exporter plugs in here with a small adapter, and tests inject a
+/// fake.
+///
+/// Concurrency contract: awaited from `ClipListViewModel.save()`, which is
+/// `@MainActor`-isolated, so this starts executing on the main actor's executor —
+/// implementations must not block the calling executor. Do CPU-bound or blocking
+/// work off the main actor internally (e.g. `Task.detached`).
+typealias ExportOneClip = @Sendable (
+    _ spec: ClipSpec,
+    _ asset: AVAsset,
+    _ directory: URL,
+    _ progress: @escaping @Sendable (Double) -> Void
+) async throws -> URL
+
+/// Saves one exported file to the Photos library. `ClipPhotosSaver` plugs in here.
+/// Throws `ClipSaveError.photosSaveFailed` so a save failure names the step.
+///
+/// Concurrency contract: same as `ExportOneClip` — awaited from `@MainActor`-isolated
+/// code, so implementations must hop off the main actor internally for blocking work.
+typealias SaveOneClipToPhotos = @Sendable (URL) async throws -> Void
+
+/// Deletes the original video from Photos by its `PHAsset.localIdentifier`.
+/// `PhotoAssetDeleter` plugs in here. A throw here is treated as non-fatal by
+/// `save()` — the original staying in the library is the safe outcome of a decline
+/// or a revoked permission, not a reportable failure.
+typealias DeleteOriginalAsset = @Sendable (String) async throws -> Void
+
+/// Names which of a clip's two independently-failable steps broke: export and the
+/// Photos-library write fail independently (e.g. Photos permission revoked
+/// mid-save), and the fix differs, so the failure message names the step.
+enum ClipSaveError: Error, Equatable {
+    case exportFailed(reason: String)
+    case photosSaveFailed(reason: String)
+}
+
+/// The name prefix for every save-run scratch directory. The stale-directory sweep
+/// below removes only directories carrying this prefix; anything else sharing the
+/// parent folder is left alone.
+let exportDirectoryNamePrefix = "turnip-export-"
+
+/// A fresh UUID-named scratch directory under the app's temp directory for one
+/// `save()` run. `save()` removes it once every clip has exported and saved (or
+/// failed) — nothing needs to outlive the run, since there is no share sheet here.
+@Sendable func defaultExportDirectory() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("\(exportDirectoryNamePrefix)\(UUID().uuidString)", isDirectory: true)
+}
+
+/// Best-effort sweep of orphaned save-run scratch directories. A killed screen never
+/// finishes its run, so its scratch directory is left behind; each new run removes
+/// those stale siblings before making its own. Skips `excluding` (this run's
+/// about-to-be-created directory), touches only directories whose name carries
+/// `exportDirectoryNamePrefix`, and swallows every failure — leftover scratch is
+/// untidy but bounded (the OS purges tmp under pressure), so a sweep failure must
+/// never fail the run.
+func sweepStaleExportDirectories(in parentDirectory: URL, excluding current: URL) {
+    let candidates = (try? FileManager.default.contentsOfDirectory(
+        at: parentDirectory,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles])) ?? []
+    for candidate in candidates {
+        guard candidate != current,
+              candidate.lastPathComponent.hasPrefix(exportDirectoryNamePrefix),
+              (try? candidate.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+        else { continue }
+        try? FileManager.default.removeItem(at: candidate)
+    }
+}
+
+/// The production `ExportOneClip`, wired to the real pipeline step 7 (`ClipExporter`).
+private func exportOneClip(
+    _ spec: ClipSpec, _ asset: AVAsset, _ directory: URL,
+    _ progress: @escaping @Sendable (Double) -> Void
+) async throws -> URL {
+    do {
+        let exported = try await ClipExporter().export(
+            spec, from: asset, to: directory, progress: progress)
+        return exported.fileURL
+    } catch {
+        if error is CancellationError { throw error }
+        throw ClipSaveError.exportFailed(reason: error.localizedDescription)
+    }
+}
+
+/// The production `SaveOneClipToPhotos`, wired to `ClipPhotosSaver` (add-only
+/// authorization).
+private func saveOneClipToPhotos(_ url: URL) async throws {
+    do {
+        try await ClipPhotosSaver().saveVideo(at: url)
+    } catch {
+        throw ClipSaveError.photosSaveFailed(reason: error.localizedDescription)
+    }
+}
+
+/// The production `DeleteOriginalAsset`, wired to `PhotoAssetDeleter`.
+private func deleteOriginalVideo(_ assetIdentifier: String) async throws {
+    try await PhotoAssetDeleter().delete(assetIdentifier: assetIdentifier)
+}
+
 /// Backing store for `ClipListView` (`docs/UIUX.md` § "Clip List (triage)").
 @MainActor
 final class ClipListViewModel: ObservableObject {
     @Published private(set) var items: [ClipListItem]
+    /// True while `save()` is exporting/saving clips and possibly deleting the
+    /// original — the screen shows a spinner and disables its content for this.
+    @Published private(set) var isSaving = false
+    /// Set by `save()` when a clip failed and cleared once the screen's alert
+    /// dismisses. `nil` means no alert is showing.
+    @Published var saveFailureMessage: String?
 
     /// Decoded thumbnails by item id. Plain storage, not `@Published`: no view reads
     /// this dictionary — each card renders from its own `@State` thumbnail — so
@@ -15,58 +125,59 @@ final class ClipListViewModel: ObservableObject {
     private var thumbnails: [UUID: CGImage] = [:]
 
     private let asset: AVAsset
+    /// The source video's `PHAsset.localIdentifier`, for deleting it from Photos
+    /// when the original tile is trashed at `save()` time.
+    private let assetIdentifier: String
     private let loader: ClipThumbnailLoader
     private var inFlight: [UUID: Task<CGImage?, Never>] = [:]
+    private let exportClip: ExportOneClip
+    private let saveToPhotos: SaveOneClipToPhotos
+    private let deleteOriginalAsset: DeleteOriginalAsset
+    private let makeDirectory: @Sendable () -> URL
 
     /// The asset's duration in seconds, loaded once per asset and shared by every
     /// card's inline trim timeline. `nil` when the asset can't be read — the timeline
     /// then hides itself rather than guessing a scale.
     private var durationTask: Task<TimeInterval?, Never>?
 
+    /// Prepends the original-video item to `items`: the invariant that
+    /// `items[0]` always stands for the source video, enforced in one place rather
+    /// than left to every call site to remember. `duration` seeds its full-video
+    /// window; the original tile never opens the editor, so this never needs
+    /// re-deriving.
     init(
         items: [ClipListItem],
         asset: AVAsset,
-        loader: ClipThumbnailLoader = ClipThumbnailLoader()
+        assetIdentifier: String,
+        duration: TimeInterval,
+        loader: ClipThumbnailLoader = ClipThumbnailLoader(),
+        exportClip: @escaping ExportOneClip = exportOneClip,
+        saveToPhotos: @escaping SaveOneClipToPhotos = saveOneClipToPhotos,
+        deleteOriginalAsset: @escaping DeleteOriginalAsset = deleteOriginalVideo,
+        makeDirectory: @escaping @Sendable () -> URL = defaultExportDirectory
     ) {
-        self.items = items
+        let original = ClipListItem(
+            window: TrickWindow(startTime: 0, endTime: max(duration, 0)),
+            cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1),
+            isOriginal: true)
+        self.items = [original] + items
         self.asset = asset
+        self.assetIdentifier = assetIdentifier
         self.loader = loader
+        self.exportClip = exportClip
+        self.saveToPhotos = saveToPhotos
+        self.deleteOriginalAsset = deleteOriginalAsset
+        self.makeDirectory = makeDirectory
     }
 
-    /// The export action's input. Non-empty by default since every item starts kept
-    /// (see `ClipListItem`).
-    var keptItems: [ClipListItem] {
-        items.filter(\.isKept)
-    }
-
-    /// "Export N clips", disabled until at least one clip is kept.
-    var exportTitle: String {
-        let count = keptItems.count
-        return "Export \(count) clip\(count == 1 ? "" : "s")"
-    }
-
-    var canExport: Bool {
-        !keptItems.isEmpty
-    }
-
-    /// The analyzed asset, shared with the editor and export-confirmation
-    /// destinations so they preview and export from the same source the list's
-    /// thumbnails were decoded from.
+    /// The analyzed asset, shared with the editor destination so it previews and
+    /// exports from the same source the list's thumbnails were decoded from.
     var sourceAsset: AVAsset { asset }
 
-    /// The export action's input as the confirmation screen takes it: one entry
-    /// per kept clip, carrying the id, window, and crop rect it exports with.
-    var exportConfirmationItems: [ExportConfirmationItem] {
-        keptItems.map {
-            ExportConfirmationItem(
-                id: $0.id, window: $0.window, cropRect: $0.cropRect,
-                cropAdjustment: $0.cropAdjustment)
-        }
-    }
-
     /// Builds the editor's input for one list item: its window, crop rect, and crop
-    /// adjustment plus the analyzed asset. Keep/discard stays the list's own decision —
-    /// the editor no longer surfaces or edits it.
+    /// adjustment plus the analyzed asset. Trash stays the list's own decision — the
+    /// editor no longer surfaces or edits it. Never called for the original item —
+    /// its tile doesn't open the editor.
     ///
     /// `poseFrames` is empty — the pipeline's sampled frames don't reach the
     /// list yet (the Home → Processing wiring threads them through when it
@@ -86,7 +197,7 @@ final class ClipListViewModel: ObservableObject {
     /// Applies the editor's commit to the item with the given id: the window, crop rect,
     /// and crop adjustment the user left the editor with replace the list entry's, so
     /// trim/crop edits commit on back-navigation (docs/UIUX.md § "Clip Detail / Editor").
-    /// The item's `isKept` carries over unchanged — the editor doesn't own that decision.
+    /// The item's `isTrashed` carries over unchanged — the editor doesn't own that decision.
     /// A no-op for unknown ids — the item may have been removed by a re-run of detection,
     /// or deleted from the editor, while it was open.
     func applyEditorResult(_ result: ClipEditorResult, to id: UUID) {
@@ -96,42 +207,24 @@ final class ClipListViewModel: ObservableObject {
             window: result.window,
             cropRect: result.cropRect,
             cropAdjustment: result.cropAdjustment,
-            isKept: items[index].isKept)
+            isTrashed: items[index].isTrashed)
     }
 
-    /// Removes the item with the given id entirely — the editor's Delete action, distinct
-    /// from discarding: a discarded clip still shows in the grid (excluded from export
-    /// only), while a deleted clip is gone. A no-op for unknown ids.
+    /// Removes the item with the given id entirely — the editor's Delete action,
+    /// distinct from trashing: a trashed clip still shows in the grid (excluded from
+    /// saving only), while a deleted clip is gone. The original item can never be
+    /// removed this way — it can only be trashed — since deleting a `PHAsset` needs
+    /// `save()`'s confirmation-and-cleanup flow, not an in-memory removal. A no-op
+    /// for unknown ids.
     func delete(_ id: UUID) {
-        items.removeAll { $0.id == id }
+        items.removeAll { $0.id == id && !$0.isOriginal }
     }
 
-    /// The per-card keep/discard quick action. A no-op for unknown ids — the card that
+    /// The per-card trash quick action. A no-op for unknown ids — the card that
     /// fired it may have been removed by a re-run of detection.
-    func toggleKeep(_ item: ClipListItem) {
+    func toggleTrash(_ item: ClipListItem) {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
-        items[index].isKept.toggle()
-    }
-
-    /// True when every clip is kept (and there is at least one). Drives the toolbar's
-    /// "Select All" / "Deselect All" label.
-    var allKept: Bool {
-        !items.isEmpty && items.allSatisfy(\.isKept)
-    }
-
-    /// Marks every clip kept — the toolbar's "Select All" action.
-    func selectAll() {
-        for index in items.indices {
-            items[index].isKept = true
-        }
-    }
-
-    /// Clears every clip's keep flag — the toolbar's "Deselect All" action, shown when
-    /// everything is already kept.
-    func deselectAll() {
-        for index in items.indices {
-            items[index].isKept = false
-        }
+        items[index].isTrashed.toggle()
     }
 
     /// A write-through binding to one item, for a destination that edits a clip in place.
@@ -202,5 +295,63 @@ final class ClipListViewModel: ObservableObject {
             thumbnails[item.id] = image
         }
         return image
+    }
+
+    /// The "Done" action: exports and saves every non-trashed derived clip to
+    /// Photos, then — only once every one of them has succeeded — deletes the
+    /// original video from Photos if its tile was trashed. Returns `true` when the
+    /// screen should pop to Home; `false` when a clip failed, in which case
+    /// `saveFailureMessage` is set and the screen stays up so Done can be retried.
+    ///
+    /// The original is never deleted if any clip failed: deleting the source before
+    /// every derived clip has confirmed safely landed in Photos would risk losing
+    /// the user's only copy of a trick that never actually saved (the same lesson
+    /// commit 4613460 drew from the camera's save flow). A failed original deletion
+    /// (the user declined PhotoKit's own confirmation, or permission was revoked) is
+    /// swallowed rather than surfaced — the original staying in the library is the
+    /// safe outcome, not a reportable failure.
+    func save() async -> Bool {
+        guard !isSaving else { return false }
+        isSaving = true
+        defer { isSaving = false }
+
+        let directory = makeDirectory()
+        sweepStaleExportDirectories(in: directory.deletingLastPathComponent(), excluding: directory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        var failures: [String] = []
+        for item in items where !item.isOriginal && !item.isTrashed {
+            do {
+                let spec = ClipSpec(
+                    window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment)
+                let fileURL = try await exportClip(spec, asset, directory) { _ in }
+                try await saveToPhotos(fileURL)
+            } catch {
+                failures.append(Self.reason(for: error))
+            }
+        }
+        guard failures.isEmpty else {
+            saveFailureMessage = failures.joined(separator: "\n")
+            return false
+        }
+
+        if let original = items.first(where: \.isOriginal), original.isTrashed {
+            try? await deleteOriginalAsset(assetIdentifier)
+        }
+        return true
+    }
+
+    /// The failure message for one clip. Adapters throw `ClipSaveError` to get the
+    /// failed step named; anything else falls back to its localized description.
+    private static func reason(for error: Error) -> String {
+        switch error {
+        case ClipSaveError.exportFailed(let reason):
+            return "Export failed — \(reason)"
+        case ClipSaveError.photosSaveFailed(let reason):
+            return "Couldn't save to Photos — \(reason)"
+        default:
+            return error.localizedDescription
+        }
     }
 }

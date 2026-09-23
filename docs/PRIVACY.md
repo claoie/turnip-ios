@@ -32,7 +32,10 @@ it's summarized from — keep both in sync when data handling changes.
   (`isNetworkAccessAllowed` in `PhotoVideoResolver`/`ThumbnailLoader`) — from
   the user's own iCloud, through a system framework. Videos are read from the
   Photos library the user grants access to, processed on-device by the bundled
-  MoveNet model, and exported clips are written back to Photos.
+  MoveNet model, and exported clips are written back to Photos. If the user
+  trashes the original video's tile in Clip List, the original is deleted
+  from Photos too — a user-initiated, on-device change to their own library,
+  not data leaving the device.
 - Nothing is uploaded, shared, or transmitted to any Turnip-controlled server.
 
 ## Privacy manifest (`Turnip/Resources/PrivacyInfo.xcprivacy`)
@@ -66,13 +69,18 @@ require a manifest/signature. If a dependency is added, check both.
 - Home requests `.readWrite` for the gallery. PhotoKit offers no
   read-only level — the choices are add-only (can't enumerate the
   library) or read/write — and exporting clips back to Photos needs the
-  write half anyway, so one honest prompt covers both.
+  write half anyway, so one honest prompt covers both. The write half is
+  also what lets Clip List delete the original video (`PhotoAssetDeleter`,
+  `PHAssetChangeRequest.deleteAssets`) when the user trashes its tile and
+  taps Done — PhotoKit shows its own "Allow Turnip to delete?" system
+  confirmation before the deletion happens, on top of the one-time
+  read/write grant.
 - `NSPhotoLibraryUsageDescription` explains the read side in plain
   language. `NSPhotoLibraryAddUsageDescription` ships alongside it
-  because the export path — reachable from Home through Processing and
+  because the clip-save path — reachable from Home through Processing and
   the clip list — calls `requestAuthorization(for: .addOnly)`, and iOS
   terminates the app on that call when the string is absent. A user does
-  not normally see the string: reaching an export means the read/write
+  not normally see the string: reaching a save means the read/write
   grant from Home is already in place, which determines add-only as
   authorized, so the call returns without presenting a second prompt.
 - `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` is set: with
@@ -91,19 +99,14 @@ require a manifest/signature. If a dependency is added, check both.
   never accumulates files. `TurnipApp` sweeps orphans left by crashed sessions
   at launch. The prefix is what makes both the delete and the sweep recognize
   only our files.
-- **Clip exports.** The export-confirmation screen stages each exported clip in
-  a fresh `tmp/turnip-export-<uuid>/` scratch directory and hands it to Photos
-  through `ClipPhotosSaver` (add-only); the whole directory is deleted when the
-  screen goes away (`ExportConfirmationViewModel.tearDown()` waits for the run
-  to drain first) — so a staged temp URL is removed after its Photos save
-  succeeds *and* after it fails (verified, issue #81). Removal waits for screen
-  dismissal rather than happening per clip right after the save, because the
-  Share action hands the system the file itself: a saved clip stays shareable
-  while its row is on screen, and a clip whose Photos save failed deliberately
-  keeps its file — sharing to Messages or AirDrop is the way out of a revoked
-  Photos permission. A screen killed before `tearDown()` is swept by the next
-  screen (`sweepStaleExportDirectories`); the `turnip-export-` prefix is what
-  makes the sweep recognize only our directories.
+- **Clip exports.** Tapping "Done" in Clip List (`ClipListViewModel.save()`)
+  stages every non-trashed derived clip in a fresh `tmp/turnip-export-<uuid>/`
+  scratch directory, hands each one to Photos through `ClipPhotosSaver`
+  (add-only), and deletes the whole directory once the run ends — success or
+  failure, since there is no Share action here to keep a file alive for. A
+  `save()` call killed mid-run is swept by the next one
+  (`sweepStaleExportDirectories`); the `turnip-export-` prefix is what makes
+  the sweep recognize only our directories.
 - **Thumbnails** are in-memory only (`PHCachingImageManager`), in both
   the Home grid and the clip-list work — there is no on-disk thumbnail
   cache. If one ever lands, it belongs in `Caches/`, never `Documents/`,

@@ -2,73 +2,42 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// The export-confirmation screen's per-clip export, wired to the real pipeline step 7
-/// (`ClipExporter`): trims the source video to the window, crops to its rect, and writes
-/// an `.mp4` into the screen's scratch directory. Failures surface as
-/// `ExportConfirmationError.exportFailed` so the screen's per-clip callout names the
-/// step; cancellation propagates untouched so the screen stops the run instead of
-/// failing the clip.
+/// The triage screen (`docs/UIUX.md` § "Clip List (triage)"): a grid of square tiles
+/// — the original video first, then one per detected trick window, then a trailing
+/// "+" tile that appends a new clip. Each tile autoplay-loops its window inline
+/// (accessibility permitting) so the grid reads like a wall of tiny previews rather
+/// than static frames, draws a read-only timeline over the bottom showing where its
+/// window sits in the full source video (not adjustable here — that's what the
+/// editor is for, and the original tile has none since its window is the whole
+/// video), and carries the trash toggle. Tapping a derived clip's tile opens the
+/// full `ClipEditorView` directly — "view large" and "edit" are the same entry
+/// point, not a separate icon; the original tile isn't tappable, since editing the
+/// source video isn't a thing this screen does.
 ///
-/// File-scope rather than a member of `ClipListView`: a static method value taken from a
-/// `View`-conforming type carries the enclosing type in its thunk, which the Swift 6
-/// concurrency checker won't treat as `@Sendable` even when the function itself captures
-/// nothing.
-private func exportOneClip(
-    _ spec: ClipSpec, _ asset: AVAsset, _ directory: URL,
-    _ progress: @escaping @Sendable (Double) -> Void
-) async throws -> URL {
-    do {
-        let exported = try await ClipExporter().export(
-            spec,
-            from: asset,
-            to: directory,
-            progress: progress)
-        return exported.fileURL
-    } catch {
-        if error is CancellationError { throw error }
-        throw ExportConfirmationError.exportFailed(reason: error.localizedDescription)
-    }
-}
-
-/// The export-confirmation screen's Photos save, wired to `ClipPhotosSaver` (add-only
-/// authorization). Failures surface as `ExportConfirmationError.photosSaveFailed` so the
-/// per-clip callout names the step. File-scope for the same reason as `exportOneClip`.
-private func saveOneClipToPhotos(_ url: URL) async throws {
-    do {
-        try await ClipPhotosSaver().saveVideo(at: url)
-    } catch {
-        throw ExportConfirmationError.photosSaveFailed(reason: error.localizedDescription)
-    }
-}
-
-/// The triage screen (`docs/UIUX.md` § "Clip List (triage)"): a grid of square tiles,
-/// one per detected trick window, plus a trailing "+" tile that appends a new clip. Each
-/// tile autoplay-loops its window inline (accessibility permitting) so the grid reads
-/// like a wall of tiny previews rather than static frames, draws a read-only timeline
-/// over the bottom showing where its window sits in the full source video (not
-/// adjustable here — that's what the editor is for), and carries the keep/discard
-/// toggle. Tapping the tile itself opens the full `ClipEditorView` directly — "view
-/// large" and "edit" are the same entry point, not a separate icon.
+/// "Done" exports and saves every non-trashed derived clip to Photos, deletes the
+/// original from Photos if its tile was trashed, and pops back to Home — there is no
+/// separate export/confirmation screen.
 ///
-/// The processing screen pushes this with the pipeline's output; the export action goes
-/// to export confirmation. The back chevron pops to Home rather than to the processing
-/// screen, Photos-app style — centered inline title on the same line as the chevron.
-/// This view deliberately declares no `NavigationStack` of its own — it lives on the
-/// flow's shared stack.
+/// The processing screen pushes this with the pipeline's output. The back chevron
+/// pops to Home rather than to the processing screen, Photos-app style — centered
+/// inline title on the same line as the chevron. This view deliberately declares no
+/// `NavigationStack` of its own — it lives on the flow's shared stack.
 struct ClipListView: View {
     @StateObject private var viewModel: ClipListViewModel
-    @State private var showingExport = false
     @State private var expandTarget: ExpandTarget?
     let popToRoot: () -> Void
 
     init(
         items: [ClipListItem],
         asset: AVAsset,
+        assetIdentifier: String,
+        duration: TimeInterval,
         loader: ClipThumbnailLoader = ClipThumbnailLoader(),
         popToRoot: @escaping () -> Void = {}
     ) {
         _viewModel = StateObject(wrappedValue: ClipListViewModel(
-            items: items, asset: asset, loader: loader))
+            items: items, asset: asset, assetIdentifier: assetIdentifier,
+            duration: duration, loader: loader))
         self.popToRoot = popToRoot
     }
 
@@ -86,12 +55,13 @@ struct ClipListView: View {
                         item: item,
                         viewModel: viewModel,
                         isSuspended: expandTarget != nil,
-                        onOpen: { expandTarget = ExpandTarget(id: item.id) })
+                        onOpen: item.isOriginal ? nil : { expandTarget = ExpandTarget(id: item.id) })
                 }
                 AddClipTile { Task { await viewModel.addClip() } }
             }
             .padding()
         }
+        .disabled(viewModel.isSaving)
         .navigationTitle("Clips")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -104,33 +74,49 @@ struct ClipListView: View {
             // Photos-style, chevron only, no text label.
             ToolbarItem(placement: .navigationBarLeading) {
                 BackChevronButton(accessibilityLabel: "Back to Home", action: popToRoot)
+                    .disabled(viewModel.isSaving)
             }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(viewModel.allKept ? "Deselect All" : "Select All") {
-                    if viewModel.allKept {
-                        viewModel.deselectAll()
-                    } else {
-                        viewModel.selectAll()
+        }
+        .safeAreaInset(edge: .bottom) {
+            PrimaryActionBar("Done", isEnabled: !viewModel.isSaving) {
+                Task {
+                    if await viewModel.save() {
+                        popToRoot()
                     }
                 }
             }
         }
-        .navigationDestination(isPresented: $showingExport) {
-            ExportConfirmationView(
-                items: viewModel.exportConfirmationItems,
-                asset: viewModel.sourceAsset,
-                exportClip: exportOneClip,
-                saveToPhotos: saveOneClipToPhotos,
-                popToRoot: popToRoot)
-        }
-        .safeAreaInset(edge: .bottom) {
-            PrimaryActionBar(viewModel.exportTitle, isEnabled: viewModel.canExport) {
-                showingExport = true
+        .overlay {
+            if viewModel.isSaving {
+                savingOverlay
             }
+        }
+        .alert("Couldn't save clips", isPresented: saveFailurePresented) {
+            Button("OK") {}
+        } message: {
+            Text(viewModel.saveFailureMessage ?? "")
         }
         .fullScreenCover(item: $expandTarget) { target in
             editor(for: target)
         }
+    }
+
+    private var savingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea()
+            ProgressView {
+                Text("Saving to Photos…")
+            }
+            .tint(.white)
+            .foregroundStyle(.white)
+        }
+    }
+
+    private var saveFailurePresented: Binding<Bool> {
+        Binding(
+            get: { viewModel.saveFailureMessage != nil },
+            set: { if !$0 { viewModel.saveFailureMessage = nil } }
+        )
     }
 
     /// The tile tap's destination: the full `ClipEditorView` (crop + trim) — tapping
@@ -184,10 +170,10 @@ private struct AddClipTile: View {
 
 /// One triage tile: a square clip surface (an autoplay-looping preview layered over its
 /// poster thumbnail, so there's no blank flash while the loop's player becomes ready)
-/// with the keep/discard toggle at the top-trailing corner and a read-only range
-/// timeline overlaid on the bottom edge — siblings drawn as overlays on the tap-driven
-/// media layer rather than nested inside a shared `Button`, so each keeps its own hit
-/// target instead of racing the tile's tap.
+/// with the trash toggle at the top-trailing corner and, for a derived clip, a
+/// read-only range timeline overlaid on the bottom edge — siblings drawn as overlays
+/// on the tap-driven media layer rather than nested inside a shared `Button`, so each
+/// keeps its own hit target instead of racing the tile's tap.
 ///
 /// Owns its own `AVQueuePlayer` + `AVPlayerLooper` rather than sharing one across the
 /// grid: every visible tile loops simultaneously, which a single shared player can't
@@ -200,7 +186,9 @@ private struct ClipCardView: View {
     /// editor's `fullScreenCover` doesn't reliably fire `onDisappear` on the tiles
     /// behind it, so this is the signal that actually pauses them instead.
     let isSuspended: Bool
-    let onOpen: () -> Void
+    /// Opens the editor on this clip, or `nil` for the original item — its tile has
+    /// no tap action.
+    let onOpen: (() -> Void)?
 
     @State private var thumbnail: CGImage?
     @State private var duration: TimeInterval?
@@ -219,7 +207,7 @@ private struct ClipCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             tile
-            Text(item.durationLabel)
+            Text(item.isOriginal ? "Original video" : item.durationLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -261,16 +249,22 @@ private struct ClipCardView: View {
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .clipped()
                 .contentShape(Rectangle())
-                .onTapGesture(perform: onOpen)
+                .onTapGesture { onOpen?() }
                 // The UI-test screenshot harness waits on this label to prove the
                 // thumbnail fallback actually engaged.
-                .accessibilityLabel(thumbnail == nil ? "Thumbnail placeholder" : "Open clip")
-                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(tileAccessibilityLabel)
+                .accessibilityAddTraits(onOpen == nil ? [] : .isButton)
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(alignment: .topTrailing) { keepButton }
+        .overlay(alignment: .topTrailing) { trashButton }
         .overlay(alignment: .bottom) { trimOverlay }
+        .opacity(item.isTrashed ? 0.4 : 1)
+    }
+
+    private var tileAccessibilityLabel: String {
+        guard thumbnail != nil else { return "Thumbnail placeholder" }
+        return item.isOriginal ? "Original video" : "Open clip"
     }
 
     @ViewBuilder
@@ -324,39 +318,35 @@ private struct ClipCardView: View {
         player = nil
     }
 
-    /// The diameter every top-corner icon circle renders at, kept/discarded or not —
-    /// a fixed frame rather than content-driven padding, so hiding the keep button's
-    /// checkmark for the unselected state can never change its size.
+    /// The diameter every top-corner icon circle renders at.
     private static let iconButtonDiameter: CGFloat = 28
 
-    /// Photos-style selection marker: a solid blue circle with a white checkmark when
-    /// kept, the same semi-transparent grey circle the other tile buttons use —
-    /// but empty — when discarded. Custom rather than `ScrimIconButton`, since only
-    /// this one needs a background color that changes with state.
-    private var keepButton: some View {
-        Button(action: toggleKeep) {
+    /// The per-tile trash toggle: a solid red circle while trashed, the same
+    /// semi-transparent grey circle the other tile buttons use otherwise. For the
+    /// original item, trashing it is what tells "Done" to delete the source video
+    /// from Photos; for a derived clip, it's excluded from the save.
+    private var trashButton: some View {
+        Button(action: toggleTrash) {
             ZStack {
-                Circle().fill(item.isKept ? Color.accentColor : Color.black.opacity(0.4))
-                if item.isKept {
-                    Image(systemName: "checkmark")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                }
+                Circle().fill(item.isTrashed ? Color.red : Color.black.opacity(0.4))
+                Image(systemName: "trash")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
             }
             .frame(width: Self.iconButtonDiameter, height: Self.iconButtonDiameter)
         }
         .buttonStyle(.plain)
         .padding(6)
-        .accessibilityLabel(item.isKept ? "Discard clip" : "Keep clip")
+        .accessibilityLabel(item.isTrashed ? "Restore clip" : "Trash clip")
     }
 
-    private func toggleKeep() {
-        viewModel.toggleKeep(item)
+    private func toggleTrash() {
+        viewModel.toggleTrash(item)
     }
 
     @ViewBuilder
     private var trimOverlay: some View {
-        if let duration {
+        if let duration, !item.isOriginal {
             ClipRangeTimelineView(window: item.window, duration: duration)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -376,13 +366,15 @@ private struct ClipCardView: View {
                 ClipListItem(
                     window: TrickWindow(startTime: 9, endTime: 11.5),
                     cropRect: NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1),
-                    isKept: false
+                    isTrashed: true
                 )
             ],
             // AVAsset is abstract and throws at runtime; AVURLAsset is the concrete
             // subclass. The URL resolves to nothing — the preview shows the
             // placeholder tiles, which is the honest fallback.
-            asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null"))
+            asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
+            assetIdentifier: "preview",
+            duration: 15
         )
     }
     .preferredColorScheme(.dark)

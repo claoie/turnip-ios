@@ -1,13 +1,18 @@
 import Foundation
 
 /// One triage card's data: a detected trick window plus its computed crop rect
-/// (docs/DESIGN.md pipeline steps 5-6), with the user's keep/discard decision.
+/// (docs/DESIGN.md pipeline steps 5-6), with the user's trash decision.
 ///
-/// `isKept` defaults to `true`: the resolved bulk keep/discard decision in
-/// `docs/UIUX.md` says every clip starts kept and discarding is per-card, so the list
-/// shows everything until the user opts a clip out. `Identifiable` by a stable `id`
-/// (not the window times) so view state survives a re-run of detection producing
-/// slightly different windows.
+/// `isTrashed` defaults to `false`: every clip starts untrashed, and the list shows
+/// everything until the user marks a card for removal. `Identifiable` by a stable
+/// `id` (not the window times) so view state survives a re-run of detection
+/// producing slightly different windows.
+///
+/// `isOriginal` marks the one item — always `ClipListViewModel.items[0]` — that
+/// stands for the source video already in Photos rather than a derived clip: it
+/// carries the full-video window and full-frame crop, is never opened in the
+/// editor, and trashing it means "delete the original from Photos" rather than
+/// "skip exporting this clip".
 struct ClipListItem: Hashable, Identifiable, Sendable {
     let id: UUID
     let window: TrickWindow
@@ -15,25 +20,28 @@ struct ClipListItem: Hashable, Identifiable, Sendable {
     /// The editor's manual pinch/rotate/drag adjustment on top of `cropRect`, carried so
     /// it survives a re-open of the editor and reaches export.
     var cropAdjustment: CropAdjustment
-    var isKept: Bool
+    var isTrashed: Bool
+    let isOriginal: Bool
 
     init(
         id: UUID = UUID(),
         window: TrickWindow,
         cropRect: NormalizedRect,
         cropAdjustment: CropAdjustment = .identity,
-        isKept: Bool = true
+        isTrashed: Bool = false,
+        isOriginal: Bool = false
     ) {
         self.id = id
         self.window = window
         self.cropRect = cropRect
         self.cropAdjustment = cropAdjustment
-        self.isKept = isKept
+        self.isTrashed = isTrashed
+        self.isOriginal = isOriginal
     }
 
     /// "2.4s"-style duration label for the card, via the one shared clip-duration
-    /// formatter — the triage card, the editor, and the export confirmation row must
-    /// render the same window identically.
+    /// formatter — the triage card and the editor must render the same window
+    /// identically.
     var durationLabel: String {
         ClipDurationFormatter.string(from: window.endTime - window.startTime)
     }

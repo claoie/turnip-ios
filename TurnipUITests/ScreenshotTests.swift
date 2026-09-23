@@ -12,53 +12,6 @@ final class ScreenshotTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// Export confirmation mid-run: first clip at 50%, second waiting.
-    func testExportConfirmationProgress() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-screenshotExportConfirmation"]
-        app.launch()
-        // The row sets an explicit combined accessibilityLabel ("Clip 1 · 3s,
-        // exporting, 50 percent"), so the ProgressView's own "Exporting…" text is
-        // never exposed as its own element — match the row's label instead.
-        let exportingRow = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS 'exporting'"))
-            .firstMatch
-        XCTAssertTrue(exportingRow.waitForExistence(timeout: 15))
-        addScreenshot(named: "export-confirmation-progress")
-    }
-
-    /// Export confirmation after the run: "2 of 2 clips saved to Photos".
-    func testExportConfirmationSummary() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-screenshotExportConfirmationFinished"]
-        app.launch()
-        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 15))
-        addScreenshot(named: "export-confirmation-summary")
-    }
-
-    /// The Share action on a saved clip opens the system share sheet — the whole of
-    /// issue 12's publish story. Drives the real affordance (tap the row's Share
-    /// button), not a direct presentation, and screenshots the sheet.
-    func testExportConfirmationShareSheet() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-screenshotExportConfirmationFinished"]
-        app.launch()
-        let shareButton = app.buttons["Share"].firstMatch
-        XCTAssertTrue(shareButton.waitForExistence(timeout: 15))
-        // A Share action over a missing file disables itself, so an enabled button is
-        // also the assertion that the run left a real file behind for it.
-        XCTAssertTrue(shareButton.isEnabled)
-        shareButton.tap()
-
-        // `UIActivityViewController` exposes its container as `ActivityListView`.
-        // The fallback covers the identifier changing under us: the sheet is modal,
-        // so the button that opened it stops being hittable once it is up.
-        let activitySheet = app.otherElements["ActivityListView"]
-        let sheetIsUp = activitySheet.waitForExistence(timeout: 15) || !shareButton.isHittable
-        XCTAssertTrue(sheetIsUp, "tapping Share did not present the system share sheet")
-        addScreenshot(named: "export-confirmation-share-sheet")
-    }
-
     /// Home's Photos-denied empty state: the only Home state scriptable without the
     /// Photos library (the grid needs real PHAssets, which have no public
     /// initializer, and the real HomeView would raise the system permission prompt).
@@ -72,7 +25,7 @@ final class ScreenshotTests: XCTestCase {
         addScreenshot(named: "home-access-denied")
     }
 
-    /// Clip list triage: three detected windows, one discarded, thumbnails as
+    /// Clip list triage: three detected windows, one trashed, thumbnails as
     /// placeholder tiles (the /dev/null asset decodes nothing; the loader falls
     /// back to the placeholder — the test waits for the placeholder's
     /// accessibility element, so it guards the fallback and not just the
@@ -103,6 +56,24 @@ final class ScreenshotTests: XCTestCase {
             .firstMatch
         XCTAssertTrue(rangeTimeline.waitForExistence(timeout: 15))
         addScreenshot(named: "clip-list-media")
+    }
+
+    /// Trashing a clip flips its icon button's accessibility label, and the screen
+    /// carries no leftover select-all affordance — the triage screen's toolbar now
+    /// has only the back chevron, and "Done" replaced "Export N clips".
+    func testTrashButtonTogglesToRestore() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotClipListMedia"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Clips"].waitForExistence(timeout: 15))
+        let trashButton = app.buttons["Trash clip"].firstMatch
+        XCTAssertTrue(trashButton.waitForExistence(timeout: 15))
+        trashButton.tap()
+
+        XCTAssertTrue(app.buttons["Restore clip"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Select All"].exists)
+        XCTAssertFalse(app.buttons["Deselect All"].exists)
+        XCTAssertTrue(app.buttons["Done"].exists)
     }
 
     /// Tapping a tile opens the full `ClipEditorView` directly — the tile itself is

@@ -32,6 +32,8 @@ struct HomeView: View {
                                     ClipListItem(window: $0.window, cropRect: $0.cropRect)
                                 },
                                 asset: result.asset,
+                                assetIdentifier: video.assetIdentifier,
+                                duration: video.duration,
                                 popToRoot: popToRoot
                             )
                         }

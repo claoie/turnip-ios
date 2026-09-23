@@ -8,15 +8,41 @@ final class ClipListTests: XCTestCase {
     private let window = TrickWindow(startTime: 2, endTime: 5)
     private let fullFrame = NormalizedRect(minX: 0, maxX: 1, minY: 0, maxY: 1)
 
-    private func makeItem(isKept: Bool = true) -> ClipListItem {
-        ClipListItem(window: window, cropRect: fullFrame, isKept: isKept)
+    private func makeItem(isTrashed: Bool = false) -> ClipListItem {
+        ClipListItem(window: window, cropRect: fullFrame, isTrashed: isTrashed)
     }
 
     /// `AVAsset` is abstract and throws at runtime, so the view-model tests use the
     /// concrete `AVURLAsset` subclass. The URL resolves to nothing — these tests never
-    /// decode, they only exercise the keep/discard and export-title logic.
+    /// decode, they only exercise the trash and save logic.
     private func dummyAsset() -> AVURLAsset {
         AVURLAsset(url: URL(fileURLWithPath: "/dev/null"))
+    }
+
+    /// Builds a view model whose `items[0]` is always the injected original item —
+    /// the invariant `ClipListViewModel.init` enforces — followed by `items`.
+    @MainActor
+    private func makeViewModel(
+        items: [ClipListItem],
+        asset: AVURLAsset? = nil,
+        assetIdentifier: String = "asset-1",
+        duration: TimeInterval = 30,
+        exportClip: @escaping ExportOneClip = { _, _, _, _ in URL(fileURLWithPath: "/tmp/fake.mp4") },
+        saveToPhotos: @escaping SaveOneClipToPhotos = { _ in },
+        deleteOriginalAsset: @escaping DeleteOriginalAsset = { _ in }
+    ) -> ClipListViewModel {
+        ClipListViewModel(
+            items: items,
+            asset: asset ?? dummyAsset(),
+            assetIdentifier: assetIdentifier,
+            duration: duration,
+            exportClip: exportClip,
+            saveToPhotos: saveToPhotos,
+            deleteOriginalAsset: deleteOriginalAsset,
+            makeDirectory: {
+                FileManager.default.temporaryDirectory
+                    .appendingPathComponent("turnip-test-\(UUID().uuidString)", isDirectory: true)
+            })
     }
 
     /// A 90°-rotated track's preferredTransform: landscape-encoded portrait video.
@@ -26,9 +52,8 @@ final class ClipListTests: XCTestCase {
 
     // MARK: - ClipListItem
 
-    func testNewItemsStartKept() {
-        // The resolved bulk keep/discard decision in docs/UIUX.md: every clip starts kept.
-        XCTAssertTrue(makeItem().isKept)
+    func testNewItemsStartUntrashed() {
+        XCTAssertFalse(makeItem().isTrashed)
     }
 
     func testDurationLabelShowsOneDecimalSecond() {
@@ -41,81 +66,104 @@ final class ClipListTests: XCTestCase {
         XCTAssertEqual(item.durationLabel, "2.4s")
     }
 
-    // MARK: - ClipListViewModel
+    // MARK: - ClipListViewModel: the original item
 
     @MainActor
-    func testToggleKeepFlipsOnlyTheTappedCard() {
-        let first = makeItem(), second = makeItem()
-        let viewModel = ClipListViewModel(items: [first, second], asset: dummyAsset())
+    func testOriginalItemIsAlwaysFirst() {
+        let viewModel = makeViewModel(items: [makeItem(), makeItem()], duration: 12)
 
-        viewModel.toggleKeep(first)
-
-        XCTAssertFalse(viewModel.items[0].isKept)
-        XCTAssertTrue(viewModel.items[1].isKept)
-
-        viewModel.toggleKeep(first)
-        XCTAssertTrue(viewModel.items[0].isKept)
+        XCTAssertEqual(viewModel.items.count, 3)
+        XCTAssertTrue(viewModel.items[0].isOriginal)
+        XCTAssertFalse(viewModel.items[1].isOriginal)
+        XCTAssertFalse(viewModel.items[2].isOriginal)
     }
 
     @MainActor
-    func testToggleKeepIgnoresUnknownItems() {
-        let viewModel = ClipListViewModel(items: [makeItem()], asset: dummyAsset())
+    func testOriginalItemSpansTheFullDuration() {
+        let viewModel = makeViewModel(items: [], duration: 12)
 
-        viewModel.toggleKeep(makeItem())
+        XCTAssertEqual(viewModel.items[0].window, TrickWindow(startTime: 0, endTime: 12))
+        XCTAssertEqual(viewModel.items[0].cropRect, fullFrame)
+        XCTAssertFalse(viewModel.items[0].isTrashed)
+    }
 
-        XCTAssertTrue(viewModel.items[0].isKept)
+    @MainActor
+    func testDeleteNeverRemovesTheOriginalItem() {
+        let viewModel = makeViewModel(items: [])
+        let originalId = viewModel.items[0].id
+
+        viewModel.delete(originalId)
+
+        XCTAssertEqual(viewModel.items.count, 1)
+        XCTAssertTrue(viewModel.items[0].isOriginal)
+    }
+
+    // MARK: - ClipListViewModel: trash toggle
+
+    @MainActor
+    func testToggleTrashFlipsOnlyTheTappedCard() {
+        let first = makeItem(), second = makeItem()
+        let viewModel = makeViewModel(items: [first, second])
+
+        viewModel.toggleTrash(first)
+
+        XCTAssertTrue(viewModel.items[1].isTrashed)
+        XCTAssertFalse(viewModel.items[2].isTrashed)
+
+        viewModel.toggleTrash(first)
+        XCTAssertFalse(viewModel.items[1].isTrashed)
+    }
+
+    @MainActor
+    func testToggleTrashIgnoresUnknownItems() {
+        let viewModel = makeViewModel(items: [makeItem()])
+
+        viewModel.toggleTrash(makeItem())
+
+        XCTAssertFalse(viewModel.items[1].isTrashed)
+    }
+
+    @MainActor
+    func testToggleTrashWorksOnTheOriginalItem() {
+        let viewModel = makeViewModel(items: [])
+        let original = viewModel.items[0]
+
+        viewModel.toggleTrash(original)
+
+        XCTAssertTrue(viewModel.items[0].isTrashed)
     }
 
     @MainActor
     func testBindingWritesThroughToTheListEntry() {
         let target = makeItem()
-        let viewModel = ClipListViewModel(items: [makeItem(), target], asset: dummyAsset())
+        let viewModel = makeViewModel(items: [makeItem(), target])
 
         guard let binding = viewModel.binding(for: target.id) else {
             XCTFail("expected a binding for an item that is in the list")
             return
         }
-        binding.wrappedValue.isKept = false
+        binding.wrappedValue.isTrashed = true
 
         // The binding writes through to the list entry with the same id — the editor
         // destination edits the clip the card tapped.
-        XCTAssertFalse(viewModel.items[1].isKept)
-        XCTAssertTrue(viewModel.items[0].isKept)
+        XCTAssertTrue(viewModel.items[2].isTrashed)
+        XCTAssertFalse(viewModel.items[1].isTrashed)
     }
 
     @MainActor
     func testBindingIsNilForAnItemThatIsNotInTheList() {
-        let viewModel = ClipListViewModel(items: [makeItem()], asset: dummyAsset())
+        let viewModel = makeViewModel(items: [makeItem()])
 
         XCTAssertNil(viewModel.binding(for: makeItem().id))
     }
 
-    @MainActor
-    func testExportTitleCountsKeptClips() {
-        let viewModel = ClipListViewModel(
-            items: [makeItem(), makeItem(isKept: false)], asset: dummyAsset())
-
-        XCTAssertEqual(viewModel.exportTitle, "Export 1 clip")
-        XCTAssertTrue(viewModel.canExport)
-        XCTAssertEqual(viewModel.keptItems.count, 1)
-    }
-
-    @MainActor
-    func testExportDisabledWhenEveryClipIsDiscarded() {
-        let viewModel = ClipListViewModel(items: [makeItem(isKept: false)], asset: dummyAsset())
-
-        XCTAssertEqual(viewModel.exportTitle, "Export 0 clips")
-        XCTAssertFalse(viewModel.canExport)
-        XCTAssertTrue(viewModel.keptItems.isEmpty)
-    }
-
-    // MARK: - Editor and export destinations
+    // MARK: - Editor destination
 
     @MainActor
     func testApplyEditorResultReplacesTheMatchingItem() {
         let target = makeItem()
         let other = makeItem()
-        let viewModel = ClipListViewModel(items: [other, target], asset: dummyAsset())
+        let viewModel = makeViewModel(items: [other, target])
 
         let result = ClipEditorResult(
             window: TrickWindow(startTime: 1, endTime: 4),
@@ -124,21 +172,21 @@ final class ClipListTests: XCTestCase {
         viewModel.applyEditorResult(result, to: target.id)
 
         // The editor's commit lands on the tapped item — window, crop rect, and crop
-        // adjustment — and leaves the rest of the list (and the item's own keep/discard
+        // adjustment — and leaves the rest of the list (and the item's own trash
         // decision, which the editor doesn't own) alone.
-        let updated = viewModel.items[1]
+        let updated = viewModel.items[2]
         XCTAssertEqual(updated.id, target.id)
         XCTAssertEqual(updated.window, result.window)
         XCTAssertEqual(updated.cropRect, result.cropRect)
         XCTAssertEqual(updated.cropAdjustment, result.cropAdjustment)
-        XCTAssertEqual(updated.isKept, target.isKept)
-        XCTAssertEqual(viewModel.items[0], other)
+        XCTAssertEqual(updated.isTrashed, target.isTrashed)
+        XCTAssertEqual(viewModel.items[1], other)
     }
 
     @MainActor
     func testApplyEditorResultIgnoresUnknownIds() {
         let item = makeItem()
-        let viewModel = ClipListViewModel(items: [item], asset: dummyAsset())
+        let viewModel = makeViewModel(items: [item])
 
         viewModel.applyEditorResult(
             ClipEditorResult(
@@ -147,35 +195,36 @@ final class ClipListTests: XCTestCase {
                 cropAdjustment: .identity),
             to: makeItem().id)
 
-        XCTAssertEqual(viewModel.items, [item])
+        XCTAssertEqual(viewModel.items[1], item)
     }
 
     @MainActor
     func testDeleteRemovesTheMatchingItem() {
         let target = makeItem()
         let other = makeItem()
-        let viewModel = ClipListViewModel(items: [other, target], asset: dummyAsset())
+        let viewModel = makeViewModel(items: [other, target])
 
         viewModel.delete(target.id)
 
-        XCTAssertEqual(viewModel.items, [other])
+        XCTAssertEqual(viewModel.items[1], other)
+        XCTAssertEqual(viewModel.items.count, 2)
     }
 
     @MainActor
     func testDeleteIgnoresUnknownIds() {
         let item = makeItem()
-        let viewModel = ClipListViewModel(items: [item], asset: dummyAsset())
+        let viewModel = makeViewModel(items: [item])
 
         viewModel.delete(makeItem().id)
 
-        XCTAssertEqual(viewModel.items, [item])
+        XCTAssertEqual(viewModel.items[1], item)
     }
 
     @MainActor
     func testEditorSourceCarriesTheItemAndAsset() {
         let asset = dummyAsset()
         let item = makeItem()
-        let viewModel = ClipListViewModel(items: [item], asset: asset)
+        let viewModel = makeViewModel(items: [item], asset: asset)
 
         let source = viewModel.editorSource(for: item)
 
@@ -185,21 +234,212 @@ final class ClipListTests: XCTestCase {
         XCTAssertTrue(source.asset === asset)
     }
 
+    // MARK: - save()
+
     @MainActor
-    func testExportConfirmationItemsMapsOnlyKeptItems() {
+    func testSaveExportsAndSavesEveryNonTrashedDerivedClip() async {
+        actor Recorder {
+            var exportedWindows: [TrickWindow] = []
+            var savedURLs: [URL] = []
+            func recordExport(_ window: TrickWindow) { exportedWindows.append(window) }
+            func recordSave(_ url: URL) { savedURLs.append(url) }
+        }
+        let recorder = Recorder()
         let kept = makeItem()
-        let discarded = makeItem(isKept: false)
-        let viewModel = ClipListViewModel(items: [discarded, kept], asset: dummyAsset())
+        let trashed = makeItem(isTrashed: true)
+        let viewModel = makeViewModel(
+            items: [kept, trashed],
+            exportClip: { spec, _, directory, _ in
+                await recorder.recordExport(spec.window)
+                return directory.appendingPathComponent("\(UUID().uuidString).mp4")
+            },
+            saveToPhotos: { url in await recorder.recordSave(url) })
 
-        let items = viewModel.exportConfirmationItems
+        let result = await viewModel.save()
 
-        // Only the kept clip reaches the confirmation screen, carrying the id,
-        // window, crop rect, and crop adjustment it exports with.
-        XCTAssertEqual(items.count, 1)
-        XCTAssertEqual(items[0].id, kept.id)
-        XCTAssertEqual(items[0].window, kept.window)
-        XCTAssertEqual(items[0].cropRect, kept.cropRect)
-        XCTAssertEqual(items[0].cropAdjustment, kept.cropAdjustment)
+        XCTAssertTrue(result)
+        let windows = await recorder.exportedWindows
+        XCTAssertEqual(windows, [kept.window])
+        let saved = await recorder.savedURLs
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertNil(viewModel.saveFailureMessage)
+    }
+
+    @MainActor
+    func testSaveNeverExportsTheOriginalItem() async {
+        actor Recorder {
+            var exportCount = 0
+            func increment() { exportCount += 1 }
+        }
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            items: [],
+            exportClip: { _, _, directory, _ in
+                await recorder.increment()
+                return directory.appendingPathComponent("clip.mp4")
+            })
+
+        _ = await viewModel.save()
+
+        let count = await recorder.exportCount
+        XCTAssertEqual(count, 0)
+    }
+
+    @MainActor
+    func testSaveDeletesTheOriginalWhenItIsTrashedAndEverythingSucceeded() async {
+        actor Recorder {
+            var deletedIdentifiers: [String] = []
+            func record(_ identifier: String) { deletedIdentifiers.append(identifier) }
+        }
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            items: [makeItem()],
+            assetIdentifier: "original-123",
+            deleteOriginalAsset: { identifier in await recorder.record(identifier) })
+        viewModel.toggleTrash(viewModel.items[0])
+
+        let result = await viewModel.save()
+
+        XCTAssertTrue(result)
+        let deleted = await recorder.deletedIdentifiers
+        XCTAssertEqual(deleted, ["original-123"])
+    }
+
+    @MainActor
+    func testSaveLeavesTheOriginalAloneWhenItIsNotTrashed() async {
+        actor Recorder {
+            var deleteCount = 0
+            func increment() { deleteCount += 1 }
+        }
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            items: [makeItem()],
+            deleteOriginalAsset: { _ in await recorder.increment() })
+
+        let result = await viewModel.save()
+
+        XCTAssertTrue(result)
+        let count = await recorder.deleteCount
+        XCTAssertEqual(count, 0)
+    }
+
+    @MainActor
+    func testSaveDoesNotDeleteTheOriginalWhenAClipFails() async {
+        struct Boom: Error {}
+        actor Recorder {
+            var deleteCount = 0
+            func increment() { deleteCount += 1 }
+        }
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            items: [makeItem()],
+            exportClip: { _, _, _, _ in throw Boom() },
+            deleteOriginalAsset: { _ in await recorder.increment() })
+        viewModel.toggleTrash(viewModel.items[0])
+
+        let result = await viewModel.save()
+
+        XCTAssertFalse(result)
+        let count = await recorder.deleteCount
+        // A failed clip must never cost the original its only remaining copy: the
+        // original stays until every derived clip has confirmed it landed in Photos.
+        XCTAssertEqual(count, 0)
+        XCTAssertNotNil(viewModel.saveFailureMessage)
+    }
+
+    @MainActor
+    func testSaveReportsExportFailureReason() async {
+        let viewModel = makeViewModel(
+            items: [makeItem()],
+            exportClip: { _, _, _, _ in throw ClipSaveError.exportFailed(reason: "boom") })
+
+        let result = await viewModel.save()
+
+        XCTAssertFalse(result)
+        XCTAssertEqual(viewModel.saveFailureMessage, "Export failed — boom")
+    }
+
+    @MainActor
+    func testSaveReportsPhotosSaveFailureReason() async {
+        let viewModel = makeViewModel(
+            items: [makeItem()],
+            saveToPhotos: { _ in throw ClipSaveError.photosSaveFailed(reason: "denied") })
+
+        let result = await viewModel.save()
+
+        XCTAssertFalse(result)
+        XCTAssertEqual(viewModel.saveFailureMessage, "Couldn't save to Photos — denied")
+    }
+
+    @MainActor
+    func testSaveIgnoresAFailedOriginalDeletion() async {
+        struct Boom: Error {}
+        let viewModel = makeViewModel(
+            items: [],
+            deleteOriginalAsset: { _ in throw Boom() })
+        viewModel.toggleTrash(viewModel.items[0])
+
+        let result = await viewModel.save()
+
+        // A declined system delete-confirmation or a revoked permission leaves the
+        // original in place, which is the safe outcome — not a reportable failure.
+        XCTAssertTrue(result)
+        XCTAssertNil(viewModel.saveFailureMessage)
+    }
+
+    @MainActor
+    func testSaveIgnoresReentrantCallsWhileAlreadySaving() async {
+        actor Gate {
+            private var continuation: CheckedContinuation<Void, Never>?
+            func wait() async { await withCheckedContinuation { continuation = $0 } }
+            func open() { continuation?.resume(); continuation = nil }
+        }
+        let gate = Gate()
+        let viewModel = makeViewModel(
+            items: [makeItem()],
+            exportClip: { _, _, directory, _ in
+                await gate.wait()
+                return directory.appendingPathComponent("clip.mp4")
+            })
+
+        async let first = viewModel.save()
+        // Give the first call a moment to set `isSaving` before the second races it.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let second = await viewModel.save()
+        await gate.open()
+
+        XCTAssertFalse(second)
+        _ = await first
+    }
+
+    // MARK: - Add clip
+
+    @MainActor
+    func testAddClipAppendsAFullFrameClip() async throws {
+        // The dummy asset resolves to nothing, so duration never loads and the new
+        // clip falls back to the default 3-second window — clamped to the minimum
+        // clip duration, though 3s never actually hits that floor.
+        let viewModel = makeViewModel(items: [])
+
+        await viewModel.addClip()
+
+        XCTAssertEqual(viewModel.items.count, 2)
+        let added = viewModel.items[1]
+        XCTAssertEqual(added.window.startTime, 0)
+        XCTAssertEqual(added.window.endTime, 3)
+        XCTAssertEqual(added.cropRect, fullFrame)
+        XCTAssertFalse(added.isTrashed)
+    }
+
+    @MainActor
+    func testAddClipAppendsAfterExistingItems() async {
+        let existing = makeItem()
+        let viewModel = makeViewModel(items: [existing])
+
+        await viewModel.addClip()
+
+        XCTAssertEqual(viewModel.items.count, 3)
+        XCTAssertEqual(viewModel.items[1], existing)
     }
 
     // MARK: - ClipThumbnailLoader.displayedCropRect
@@ -307,36 +547,6 @@ final class ClipListTests: XCTestCase {
                 naturalSize: .zero,
                 preferredTransform: .identity),
             9.0 / 16.0)
-    }
-
-    // MARK: - Add clip
-
-    @MainActor
-    func testAddClipAppendsAFullFrameClipAtTheStart() async throws {
-        // The dummy asset resolves to nothing, so duration never loads and the new
-        // clip falls back to the default 3-second window — clamped to the minimum
-        // clip duration, though 3s never actually hits that floor.
-        let viewModel = ClipListViewModel(items: [], asset: dummyAsset())
-
-        await viewModel.addClip()
-
-        XCTAssertEqual(viewModel.items.count, 1)
-        let added = try XCTUnwrap(viewModel.items.first)
-        XCTAssertEqual(added.window.startTime, 0)
-        XCTAssertEqual(added.window.endTime, 3)
-        XCTAssertEqual(added.cropRect, fullFrame)
-        XCTAssertTrue(added.isKept)
-    }
-
-    @MainActor
-    func testAddClipAppendsAfterExistingItems() async {
-        let existing = makeItem()
-        let viewModel = ClipListViewModel(items: [existing], asset: dummyAsset())
-
-        await viewModel.addClip()
-
-        XCTAssertEqual(viewModel.items.count, 2)
-        XCTAssertEqual(viewModel.items[0], existing)
     }
 
     // MARK: - ClipThumbnailLoader.croppedThumbnail

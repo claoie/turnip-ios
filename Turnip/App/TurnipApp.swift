@@ -29,11 +29,7 @@ struct TurnipApp: App {
         WindowGroup {
             Group {
                 #if DEBUG
-                if CommandLine.arguments.contains("-screenshotExportConfirmationFinished") {
-                    ScreenshotHarness(finishImmediately: true)
-                } else if CommandLine.arguments.contains("-screenshotExportConfirmation") {
-                    ScreenshotHarness(finishImmediately: false)
-                } else if CommandLine.arguments.contains("-screenshotHome") {
+                if CommandLine.arguments.contains("-screenshotHome") {
                     ScreenshotHomeHarness()
                 } else if CommandLine.arguments.contains("-screenshotClipListMedia") {
                     ScreenshotClipListMediaHarness()
