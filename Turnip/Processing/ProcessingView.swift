@@ -89,25 +89,25 @@ struct ProcessingView<Destination: View>: View {
                 // — see its own comment for why the other three branches attach it here instead.
                 videoStage
             case .empty:
-                // `.frame` before `.contentShape`: `StatusStateView` sizes to its own content
-                // otherwise, and both the swipe's hit region and the browsing overlay below
-                // need the full screen, the same as every other consumer of this view
-                // (`HomeView`'s empty grid and denied states apply the same frame externally).
+                // `StatusStateView` sizes to its own content otherwise, and both the swipe's
+                // hit region and the browsing overlay below need the full screen, the same as
+                // every other consumer of this view (`HomeView`'s empty grid and denied states
+                // apply the same frame externally).
                 emptyState
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(swipeShape)
+                    .contentShape(Rectangle())
                     .highPriorityGesture(videoSwipeGesture)
             case .failed(let message):
                 errorState(message: message)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(swipeShape)
+                    .contentShape(Rectangle())
                     .highPriorityGesture(videoSwipeGesture)
             case .succeeded:
                 // Covered by the pushed destination; only visible when navigating back here.
                 Text("Analysis complete.")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(swipeShape)
+                    .contentShape(Rectangle())
                     .highPriorityGesture(videoSwipeGesture)
             }
         }
@@ -210,20 +210,6 @@ struct ProcessingView<Destination: View>: View {
     /// generic type.
     private static var swipeThreshold: CGFloat { 60 }
 
-    /// How many points of the leading edge the swipe gesture's hit region leaves uncovered,
-    /// so a touch starting there is never part of this recognition in the first place and
-    /// falls through to whatever the system's own edge-swipe-to-pop gesture wants —
-    /// `NavigationStack`'s back chevron already offers the same rightward drag.
-    private static var leadingEdgeExclusion: CGFloat { 24 }
-
-    /// The swipe gesture's hit-testable region — the full view minus `leadingEdgeExclusion`
-    /// off the leading edge. `.contentShape` is what narrows a view's gesture-recognized area,
-    /// not a check inside the gesture's own handler: by the time a handler runs, recognition
-    /// has already happened, so excluding the edge has to happen here.
-    private var swipeShape: some Shape {
-        LeadingInsetShape(inset: Self.leadingEdgeExclusion)
-    }
-
     /// A right drag browses to the previous video, a left drag to the next — same mapping
     /// as `MainTab`'s Home/Camera pages. Disabled while a run is in flight (a swipe must not
     /// abandon it) or while a previously-triggered browse is still resolving; a swipe with no
@@ -304,12 +290,13 @@ struct ProcessingView<Destination: View>: View {
         }
         // `.highPriorityGesture`, not `.gesture`: this view sits inside the app's own
         // page-style `TabView` (`RootTabView`), whose horizontal swipe would otherwise win
-        // the recognition race and switch tabs to Camera instead of browsing videos here.
-        // Attached to the video stage itself, not the whole screen, so it never competes with
-        // `VideoScrubBar`'s own drag in the safe-area inset below; `.contentShape` further
-        // excludes the leading edge (see `swipeShape`) so the system's edge-swipe-to-pop still
-        // gets those touches.
-        .contentShape(swipeShape)
+        // the recognition race and switch tabs to Camera instead of browsing videos here —
+        // including a swipe starting at the leading edge, which means this also supersedes
+        // the system's interactive edge-swipe-to-pop; the back chevron (visible whenever
+        // `isAnalyzing` is false) is the affordance for going back on this screen, the same as
+        // every other pushed screen in the flow (docs/UIUX.md). Attached to the video stage
+        // itself, not the whole screen, so it never competes with `VideoScrubBar`'s own drag in
+        // the safe-area inset below.
         .highPriorityGesture(videoSwipeGesture)
         // `.safeAreaInset`, not `.overlay`: an overlay sizes its content at its own
         // ideal width and aligns it, so `PrimaryActionBar`'s full-width button has no
@@ -412,17 +399,6 @@ struct ProcessingView<Destination: View>: View {
             }
             .padding(.top, 8)
         }
-    }
-}
-
-/// A full-height rectangle inset from its container's leading edge — `ProcessingView`'s
-/// `swipeShape`, so the swipe gesture's recognized region leaves a strip for the system's own
-/// edge-swipe-to-pop.
-private struct LeadingInsetShape: Shape {
-    let inset: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        Path(CGRect(x: rect.minX + inset, y: rect.minY, width: max(0, rect.width - inset), height: rect.height))
     }
 }
 
