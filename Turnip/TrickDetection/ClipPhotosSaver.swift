@@ -31,9 +31,14 @@ enum ClipPhotosSaveError: LocalizedError, Equatable {
 /// Writes exported clips into the user's Photos library.
 ///
 /// Add-only: saving goes through the add-only authorization prompt
-/// (`NSPhotoLibraryAddUsageDescription` in Info.plist covers the usage string), and
-/// nothing is read back, so the v1 "nothing leaves the device" promise holds — the file
-/// goes from the app's sandbox to the on-device library.
+/// (`NSPhotoLibraryAddUsageDescription` in Info.plist covers the usage string). The v1 "nothing
+/// leaves the device" promise still holds — every read this type does (`fetchAlbum(titled:)`
+/// below, checking for an existing album before creating a duplicate) stays inside the device's
+/// own Photos library, never the network. Per Apple's `PHAccessLevel.addOnly` documentation, an
+/// app granted add-only access has read visibility limited to the assets and collections *it
+/// created* — so that fetch can only ever find an album this saver made in an earlier call,
+/// never a user's own pre-existing album of the same name, which is exactly the scope the
+/// dedup needs.
 struct ClipPhotosSaver: Sendable {
     /// Resolves the add-only Photos authorization, collapsed onto the app's
     /// shared Photos-domain authorization model (`PhotoLibraryAuthorization`,

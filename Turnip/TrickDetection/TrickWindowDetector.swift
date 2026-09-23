@@ -14,9 +14,9 @@ struct TrickWindow: Hashable, Sendable {
 ///
 /// `minimumSustainedSamples`/`minimumQuietSamples` default to the design doc's durations (300 ms
 /// / 1 s) rounded to samples at `sampleRate` — the signal is one sample per kept frame pair, so
-/// at the shipped default of 10 samples/sec that is 3 and 10 samples, same as before this was
-/// rate-derived. Passing an explicit `minimumSustainedSamples`/`minimumQuietSamples` overrides
-/// the derivation, for a caller (tests) that wants exact sample counts regardless of rate.
+/// at the shipped default of 10 samples/sec that is 3 and 10 samples. Passing an explicit
+/// `minimumSustainedSamples`/`minimumQuietSamples` overrides the derivation, for a caller
+/// (tests) that wants exact sample counts regardless of rate.
 struct TrickWindowDetector: Sendable {
     /// Normalized units per sample.
     let displacementThreshold: Float

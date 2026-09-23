@@ -129,6 +129,14 @@ struct HomeHeader: View {
     }
 }
 
+/// The settings gear's footprint at Home's top-trailing corner (`ScrimIconButton`'s default
+/// 44 pt diameter plus the `.padding()` around it), reserved as top clearance on the grid below
+/// — mirroring `FloatingTabBarMetrics.clearance` at the bottom — so no tile ever renders under
+/// the fixed overlay button and silently eats a tap meant for it.
+private enum SettingsButtonMetrics {
+    static let clearance: CGFloat = 76
+}
+
 /// The grid plus its decorations: a "select more" banner under limited access, and a bottom
 /// banner with a cancel button while a tapped video is being fetched. An ordinary full-screen
 /// scrollable grid, newest videos first — no landing/reveal state.
@@ -185,7 +193,10 @@ struct VideoGalleryView: View {
             }
             // The floating tab bar overlays this screen rather than reserving its own
             // safe-area space, so without this the bottom row would end up permanently
-            // stuck underneath it.
+            // stuck underneath it. Same reasoning at the top, for the fixed settings gear
+            // (`HomeView.settingsButton`): without this, tiles that scroll under that corner
+            // would intercept a tap meant for the button instead of opening the video.
+            .padding(.top, SettingsButtonMetrics.clearance)
             .padding(.bottom, FloatingTabBarMetrics.clearance)
         }
         // The grid announces its count when VoiceOver enters it — a VoiceOver user

@@ -74,15 +74,15 @@ struct RootTabView: View {
     /// The temp file is only removed once it's safely in Photos — deleting it
     /// unconditionally (e.g. in a `defer`) would destroy the user's only copy of the
     /// footage if the save fails, such as when Photos access is denied.
+    ///
+    /// Saved with no album regardless of the Settings screen's "Save to an album" option: this
+    /// is the raw, unanalyzed take (it becomes Clip List's "original" tile, not one of the
+    /// derived clips), and the setting's own copy ("Save to an album" / a *saved clip*) means
+    /// the curated exports `ClipListViewModel.save()` produces, not the source recording.
     private func handleRecorded(_ recording: CameraRecording) {
-        // `@MainActor` on the Task, not on this method: `handleRecorded` itself is nonisolated
-        // (a plain `View`'s methods are, only `body` carries the protocol's `@MainActor`
-        // requirement), but `TurnipSettingsStore.shared` is main-actor-isolated, so reading it
-        // needs to happen inside an isolated context.
-        Task { @MainActor in
-            let albumTitle = TurnipSettingsStore.shared.current.albumDestination
+        Task {
             do {
-                let identifier = try await ClipPhotosSaver().saveVideo(at: recording.fileURL, albumTitle: albumTitle)
+                let identifier = try await ClipPhotosSaver().saveVideo(at: recording.fileURL)
                 try? FileManager.default.removeItem(at: recording.fileURL)
                 guard let asset = PHAsset.fetchAssets(
                     withLocalIdentifiers: [identifier], options: nil

@@ -130,9 +130,7 @@ struct ProcessingPipeline: Sendable {
         self.cropRectCalculator = cropRectCalculator
         // TrickWindowDetector's sustained/quiet thresholds are stated in docs/DESIGN.md as
         // durations (300 ms / 1 s), expressed as sample counts against the sampler's rate — so
-        // they're rederived here from `sampleRate` rather than left at the fixed counts that
-        // were only ever correct at the default 10/sec (see TrickWindowDetector's own doc
-        // comment).
+        // they're derived here from the same `sampleRate` the sampler above uses.
         self.windowDetector = windowDetector ?? TrickWindowDetector(sampleRate: sampleRate)
     }
 

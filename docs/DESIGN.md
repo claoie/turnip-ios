@@ -2,7 +2,7 @@
 
 *Rev 6 · 2026-09-04 · Draft for review.*
 
-*(Rev 1 targeted iOS-only, personal-use. Rev 2 expanded to open-source app + backend + community labeling + continuous ML training. Rev 3 depersonalized for public repo and added the pose-model escalation ladder + motion-signal blur mitigations. Rev 4 swapped GitHub OAuth for Sign in with Apple, added iOS Share Sheet for social-media publishing, and added v2 social features — following relationships + video feed. Rev 5 tightens the Sign in with Apple validation contract (`iss` + `exp` on top of `aud` + signature), adds the videos-side feed indexes, adds a self-follow guard, and pins MoveNet Thunder's quantization variant. Rev 6 resolves the seven open questions into recorded decisions and adds the screen-flow companion doc pointer. Rev 7 records that camera takes run steps 1-3 live during recording and skip the post-recording decode when that covered the take.)*
+*(Rev 1 targeted iOS-only, personal-use. Rev 2 expanded to open-source app + backend + community labeling + continuous ML training. Rev 3 depersonalized for public repo and added the pose-model escalation ladder + motion-signal blur mitigations. Rev 4 swapped GitHub OAuth for Sign in with Apple, added iOS Share Sheet for social-media publishing, and added v2 social features — following relationships + video feed. Rev 5 tightens the Sign in with Apple validation contract (`iss` + `exp` on top of `aud` + signature), adds the videos-side feed indexes, adds a self-follow guard, and pins MoveNet Thunder's quantization variant. Rev 6 resolves the seven open questions into recorded decisions and adds the screen-flow companion doc pointer. Rev 7 records that camera takes run steps 1-3 live during recording and skip the post-recording decode when that covered the take. Rev 8 notes the analysis sample rate is a Settings-screen preference, not a fixed constant, defaulting to the 10/sec this doc otherwise assumes.)*
 
 *Screen-level flow for the v1 app lives in [`UIUX.md`](UIUX.md). Running the pose pass during recording, rather than after, is designed in [`LIVE_POSE.md`](LIVE_POSE.md).*
 
@@ -89,16 +89,19 @@ Polyrepo chosen over monorepo because open-source contributors typically only wa
 Budgets the v1 pipeline is held to (issue #21). The numbers are initial targets to be validated
 by on-device profiling on the oldest supported hardware (iPhone 8 / A11, iOS 16).
 
-- **Sample rate**: ~10 frames/sec of footage regardless of source fps. The decode stride is
-  `round(nominalFrameRate / 10)`, so 240 fps slo-mo (the recommended recording mode) costs the
-  same inferences per second of footage as 30 fps — not 8×. The live path keeps the same rate
-  on a 100 ms presentation-time grid rather than a frame count, since it never sees the
-  frames the capture output discards while a kept one is being preprocessed.
-- **Live inference budget**: one inference must fit inside the 100 ms sample interval with
-  the queue between capture and model sitting near empty; the encoder is hardware and the
-  model is CPU, so the two do not contend for the GPU. The per-recording metrics
-  (samples/sec, queue drops, max queue depth, preprocess and inference times, seconds under
-  thermal `.serious`) go to the device log under the `LivePose` category.
+- **Sample rate**: ~10 frames/sec of footage regardless of source fps, by default. The decode
+  stride is `round(nominalFrameRate / sampleRate)`, so 240 fps slo-mo (the recommended
+  recording mode) costs the same inferences per second of footage as 30 fps — not 8×. The
+  live path keeps the same rate on a presentation-time grid rather than a frame count, since it
+  never sees the frames the capture output discards while a kept one is being preprocessed. The
+  rate itself (`sampleRate`, and the grid's interval, both `1 / sampleRate`) is the Settings
+  screen's analysis granularity (`docs/UIUX.md` §1a), 1-30, defaulting to the 10 assumed
+  throughout the rest of this section.
+- **Live inference budget**: one inference must fit inside the sample interval (100 ms at the
+  default rate) with the queue between capture and model sitting near empty; the encoder is
+  hardware and the model is CPU, so the two do not contend for the GPU. The per-recording
+  metrics (samples/sec, queue drops, max queue depth, preprocess and inference times, seconds
+  under thermal `.serious`) go to the device log under the `LivePose` category.
 - **Cancellation**: the sampler loop checks `Task.isCancelled` per decoded frame, and the owning
   view model cancels its run task when the screen goes away, so an abandoned run stops decoding
   instead of burning the device with no consumer.

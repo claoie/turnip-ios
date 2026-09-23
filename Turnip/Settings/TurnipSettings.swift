@@ -19,11 +19,10 @@ enum AnalysisMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// The four configurable preferences from the issue this shipped for, as a plain value type —
-/// what `TurnipSettingsStore` persists and hands to code that reads settings off the main
-/// actor. Kept separate from the store so defaulting and clamping are pure and directly
-/// testable, the same split `VideoFrameSampler.stride` and `LivePoseFrameGate` already use for
-/// their own math.
+/// The app's user-configurable preferences, as a plain value type — what `TurnipSettingsStore`
+/// persists and hands to code that reads settings off the main actor. Kept separate from the
+/// store so defaulting and clamping are pure and directly testable, the same split
+/// `VideoFrameSampler.stride` and `LivePoseFrameGate` already use for their own math.
 struct TurnipSettings: Equatable, Sendable {
     static let granularityRange = 1...30
     static let defaultGranularity = VideoFrameSampler.targetSamplesPerSecond
@@ -50,9 +49,8 @@ struct TurnipSettings: Equatable, Sendable {
         analysisGranularity = Self.clampedGranularity(value)
     }
 
-    /// Clamps to `granularityRange` (1...30 per the issue this shipped for) so a corrupt or
-    /// out-of-range stored value, or a future range change, can never hand the sampler or the
-    /// live frame gate a zero or unbounded rate.
+    /// Clamps to `granularityRange` so a corrupt or out-of-range stored value, or a future
+    /// range change, can never hand the sampler or the live frame gate a zero or unbounded rate.
     static func clampedGranularity(_ value: Int) -> Int {
         min(max(value, granularityRange.lowerBound), granularityRange.upperBound)
     }

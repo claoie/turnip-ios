@@ -20,20 +20,23 @@ struct SettingsView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .accessibilityIdentifier("settings-analysis-mode")
                 } header: {
                     Text("Camera")
                 } footer: {
-                    Text(
-                        "Real-time scores pose while you record and skips analysis for a take "
-                            + "it fully covers. Offline always analyzes after you stop recording."
-                    )
+                    Text("""
+                        Real-time scores pose while you record and skips analysis for a take \
+                        it fully covers. Offline always analyzes after you stop recording.
+                        """)
                 }
 
                 Section {
                     Toggle("Save to an album", isOn: $settings.autoAddToAlbum)
+                        .accessibilityIdentifier("settings-auto-add-album")
                     if settings.autoAddToAlbum {
                         TextField("Album name", text: $settings.albumName)
                             .autocorrectionDisabled()
+                            .accessibilityIdentifier("settings-album-name")
                     }
                 } header: {
                     Text("Saved clips")
@@ -49,13 +52,14 @@ struct SettingsView: View {
                             set: { settings.setAnalysisGranularity($0) }),
                         in: TurnipSettings.granularityRange
                     )
+                    .accessibilityIdentifier("settings-granularity")
                 } header: {
                     Text("Analysis")
                 } footer: {
-                    Text(
-                        "Frames sampled per second of footage. Higher can catch faster motion; "
-                            + "lower analyzes faster. Defaults to \(TurnipSettings.defaultGranularity)."
-                    )
+                    Text("""
+                        Frames sampled per second of footage. Higher can catch faster motion; \
+                        lower analyzes faster. Defaults to \(TurnipSettings.defaultGranularity).
+                        """)
                 }
             }
             .navigationTitle("Settings")
@@ -63,6 +67,7 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("settings-done")
                 }
             }
         }

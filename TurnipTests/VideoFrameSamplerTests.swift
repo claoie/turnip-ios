@@ -279,6 +279,16 @@ final class VideoFrameSamplerTests: XCTestCase {
         XCTAssertEqual(VideoFrameSampler.stride(forNominalFrameRate: 0), 3)
     }
 
+    /// The no-declared-rate fallback assumes a 30 fps source, but must still honor an explicit
+    /// `sampleRate` rather than hardcoding the default-rate answer — otherwise a VFR/re-encoded
+    /// track (the case that hits this path) would sample at one rate while
+    /// `TrickWindowDetector` is calibrated for another.
+    func testStrideFallbackHonorsAnExplicitSampleRate() {
+        XCTAssertEqual(VideoFrameSampler.stride(forNominalFrameRate: 0, sampleRate: 30), 1)
+        XCTAssertEqual(VideoFrameSampler.stride(forNominalFrameRate: 0, sampleRate: 15), 2)
+        XCTAssertEqual(VideoFrameSampler.stride(forNominalFrameRate: 0, sampleRate: 1), 30)
+    }
+
     /// The Settings screen's granularity control overrides `targetSamplesPerSecond` per
     /// instance; `stride` takes the same override directly so both agree without a sampler
     /// instance in hand.

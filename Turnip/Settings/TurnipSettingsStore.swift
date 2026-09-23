@@ -1,15 +1,14 @@
 import Foundation
 
-/// Persists `TurnipSettings` to `UserDefaults` — this app's first preferences store; there is
-/// no existing settings pattern to extend. `UserDefaults` is the standard mechanism for a
-/// handful of small preference values in an app this size, rather than a bespoke file format.
+/// Persists `TurnipSettings` to `UserDefaults`, the standard mechanism for a handful of small
+/// preference values in an app this size, rather than a bespoke file format.
 ///
 /// `@MainActor` and `ObservableObject` so `SettingsView` can bind straight to its published
 /// properties. Every other consumer (`CameraCaptureViewModel`, the Home/Processing wiring,
-/// `RootTabView`, `ClipListViewModel`) is on the main actor at the point it needs a setting —
-/// arming a recording, starting a pipeline run, saving to Photos are all user-driven, MainActor
-/// entry points — so they read `current` there and pass the plain `TurnipSettings` value down
-/// into `Sendable` types instead of holding a reference to this store.
+/// `ClipListViewModel`) is on the main actor at the point it needs a setting — arming a
+/// recording, starting a pipeline run, saving a clip are all user-driven, MainActor entry
+/// points — so they read `current` there and pass the plain `TurnipSettings` value down into
+/// `Sendable` types instead of holding a reference to this store.
 @MainActor
 final class TurnipSettingsStore: ObservableObject {
     static let shared = TurnipSettingsStore()

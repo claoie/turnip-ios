@@ -1,6 +1,6 @@
 # Live pose inference during recording
 
-*Rev 4 · 2026-09-23 · A take goes straight from Stop to the clip list on its live results; Processing is the fallback. Device gate not yet run. Rev 1 was the design draft, Rev 2 the flag-gated prototype, Rev 3 the preview overlay.*
+*Rev 5 · 2026-09-23 · A take goes straight from Stop to the clip list on its live results; Processing is the fallback. Device gate not yet run. Rev 1 was the design draft, Rev 2 the flag-gated prototype, Rev 3 the preview overlay. Rev 5 notes the 10 samples/sec and 100 ms grid this whole doc otherwise treats as fixed are the shipped default, overridable by the Settings screen's analysis granularity (`docs/UIUX.md` §1a) — every occurrence below describes that default, and every device number below (the queue-size math, the acceptance gate's own samples/sec target) is stated, and was validated, at it.*
 
 *Companion to [`DESIGN.md`](DESIGN.md). This doc covers one question: can the pose pass start when recording starts, instead of after the file is written? Pipeline shape, budgets and model choice stay as recorded in `DESIGN.md`.*
 

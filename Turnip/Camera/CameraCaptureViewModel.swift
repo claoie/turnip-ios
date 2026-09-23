@@ -211,8 +211,7 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
                 .appendingPathExtension("mov")
             // Offline mode never arms the tap: `endRecording()` then returns nil, `onFinished`
             // hands on `detectedClips: nil`, and the take lands on Processing's idle state
-            // exactly like a tapped gallery tile (docs/UIUX.md § "Camera"). Real-time is the
-            // shipped default and unchanged from before this setting existed.
+            // exactly like a tapped gallery tile (docs/UIUX.md § "Camera").
             if settingsProvider().analysisMode == .realTime {
                 armLivePose()
             }
@@ -739,7 +738,11 @@ extension CameraCaptureViewModel {
         if drainingLivePose === recording {
             drainingLivePose = nil
         }
-        guard LivePoseCoverage.isComplete(outcome) else { return nil }
+        // `armedSampleRate` is what the gate (`LivePoseFrameGate(baseInterval:)` in `armLivePose`)
+        // was actually configured with — the same granularity the file path's detector uses — so
+        // coverage is checked against the grid the recording actually ran, not the shipped default.
+        let interval = 1.0 / Double(armedSampleRate)
+        guard LivePoseCoverage.isComplete(outcome, interval: interval) else { return nil }
         return makeDetectClips(armedSampleRate)(outcome.results, liveRenderedPixelSize)
     }
 
