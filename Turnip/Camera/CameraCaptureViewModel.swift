@@ -112,10 +112,15 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
     private var armedSampleRate = VideoFrameSampler.targetSamplesPerSecond
     /// Reads the current settings snapshot at the point a setting takes effect (Record tap),
     /// rather than once at init — a change made while the camera tab is already open is picked
-    /// up by the next recording. Not `@Sendable`/`async`: this class is itself `@MainActor`, so
-    /// every call site is already on the actor `TurnipSettingsStore.shared` requires. Injected so
-    /// tests can drive both `AnalysisMode` cases without touching `UserDefaults`.
-    private let settingsProvider: () -> TurnipSettings
+    /// up by the next recording. `@MainActor`-typed (not plain, and not `@Sendable`/`async`) so
+    /// the default value below — a closure literal that reads the `@MainActor`-isolated
+    /// `TurnipSettingsStore.shared` — type-checks: a default argument's closure literal is
+    /// nonisolated unless its declared parameter type carries the actor annotation itself: the
+    /// enclosing `init` being a member of this `@MainActor` class does not carry over to it.
+    /// Every call site (`toggleRecording()`, `armLivePose()`) is already on the main actor, so
+    /// calling it is an ordinary synchronous call. Injected so tests can drive both
+    /// `AnalysisMode` cases without touching `UserDefaults`.
+    private let settingsProvider: @MainActor () -> TurnipSettings
 
     typealias ClipDetection = @Sendable ([PoseFrameResult], CGSize) -> [ProcessedClip]
 
@@ -123,7 +128,7 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
         makeDetectClips: @escaping (Int) -> ClipDetection = { rate in
             ProcessingPipeline(sampleRate: rate).detectClips
         },
-        settingsProvider: @escaping () -> TurnipSettings = { TurnipSettingsStore.shared.current }
+        settingsProvider: @escaping @MainActor () -> TurnipSettings = { TurnipSettingsStore.shared.current }
     ) {
         self.makeDetectClips = makeDetectClips
         self.settingsProvider = settingsProvider
