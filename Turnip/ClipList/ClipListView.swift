@@ -219,8 +219,15 @@ private struct ClipCardView: View {
             // task joins work already done instead of repeating it.
             async let image = viewModel.thumbnail(for: item)
             async let assetDuration = viewModel.assetDuration()
-            thumbnail = await image
-            duration = await assetDuration
+            let decodedImage = await image
+            let decodedDuration = await assetDuration
+            // `ClipThumbnailLoader` is a reentrant actor, so this run and a newer run
+            // for the same card (started when the item changed again) aren't
+            // serialized — without this check, a cancelled run that resolves after the
+            // newer one can overwrite a fresh thumbnail with a stale one.
+            guard !Task.isCancelled else { return }
+            thumbnail = decodedImage
+            duration = decodedDuration
         }
         .onAppear {
             suspended = isSuspended

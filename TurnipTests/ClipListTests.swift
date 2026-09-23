@@ -228,6 +228,37 @@ final class ClipListTests: XCTestCase {
         XCTAssertEqual(after.width, 32)
     }
 
+    /// Regression for the in-flight decode race: a request for a freshly-edited item
+    /// must not join a decode still running for the pre-edit one. `viewModel.thumbnail`
+    /// is `@MainActor`-isolated and this test runs on the main actor too, so both calls
+    /// below run their synchronous prefix — cache/in-flight check, decode task
+    /// creation — back to back before either suspends at its own `await task.value`;
+    /// the edit lands in between. A join-any-running implementation would resolve
+    /// `second` to the pre-edit, full-width image instead of decoding fresh.
+    @MainActor
+    func testConcurrentRequestsDontJoinAStaleInFlightDecode() async throws {
+        let url = try await TestVideoWriter.writeTestVideo(frameCount: 1, width: 64, height: 64, fps: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let asset = AVURLAsset(url: url)
+        let item = ClipListItem(window: TrickWindow(startTime: 0, endTime: 1.0 / 30), cropRect: fullFrame)
+        let viewModel = makeViewModel(items: [item], asset: asset, duration: 1.0 / 30)
+        let target = viewModel.items[1]
+
+        async let first = viewModel.thumbnail(for: target)
+
+        let halfWidth = NormalizedRect(minX: 0, maxX: 0.5, minY: 0, maxY: 1)
+        let result = ClipEditorResult(window: item.window, cropRect: halfWidth, cropAdjustment: .identity)
+        viewModel.applyEditorResult(result, to: target.id)
+        let updated = viewModel.items[1]
+
+        async let second = viewModel.thumbnail(for: updated)
+
+        let firstImage = try XCTUnwrap(await first)
+        let secondImage = try XCTUnwrap(await second)
+        XCTAssertEqual(firstImage.width, 64)
+        XCTAssertEqual(secondImage.width, 32)
+    }
+
     @MainActor
     func testDeleteRemovesTheMatchingItem() {
         let target = makeItem()

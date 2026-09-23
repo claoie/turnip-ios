@@ -234,6 +234,10 @@ final class ClipListViewModel: ObservableObject {
     /// `save()`'s confirmation-and-cleanup flow, not an in-memory removal. A no-op
     /// for unknown ids.
     func delete(_ id: UUID) {
+        // Only actually-removed ids drop their cache entry: the original item can
+        // never be removed here (see above), so evicting its thumbnail unconditionally
+        // would just cost it a wasted re-decode on the next render.
+        guard items.contains(where: { $0.id == id && !$0.isOriginal }) else { return }
         items.removeAll { $0.id == id && !$0.isOriginal }
         // The id is gone from `items` for good, so nothing will ever look these up
         // again — drop them rather than leaking one entry per deleted clip for the
