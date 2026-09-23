@@ -119,17 +119,34 @@ final class ClipListViewModel: ObservableObject {
     /// dismisses. `nil` means no alert is showing.
     @Published var saveFailureMessage: String?
 
-    /// Decoded thumbnails by item id. Plain storage, not `@Published`: no view reads
-    /// this dictionary — each card renders from its own `@State` thumbnail — so
-    /// publishing it would re-evaluate every card's body on every completed decode.
-    private var thumbnails: [UUID: CGImage] = [:]
+    /// The item fields a decoded thumbnail actually depends on — `isTrashed` isn't
+    /// here, since trashing a clip never changes what its preview frame looks like.
+    /// Tagging cache entries with this, rather than clearing the cache from every call
+    /// site that can mutate an item, makes the cache self-invalidating: a decode
+    /// started before an edit and delivered after it carries the *pre-edit* key, so it
+    /// can never read back as current for the *post-edit* item, however the two race.
+    private struct ThumbnailCacheKey: Equatable {
+        let window: TrickWindow
+        let cropRect: NormalizedRect
+        let cropAdjustment: CropAdjustment
+    }
+
+    /// Decoded thumbnails by item id, each tagged with the key it was decoded from.
+    /// Plain storage, not `@Published`: no view reads this dictionary — each card
+    /// renders from its own `@State` thumbnail — so publishing it would re-evaluate
+    /// every card's body on every completed decode.
+    private var thumbnails: [UUID: (key: ThumbnailCacheKey, image: CGImage)] = [:]
 
     private let asset: AVAsset
     /// The source video's `PHAsset.localIdentifier`, for deleting it from Photos
     /// when the original tile is trashed at `save()` time.
     private let assetIdentifier: String
     private let loader: ClipThumbnailLoader
-    private var inFlight: [UUID: Task<CGImage?, Never>] = [:]
+    /// One in-flight decode per id, tagged with the key it was started for — a caller
+    /// only joins it when its own key still matches, so a request that arrives for a
+    /// freshly-edited item never gets handed the pre-edit decode another caller is
+    /// already waiting on.
+    private var inFlight: [UUID: (key: ThumbnailCacheKey, task: Task<CGImage?, Never>)] = [:]
     private let exportClip: ExportOneClip
     private let saveToPhotos: SaveOneClipToPhotos
     private let deleteOriginalAsset: DeleteOriginalAsset
@@ -218,6 +235,11 @@ final class ClipListViewModel: ObservableObject {
     /// for unknown ids.
     func delete(_ id: UUID) {
         items.removeAll { $0.id == id && !$0.isOriginal }
+        // The id is gone from `items` for good, so nothing will ever look these up
+        // again — drop them rather than leaking one entry per deleted clip for the
+        // life of the screen.
+        thumbnails.removeValue(forKey: id)
+        inFlight[id] = nil
     }
 
     /// The per-card trash quick action. A no-op for unknown ids — the card that
@@ -270,29 +292,40 @@ final class ClipListViewModel: ObservableObject {
     }
 
     /// The card thumbnail, loading lazily. Idempotent and safe to call from every card's
-    /// `.task`: repeat calls return the cached image, and concurrent calls for the same
-    /// card share one decode instead of seeking the same frame twice. A cancelled caller
-    /// never cancels the shared decode — the decode runs to completion and the result is
+    /// `.task`: repeat calls for an unchanged item return the cached image, and
+    /// concurrent calls for the same item share one decode instead of seeking the same
+    /// frame twice. The cache is keyed by the item's id *and* the fields the decoded
+    /// frame depends on, so a call for the same id but a since-edited window/cropRect/
+    /// cropAdjustment always re-decodes — including when it races a still-in-flight
+    /// decode for the pre-edit item, which it never joins. A cancelled caller never
+    /// cancels the shared decode — the decode runs to completion and the result is
     /// cached, so a card that scrolls off-screen and back within the decode window gets
     /// its thumbnail from the re-fired `.task` instead of a discarded, already-paid-for
     /// decode. (Lingering decodes are intentional: `copyCGImage` is not cancellable, so
     /// cancelling the shared task cannot save the expensive work — it can only throw the
     /// result away from under another waiter.)
     func thumbnail(for item: ClipListItem) async -> CGImage? {
-        if let cached = thumbnails[item.id] {
-            return cached
+        let key = ThumbnailCacheKey(
+            window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment)
+        if let cached = thumbnails[item.id], cached.key == key {
+            return cached.image
         }
-        if let running = inFlight[item.id] {
-            return await running.value
+        if let running = inFlight[item.id], running.key == key {
+            return await running.task.value
         }
         let task = Task { [loader, asset, item] in
             await loader.thumbnail(for: item, in: asset)
         }
-        inFlight[item.id] = task
+        inFlight[item.id] = (key, task)
         let image = await task.value
-        inFlight[item.id] = nil
+        // Only clear the slot if it's still ours: a newer request for the same id may
+        // have already raced past the checks above and installed its own in-flight
+        // decode, which this stale completion must not clobber.
+        if inFlight[item.id]?.key == key {
+            inFlight[item.id] = nil
+        }
         if let image = image {
-            thumbnails[item.id] = image
+            thumbnails[item.id] = (key, image)
         }
         return image
     }

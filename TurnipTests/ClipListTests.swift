@@ -198,6 +198,34 @@ final class ClipListTests: XCTestCase {
         XCTAssertEqual(viewModel.items[1], item)
     }
 
+    /// Regression for the stale-thumbnail bug: `thumbnail(for:)` decodes through the real
+    /// `ClipThumbnailLoader` against a real one-frame video. The edit changes only
+    /// `cropRect` (same window, same midpoint, so the seek target is identical both
+    /// times) to a half-width crop — the decoded image's width is the discriminator: a
+    /// stale cache hit would keep returning the full-width image, so this fails before
+    /// the fix and passes only once the second call genuinely re-decodes.
+    @MainActor
+    func testApplyEditorResultInvalidatesTheCachedThumbnail() async throws {
+        let url = try await TestVideoWriter.writeTestVideo(frameCount: 1, width: 64, height: 64, fps: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let asset = AVURLAsset(url: url)
+        let item = ClipListItem(window: TrickWindow(startTime: 0, endTime: 1.0 / 30), cropRect: fullFrame)
+        let viewModel = makeViewModel(items: [item], asset: asset, duration: 1.0 / 30)
+        let target = viewModel.items[1]
+
+        let before = try XCTUnwrap(await viewModel.thumbnail(for: target))
+        XCTAssertEqual(before.width, 64)
+
+        let halfWidth = NormalizedRect(minX: 0, maxX: 0.5, minY: 0, maxY: 1)
+        let result = ClipEditorResult(window: item.window, cropRect: halfWidth, cropAdjustment: .identity)
+        viewModel.applyEditorResult(result, to: target.id)
+        let updated = viewModel.items[1]
+        XCTAssertEqual(updated.cropRect, halfWidth)
+
+        let after = try XCTUnwrap(await viewModel.thumbnail(for: updated))
+        XCTAssertEqual(after.width, 32)
+    }
+
     @MainActor
     func testDeleteRemovesTheMatchingItem() {
         let target = makeItem()
