@@ -9,6 +9,18 @@ screen's PR rather than retrofitting later.
 
 ## Per-screen items
 
+### Camera (UIUX §1a)
+
+- The record button carries the state: "Start recording" / "Stop recording" as its label, so
+  the red shape's change is never the only signal. It is disabled, and dimmed, for the brief
+  wait after Stop while the take's live results finish scoring.
+- The live pose skeleton drawn over the preview is decorative feedback about what the model
+  sees, not information a VoiceOver user needs to act on: it is hidden from the accessibility
+  tree (`isAccessibilityElement = false` on the preview view) rather than announced ten times
+  a second. Confident joints only, green on the live picture; there is no text over it.
+- Manual controls (lens pills, flip, format menu, flash, exposure) are labeled buttons and are
+  disabled while recording rather than hidden, so their state is announced.
+
 ### Home / Video Gallery (#16) — done
 
 - Each video tile is one accessible element: `accessibilityLabel` "Video, 12 seconds,
@@ -52,10 +64,11 @@ screen's PR rather than retrofitting later.
 - Touch targets: trim handles ≥ 44×44 pt.
 - No auto-playing preview loop when reduce motion is on.
 
-### Export Confirmation (#19)
+### Export Confirmation (#19) — retired
 
-- Per-clip progress and the final "N of M clips saved" summary are announced; per-clip
-  failures are called out individually in the announcement, not just as a total.
+- The screen is gone (UIUX decision 6): Clip List's "Done" saves inline. Its one item moves
+  there — the save's completion, and any per-clip failure, must be announced, not only shown
+  as the spinner leaving.
 
 ## Cross-cutting rules (every v1 screen)
 

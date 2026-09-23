@@ -9,8 +9,10 @@ movenet_thunder_int8.tflite
 This file is **not committed to the repo** (see the root `.gitignore`) — it's a ~7 MB binary
 ML artifact. Release builds (Xcode Cloud → TestFlight) download and checksum-verify it in
 `ci_scripts/ci_post_clone.sh`, so it is always inside the archived app bundle. For local
-development, fetch it yourself with the steps below. The app builds and runs without it;
-the pose diagnostic screen will just show a "model not found" error until it's in place.
+development, fetch it yourself with the steps below. The app builds and runs without it,
+but nothing pose-related works: the camera records without live pose (it logs the load
+failure under the `LivePose` category and every take goes through Processing), Processing's
+analysis fails with a "model not found" error, and so does the pose diagnostic screen.
 
 ## Getting the file
 

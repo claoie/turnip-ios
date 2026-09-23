@@ -73,7 +73,8 @@ official Swift Package Manager distribution. Setup, in order:
    instead (known CocoaPods/Ruby issue, unrelated to this project)
 6. Download the MoveNet Thunder model per
    [`Turnip/Models/README.md`](Turnip/Models/README.md) — the app builds and runs
-   without it, but the pose diagnostic screen needs it to do anything.
+   without it, but nothing pose-related does: live pose on the camera, Processing's
+   analysis, and the pose diagnostic screen all need it.
 7. **Open `Turnip.xcworkspace`, not `Turnip.xcodeproj`.** CocoaPods requires the
    workspace; opening the bare project will fail to resolve `TensorFlowLiteSwift`.
 
@@ -255,7 +256,11 @@ every PR, so adding a directory without naming it here fails CI.
   under a feature screen's directory. The v1 pose pipeline's model types
   live in `Turnip/Pose/` (not `Turnip/PoseDiagnostic/`, which is the throwaway
   measurement screen) precisely so deleting the screen never strands
-  load-bearing code.
+  load-bearing code. Likewise the live capture-side pose path lives in
+  `Turnip/LivePose/`, not `Turnip/Camera/`: the camera screen drives it, but
+  the frame gate, queue, thermal policy and coverage rule are pipeline code
+  with their own tests, and only the preview overlay's drawing sits with the
+  camera.
 - `project.yml` takes `Turnip/` (and `TurnipTests/`) wholesale, so a
   subdirectory rename is picked up by `xcodegen generate` with no
   `project.yml` change.

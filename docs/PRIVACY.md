@@ -32,7 +32,12 @@ it's summarized from — keep both in sync when data handling changes.
   (`isNetworkAccessAllowed` in `PhotoVideoResolver`/`ThumbnailLoader`) — from
   the user's own iCloud, through a system framework. Videos are read from the
   Photos library the user grants access to, processed on-device by the bundled
-  MoveNet model, and exported clips are written back to Photos. If the user
+  MoveNet model, and exported clips are written back to Photos. While the
+  in-app camera records, the same model scores the live camera frames
+  on-device to draw the skeleton and detect clips; the frames are reduced to
+  model input in memory and released immediately, nothing but the recording
+  itself is written, and the only trace left behind is per-recording timing
+  and count figures in the device's own log. If the user
   trashes the original video's tile in Clip List, the original is deleted
   from Photos too — a user-initiated, on-device change to their own library,
   not data leaving the device.
