@@ -47,8 +47,15 @@ struct ClipPhotosSaver: Sendable {
     /// Saves one exported video file to Photos, returning the created asset's
     /// `PHAsset.localIdentifier`. The file must exist; the caller decides when to delete
     /// the sandbox copy afterwards.
+    ///
+    /// `albumTitle` is the Settings screen's "Save to an album" option
+    /// (`TurnipSettings.albumDestination`): `nil` is the original default behavior — the asset
+    /// is created with no album, landing wherever an ordinary Photos creation request lands it.
+    /// A non-nil title adds the new asset to that album, creating it first if it doesn't already
+    /// exist, both inside the one change block below so a save either fully lands (asset plus
+    /// album membership) or fully doesn't.
     @discardableResult
-    func saveVideo(at fileURL: URL) async throws -> String {
+    func saveVideo(at fileURL: URL, albumTitle: String? = nil) async throws -> String {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             throw ClipPhotosSaveError.missingInputFile(fileURL)
         }
@@ -69,9 +76,18 @@ struct ClipPhotosSaver: Sendable {
         var createdIdentifier: String?
         do {
             try await PHPhotoLibrary.shared().performChanges {
-                createdIdentifier = PHAssetCreationRequest
+                guard let placeholder = PHAssetCreationRequest
                     .creationRequestForAssetFromVideo(atFileURL: fileURL)?
-                    .placeholderForCreatedAsset?.localIdentifier
+                    .placeholderForCreatedAsset else { return }
+                createdIdentifier = placeholder.localIdentifier
+                guard let albumTitle else { return }
+                if let existingAlbum = Self.fetchAlbum(titled: albumTitle) {
+                    PHAssetCollectionChangeRequest(for: existingAlbum)?.addAssets([placeholder] as NSArray)
+                } else {
+                    PHAssetCollectionChangeRequest
+                        .creationRequestForAssetCollection(withTitle: albumTitle)
+                        .addAssets([placeholder] as NSArray)
+                }
             }
         } catch {
             throw ClipPhotosSaveError.saveRejected(reason: error.localizedDescription)
@@ -81,5 +97,16 @@ struct ClipPhotosSaver: Sendable {
                 reason: "Photos rejected the creation request for \(fileURL.lastPathComponent)")
         }
         return createdIdentifier
+    }
+
+    /// An existing user album titled `title`, or `nil` when none exists yet — checked inside the
+    /// same change block that would otherwise create a duplicate, so re-saving with the same
+    /// album name adds to the one album instead of making a new one each time.
+    private static func fetchAlbum(titled title: String) -> PHAssetCollection? {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "title = %@", title)
+        return PHAssetCollection.fetchAssetCollections(
+            with: .album, subtype: .albumRegular, options: options
+        ).firstObject
     }
 }

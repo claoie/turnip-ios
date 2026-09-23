@@ -75,9 +75,10 @@ struct RootTabView: View {
     /// unconditionally (e.g. in a `defer`) would destroy the user's only copy of the
     /// footage if the save fails, such as when Photos access is denied.
     private func handleRecorded(_ recording: CameraRecording) {
+        let albumTitle = TurnipSettingsStore.shared.current.albumDestination
         Task {
             do {
-                let identifier = try await ClipPhotosSaver().saveVideo(at: recording.fileURL)
+                let identifier = try await ClipPhotosSaver().saveVideo(at: recording.fileURL, albumTitle: albumTitle)
                 try? FileManager.default.removeItem(at: recording.fileURL)
                 guard let asset = PHAsset.fetchAssets(
                     withLocalIdentifiers: [identifier], options: nil

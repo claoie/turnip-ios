@@ -8,6 +8,10 @@ import SwiftUI
 /// recordings feed into the same `select(_:)` a tapped tile calls) rather than by this view.
 struct HomeView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
+    /// `@ObservedObject`, not `@StateObject`: this view doesn't own the singleton's
+    /// lifecycle, it only needs to re-render when a setting changes.
+    @ObservedObject private var settings = TurnipSettingsStore.shared
+    @State private var showSettings = false
 
     var body: some View {
         NavigationStack(path: $viewModel.path) {
@@ -16,6 +20,13 @@ struct HomeView: View {
                 // scrolls away with the tiles (docs/UIUX.md). Root-only — pushed screens
                 // declare their own bars.
                 .modifier(HomeNavigationBar())
+                // A plain overlay, like the camera screen's own corner buttons, rather than
+                // nav-bar chrome: Home's bar is kept deliberately content-free everywhere
+                // else so iOS 26 draws its scroll-edge glass over it (see
+                // `HomeNavigationBar`), and a real toolbar item there would fight that.
+                // Root-only, matching `HomeNavigationBar` itself: a pushed screen draws its
+                // own back chevron in this corner.
+                .overlay(alignment: .topTrailing) { settingsButton }
                 .navigationDestination(for: SelectedVideo.self) { video in
                     // A video the camera already analyzed while recording it lands on the
                     // clip list directly. Otherwise the Processing screen shows the picked
@@ -29,6 +40,7 @@ struct HomeView: View {
                     } else {
                         ProcessingView(
                             video: video,
+                            runner: ProcessingPipeline(sampleRate: settings.analysisGranularity),
                             autostart: false,
                             popToRoot: popToRoot,
                             destination: { result, popToRoot in
@@ -44,6 +56,17 @@ struct HomeView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(settings: settings)
+        }
+    }
+
+    private var settingsButton: some View {
+        ScrimIconButton(systemImage: "gearshape", accessibilityLabel: "Settings") {
+            showSettings = true
+        }
+        .padding()
+        .accessibilityIdentifier("settings-button")
     }
 
     private func popToRoot() {

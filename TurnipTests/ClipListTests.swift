@@ -28,7 +28,7 @@ final class ClipListTests: XCTestCase {
         assetIdentifier: String = "asset-1",
         duration: TimeInterval = 30,
         exportClip: @escaping ExportOneClip = { _, _, _, _ in URL(fileURLWithPath: "/tmp/fake.mp4") },
-        saveToPhotos: @escaping SaveOneClipToPhotos = { _ in },
+        saveToPhotos: @escaping SaveOneClipToPhotos = { _, _ in },
         deleteOriginalAsset: @escaping DeleteOriginalAsset = { _ in }
     ) -> ClipListViewModel {
         ClipListViewModel(
@@ -253,7 +253,7 @@ final class ClipListTests: XCTestCase {
                 await recorder.recordExport(spec.window)
                 return directory.appendingPathComponent("\(UUID().uuidString).mp4")
             },
-            saveToPhotos: { url in await recorder.recordSave(url) })
+            saveToPhotos: { url, _ in await recorder.recordSave(url) })
 
         let result = await viewModel.save()
 
@@ -363,7 +363,7 @@ final class ClipListTests: XCTestCase {
     func testSaveReportsPhotosSaveFailureReason() async {
         let viewModel = makeViewModel(
             items: [makeItem()],
-            saveToPhotos: { _ in throw ClipSaveError.photosSaveFailed(reason: "denied") })
+            saveToPhotos: { _, _ in throw ClipSaveError.photosSaveFailed(reason: "denied") })
 
         let result = await viewModel.save()
 

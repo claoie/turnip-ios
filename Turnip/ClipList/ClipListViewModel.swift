@@ -24,11 +24,13 @@ typealias ExportOneClip = @Sendable (
 ) async throws -> URL
 
 /// Saves one exported file to the Photos library. `ClipPhotosSaver` plugs in here.
-/// Throws `ClipSaveError.photosSaveFailed` so a save failure names the step.
+/// Throws `ClipSaveError.photosSaveFailed` so a save failure names the step. `albumTitle` is
+/// the Settings screen's "Save to an album" destination (`TurnipSettings.albumDestination`),
+/// read once by `save()` and threaded through rather than read again per clip.
 ///
 /// Concurrency contract: same as `ExportOneClip` — awaited from `@MainActor`-isolated
 /// code, so implementations must hop off the main actor internally for blocking work.
-typealias SaveOneClipToPhotos = @Sendable (URL) async throws -> Void
+typealias SaveOneClipToPhotos = @Sendable (_ fileURL: URL, _ albumTitle: String?) async throws -> Void
 
 /// Deletes the original video from Photos by its `PHAsset.localIdentifier`.
 /// `PhotoAssetDeleter` plugs in here. A throw here is treated as non-fatal by
@@ -95,9 +97,9 @@ private func exportOneClip(
 
 /// The production `SaveOneClipToPhotos`, wired to `ClipPhotosSaver` (add-only
 /// authorization).
-private func saveOneClipToPhotos(_ url: URL) async throws {
+private func saveOneClipToPhotos(_ url: URL, albumTitle: String?) async throws {
     do {
-        try await ClipPhotosSaver().saveVideo(at: url)
+        try await ClipPhotosSaver().saveVideo(at: url, albumTitle: albumTitle)
     } catch {
         throw ClipSaveError.photosSaveFailed(reason: error.localizedDescription)
     }
@@ -320,13 +322,17 @@ final class ClipListViewModel: ObservableObject {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
+        // Read once for the whole run rather than per clip: every clip in one Done tap saves to
+        // the same destination, and a setting change mid-save shouldn't split a run across two
+        // albums.
+        let albumTitle = TurnipSettingsStore.shared.current.albumDestination
         var failures: [String] = []
         for item in items where !item.isOriginal && !item.isTrashed {
             do {
                 let spec = ClipSpec(
                     window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment)
                 let fileURL = try await exportClip(spec, asset, directory) { _ in }
-                try await saveToPhotos(fileURL)
+                try await saveToPhotos(fileURL, albumTitle)
             } catch {
                 failures.append(Self.reason(for: error))
             }

@@ -97,12 +97,18 @@ final class LivePoseFrameTap: NSObject, @unchecked Sendable {
     }
 
     /// Record was tapped. Frames are counted from `recordingDidStart()`, not from here.
+    /// `sampleRate` is the Settings screen's granularity control
+    /// (`TurnipSettings.analysisGranularity`) — it sets the gate's base interval to
+    /// `1 / sampleRate` so the live path samples at the same rate the user configured for the
+    /// file path, rather than always the shipped default.
     func arm(
-        recording: LivePoseRecording, preparer: PoseInputPreparer, frameRate: Double, rotationDegrees: Int
+        recording: LivePoseRecording, preparer: PoseInputPreparer, frameRate: Double, rotationDegrees: Int,
+        sampleRate: Int = VideoFrameSampler.targetSamplesPerSecond
     ) {
+        let gate = LivePoseFrameGate(baseInterval: 1.0 / Double(sampleRate))
         var fresh = Session(
             recording: recording, preparer: preparer, frameRate: frameRate,
-            rotationDegrees: rotationDegrees, gate: LivePoseFrameGate())
+            rotationDegrees: rotationDegrees, gate: gate)
         fresh.apply(
             LivePoseThermalPolicy.response(to: ProcessInfo.processInfo.thermalState),
             at: ProcessInfo.processInfo.systemUptime)

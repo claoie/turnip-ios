@@ -278,6 +278,20 @@ final class VideoFrameSamplerTests: XCTestCase {
         // behavior rather than sampling every frame or dividing by zero.
         XCTAssertEqual(VideoFrameSampler.stride(forNominalFrameRate: 0), 3)
     }
+
+    /// The Settings screen's granularity control overrides `targetSamplesPerSecond` per
+    /// instance; `stride` takes the same override directly so both agree without a sampler
+    /// instance in hand.
+    func testStrideHonorsAnExplicitSampleRateInsteadOfTheDefault() {
+        XCTAssertEqual(VideoFrameSampler.stride(forNominalFrameRate: 30, sampleRate: 30), 1)
+        XCTAssertEqual(VideoFrameSampler.stride(forNominalFrameRate: 30, sampleRate: 1), 30)
+        XCTAssertEqual(VideoFrameSampler.stride(forNominalFrameRate: 240, sampleRate: 30), 8)
+    }
+
+    func testInstanceSampleRateDefaultsToTargetSamplesPerSecond() {
+        XCTAssertEqual(VideoFrameSampler().sampleRate, VideoFrameSampler.targetSamplesPerSecond)
+        XCTAssertEqual(VideoFrameSampler(sampleRate: 24).sampleRate, 24)
+    }
 }
 
 private actor Timestamps {

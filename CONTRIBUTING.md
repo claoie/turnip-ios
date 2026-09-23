@@ -245,7 +245,7 @@ SwiftLint runs in CI on every PR (`lint + build + test` — see
 domain, named for the domain they own (`App`, `Camera`, `ClipEditor`,
 `ClipList`, `DesignSystem`, `Home`, `LivePose`, `Media`, `ModelUpdates`,
 `Models`, `Photos`, `Pose`, `PoseDiagnostic`, `Processing`, `Resources`,
-`TrickDetection`).
+`Settings`, `TrickDetection`).
 `ci_scripts/check-directory-list.sh` compares that list against the tree on
 every PR, so adding a directory without naming it here fails CI.
 

@@ -1,8 +1,8 @@
 # Turnip — UI/UX Flow (v1 MVP)
 
-*Rev 2 · 2026-09-04 · Draft for review.*
+*Rev 3 · 2026-09-23 · Draft for review.*
 
-*(Rev 1 established the five-screen flow and made Home a Photos video gallery. Rev 2 resolves the three open questions into decisions.)*
+*(Rev 1 established the five-screen flow and made Home a Photos video gallery. Rev 2 resolves the three open questions into decisions. Rev 3 adds the Settings screen this doc previously scoped out.)*
 
 Companion to [`DESIGN.md`](DESIGN.md), which specifies the auto-edit *pipeline*
 (pose detection → motion signal → peak detection → crop rect → export). This
@@ -114,7 +114,28 @@ out-of-process picker, so it needs real Photos access. As built:
   visible rows, over 60-asset pages, so a library with hundreds of
   videos scrolls without stalling on first load.
 
-### 1a. Camera
+### 1a. Settings
+
+- Reached by tapping the gear icon overlaid at Home's top-trailing corner (matching the corner
+  buttons the Camera page already uses, rather than nav-bar chrome — Home's own bar is kept
+  content-free for the iOS 26 scroll-edge glass described under "1. Home / Video Gallery" above).
+  Presented as a sheet, not pushed onto the flow's `NavigationStack`: it has nothing to hand back
+  to Home and isn't part of "pick a video, get clips."
+- Four preferences, `UserDefaults`-backed (`Turnip/Settings/TurnipSettingsStore.swift`), each
+  taking effect at its own integration point rather than needing a restart:
+  - **Analysis mode** (segmented Real-time / Offline) — whether the camera scores pose live while
+    recording (§1b below) or always defers to Processing (§2). Real-time is the default and
+    matches the app's behavior before this screen existed.
+  - **Save to an album**, with a name field shown once it's on — whether a saved clip is added to
+    a named Photos album (created on first use) instead of landing with no album, the original
+    default.
+  - **Analysis granularity** (stepper, 1-30, default 10) — frames sampled per second of footage,
+    replacing the fixed rate `docs/DESIGN.md`'s "Performance targets" describes; both the file
+    path and the live path (§1b) sample at this rate.
+- Out of scope here: which screen owns "5. etc." from the issue this shipped for — the issue
+  named exactly these four and left further settings to a follow-up.
+
+### 1b. Camera
 
 - One of the root tab view's two pages (see "Root navigation" above), not a
   modal — reached by tapping the floating bar's camera icon or swiping the
@@ -225,9 +246,10 @@ out-of-process picker, so it needs real Photos access. As built:
 - Accessibility acceptance criteria per screen — those live in
   [`ACCESSIBILITY.md`](ACCESSIBILITY.md) (issue #22) and are checked on each screen's PR.
 - Community upload opt-in — v2, layered onto this flow later.
-- Settings screen — nothing in v1 scope needs configurable state (aspect
-  ratio, buffer duration) beyond the per-clip adjustment already covered by
-  Clip Detail's drag handles.
+- Further Settings options beyond the four §1a covers — aspect ratio, buffer
+  duration, and whatever else a future issue asks for stay out of scope until
+  one does; the per-clip crop/trim adjustment in Clip Detail's drag handles
+  already covers per-clip framing without a setting.
 - Visual design (colors, typography, exact layout) — this doc fixes screens
   and transitions, not pixels.
 
@@ -276,7 +298,7 @@ Resolved 2026-09-04.
 5. **In-app camera + dark-only theme → Added.** Recorded 2026-09-19: v1 no
    longer requires every video to already be in the Photos library before
    Turnip can see it — Home's swipe-up affordance starts a minimal in-app
-   camera (§1a), and a recording is saved to Photos and handed to the
+   camera (§1b), and a recording is saved to Photos and handed to the
    existing `PHAsset` pipeline unchanged. Home also gained the
    collapsed/expanded two-state layout (§1) and the app forces dark
    appearance everywhere, dropping light-mode support.

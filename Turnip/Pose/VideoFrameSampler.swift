@@ -42,23 +42,35 @@ struct SampledFrame: @unchecked Sendable {
 /// strict concurrency (Swift 6 would otherwise report "sending 'self.sampler' risks causing data
 /// races").
 struct VideoFrameSampler: Sendable {
-    /// Samples per second of footage, independent of the source frame rate (docs/DESIGN.md
-    /// "Performance targets"). At 30 fps this reproduces the old hardcoded stride of 3; at the
-    /// 240 fps slo-mo the design doc recommends as the recording mode, a fixed stride of 3 would
-    /// have run 80 inferences per second of footage — 8x the intended sample rate, for no
-    /// accuracy benefit.
+    /// The shipped default samples per second of footage, independent of the source frame rate
+    /// (docs/DESIGN.md "Performance targets"). At 30 fps this reproduces the old hardcoded
+    /// stride of 3; at the 240 fps slo-mo the design doc recommends as the recording mode, a
+    /// fixed stride of 3 would have run 80 inferences per second of footage — 8x the intended
+    /// sample rate, for no accuracy benefit. The Settings screen's granularity control
+    /// (`TurnipSettings.analysisGranularity`, 1...30) overrides this per instance via
+    /// `sampleRate` below; this constant stays the default and the fallback for every call site
+    /// that doesn't read settings (tests, the pose diagnostic screen).
     static let targetSamplesPerSecond = 10
 
-    /// Maps a track's nominal frame rate to the decode stride that yields ~`targetSamplesPerSecond`
-    /// samples per second of footage. A pure function (rather than inline math) so the fps→stride
-    /// mapping is unit-testable without a video file.
-    static func stride(forNominalFrameRate nominalFrameRate: Float) -> Int {
+    /// Samples per second of footage this instance targets, independent of the source frame
+    /// rate. Defaults to `targetSamplesPerSecond`.
+    let sampleRate: Int
+
+    init(sampleRate: Int = VideoFrameSampler.targetSamplesPerSecond) {
+        self.sampleRate = sampleRate
+    }
+
+    /// Maps a track's nominal frame rate to the decode stride that yields ~`sampleRate` samples
+    /// per second of footage. A pure static function (rather than inline math, and rather than
+    /// an instance method) so the fps→stride mapping is unit-testable without a video file or an
+    /// instance.
+    static func stride(forNominalFrameRate nominalFrameRate: Float, sampleRate: Int = targetSamplesPerSecond) -> Int {
         guard nominalFrameRate > 0 else {
             // The track doesn't declare a rate (nominalFrameRate == 0): keep the old 30 fps
             // behavior instead of sampling every frame or dividing by zero.
             return 3
         }
-        return max(1, Int((Double(nominalFrameRate) / Double(targetSamplesPerSecond)).rounded()))
+        return max(1, Int((Double(nominalFrameRate) / Double(sampleRate)).rounded()))
     }
 
     /// Decodes `asset` and invokes `handler` once per kept frame, sequentially, off the main actor.
@@ -81,7 +93,7 @@ struct VideoFrameSampler: Sendable {
         // of 3 matches the design doc only at 30 fps, and at 240 fps slo-mo it would run 8x the
         // intended inferences per second of footage.
         let nominalFrameRate = try await track.load(.nominalFrameRate)
-        let sampleStride = Self.stride(forNominalFrameRate: nominalFrameRate)
+        let sampleStride = Self.stride(forNominalFrameRate: nominalFrameRate, sampleRate: sampleRate)
 
         // iPhone portrait videos are stored as landscape-encoded buffers with a 90° preferredTransform,
         // so frames have to be rendered through a video composition that applies it.
