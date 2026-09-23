@@ -48,8 +48,15 @@ struct CameraFormatGroup: Identifiable {
 final class CameraCaptureViewModel: NSObject, ObservableObject {
     @Published private(set) var authorization: CameraAccessState = .notDetermined
     @Published private(set) var isRecording = false
-    @Published private(set) var recordedFileURL: URL?
+    /// True from Stop until the take's live results have finished scoring — one inference in
+    /// steady state — so the record button cannot start a new take that would cancel them.
+    @Published private(set) var isFinishingRecording = false
     @Published var errorMessage: String?
+    /// Receives each finished take. Called from here rather than observed on the view: the
+    /// hand-off happens after Stop's drain wait, and the user can have swiped away from the
+    /// camera page by then. A file that finished writing is always handed on, whatever the
+    /// view is doing.
+    var onFinished: ((CameraRecording) -> Void)?
 
     @Published private(set) var hasCaptureDevice = false
     @Published private(set) var lensOptions: [LensOption] = []
@@ -88,8 +95,19 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
     /// loads, or if the bundled model is missing; recordings made meanwhile skip live pose.
     private var poseModel: MoveNetThunderModel?
     /// The consumer of the last stopped recording while it finishes scoring what was queued.
-    /// A new recording cancels it: its results only feed the overlay, which is gone by then.
+    /// Leaving the camera cancels it; a new take cannot start until it is done.
     private var drainingLivePose: LivePoseRecording?
+    /// The pixel size the current take's keypoints are normalized against, read at record start.
+    private var liveRenderedPixelSize: CGSize = .zero
+    /// Steps 4-6 over the take's live results. Injected so the camera can be tested without the
+    /// real detector; the default is the same detection the Processing screen runs.
+    private let detectClips: ClipDetection
+
+    typealias ClipDetection = @Sendable ([PoseFrameResult], CGSize) -> [ProcessedClip]
+
+    init(detectClips: @escaping ClipDetection = ProcessingPipeline().detectClips) {
+        self.detectClips = detectClips
+    }
 
     /// Candidate frame rates to probe each format against, rather than only reading off
     /// each range's `maxFrameRate` — a format whose range is (say) 1...30 would otherwise
@@ -162,10 +180,10 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
         if isRecording {
             movieOutput.stopRecording()
         } else {
+            guard !isFinishingRecording else { return }
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("turnip-recording-\(UUID().uuidString)")
                 .appendingPathExtension("mov")
-            recordedFileURL = nil
             armLivePose()
             movieOutput.startRecording(to: url, recordingDelegate: self)
             isRecording = true
@@ -618,8 +636,10 @@ extension CameraCaptureViewModel: AVCaptureFileOutputRecordingDelegate {
                 livePoseTap.cancel()
                 return
             }
-            finishLivePose()
-            recordedFileURL = outputFileURL
+            isFinishingRecording = true
+            let clips = await finishLivePose()
+            isFinishingRecording = false
+            onFinished?(CameraRecording(fileURL: outputFileURL, detectedClips: clips))
         }
     }
 }
@@ -646,8 +666,6 @@ extension CameraCaptureViewModel {
     /// produces them in the movie output's orientation, and the movie connection's own rotation
     /// undone is the sensor picture the preview layer maps from.
     private func armLivePose() {
-        drainingLivePose?.cancel(producer: nil)
-        drainingLivePose = nil
         guard let poseModel, let device = videoDevice,
               let dataConnection = livePoseTap.output.connection(with: .video),
               let movieConnection = movieOutput.connection(with: .video) else { return }
@@ -655,6 +673,9 @@ extension CameraCaptureViewModel {
         let rotation = LivePoseKeypointRotation.relativeDegrees(
             producer: LivePoseFrameTap.rotationDegrees(of: dataConnection), consumer: movieRotation)
         let toDeviceSpace = LivePoseKeypointRotation.relativeDegrees(producer: movieRotation, consumer: 0)
+        let sensor = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+        liveRenderedPixelSize = LivePoseCoverage.renderedPixelSize(
+            sensorWidth: sensor.width, sensorHeight: sensor.height, movieRotationDegrees: movieRotation)
         let recording = LivePoseRecording(
             inference: { try await poseModel.runInference(on: $0) },
             channel: LivePoseSampleChannel(),
@@ -672,18 +693,21 @@ extension CameraCaptureViewModel {
             frameRate: Self.activeFrameRate(of: device) ?? 30)
     }
 
-    /// The movie output finished. The consumer scores what is still queued — a second or so —
-    /// and the recording's metrics go to the log, where the acceptance gate in
-    /// docs/LIVE_POSE.md is read from.
-    private func finishLivePose() {
-        guard let recording = livePoseTap.endRecording() else { return }
+    /// The movie output finished. Waits for the consumer to score what is still queued — one
+    /// inference in steady state — logs the recording's metrics (where the acceptance gate in
+    /// docs/LIVE_POSE.md is read from), and returns the take's clips when live inference covered
+    /// the whole take. Nil sends the take through Processing: no live recording ran, the camera
+    /// was left mid-drain, or coverage fell short.
+    private func finishLivePose() async -> [ProcessedClip]? {
+        guard let recording = livePoseTap.endRecording() else { return nil }
         drainingLivePose = recording
-        Task { [weak self] in
-            let outcome = await recording.outcome()
-            LivePoseLogger.log(outcome)
-            guard let self, drainingLivePose === recording else { return }
+        let outcome = await recording.outcome()
+        LivePoseLogger.log(outcome)
+        if drainingLivePose === recording {
             drainingLivePose = nil
         }
+        guard LivePoseCoverage.isComplete(outcome) else { return nil }
+        return detectClips(outcome.results, liveRenderedPixelSize)
     }
 
     private func cancelLivePose() {

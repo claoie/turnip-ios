@@ -2,13 +2,14 @@ import SwiftUI
 
 /// The camera-recording screen, one of the two pages `RootTabView` swipes between:
 /// full-screen preview, a cancel chevron, manual controls (lens/zoom, front/rear flip,
-/// resolution/fps, torch, exposure bias), and one record button. On a successful
-/// recording, `onFinished` hands the caller the temp file so it can save it to Photos and
-/// feed the resulting `PHAsset` into the existing picked-video pipeline — this screen
-/// knows nothing about Photos or navigation. `onCancel` backs out to the gallery tab; a
-/// no-op default since not every caller (e.g. a preview) needs one.
+/// resolution/fps, torch, exposure bias), and one record button. While recording, the pose
+/// scored live on the camera frames is drawn over the preview. On a successful recording,
+/// `onFinished` hands the caller the temp file and any clips detected live, so it can save
+/// the file to Photos and feed the resulting `PHAsset` into the picked-video flow — this
+/// screen knows nothing about Photos or navigation. `onCancel` backs out to the gallery
+/// tab; a no-op default since not every caller (e.g. a preview) needs one.
 struct CameraCaptureView: View {
-    let onFinished: (URL) -> Void
+    let onFinished: (CameraRecording) -> Void
     var onCancel: () -> Void = {}
 
     @StateObject private var viewModel = CameraCaptureViewModel()
@@ -47,12 +48,11 @@ struct CameraCaptureView: View {
                 bottomControls
             }
         }
-        .task { await viewModel.start() }
-        .onDisappear { viewModel.stop() }
-        .onChange(of: viewModel.recordedFileURL) { url in
-            guard let url else { return }
-            onFinished(url)
+        .task {
+            viewModel.onFinished = onFinished
+            await viewModel.start()
         }
+        .onDisappear { viewModel.stop() }
         .alert("Couldn't record video", isPresented: errorPresented) {
             Button("OK") {}
         } message: {
@@ -94,6 +94,8 @@ struct CameraCaptureView: View {
             .animation(.easeOut(duration: 0.2), value: viewModel.isRecording)
         }
         .padding(.bottom, 24)
+        .opacity(viewModel.isFinishingRecording ? 0.4 : 1)
+        .disabled(viewModel.isFinishingRecording)
         .accessibilityLabel(viewModel.isRecording ? "Stop recording" : "Start recording")
     }
 

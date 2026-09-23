@@ -250,7 +250,11 @@ final class VideoLibraryViewModel: ObservableObject {
     /// time: tiles are disabled while a resolution is in flight, and `cancelSelection()` aborts it.
     /// A composition export written during resolution lives as long as its `SelectedVideo` stays
     /// on `path` — see the property's `didSet`.
-    func select(_ asset: PHAsset) {
+    ///
+    /// `detectedClips` travels with the pushed video when the caller already has them — a take
+    /// the camera scored while recording — and Home then lands on the clip list instead of
+    /// Processing. A tapped tile has none.
+    func select(_ asset: PHAsset, detectedClips: [ProcessedClip]? = nil) {
         guard resolution == nil else { return }
         errorMessage = nil
         resolution = Resolution(assetIdentifier: asset.localIdentifier, downloadProgress: nil)
@@ -278,7 +282,9 @@ final class VideoLibraryViewModel: ObservableObject {
                     PhotoVideoResolver.deleteTemporaryExport(for: avAsset)
                     return
                 }
-                path.append(SelectedVideo(assetIdentifier: identifier, asset: avAsset, duration: asset.duration))
+                path.append(SelectedVideo(
+                    assetIdentifier: identifier, asset: avAsset, duration: asset.duration,
+                    detectedClips: detectedClips))
             } catch is CancellationError {
                 // User backed out; nothing to report.
             } catch {

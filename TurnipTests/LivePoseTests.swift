@@ -366,6 +366,58 @@ final class LivePoseTests: XCTestCase {
         XCTAssertTrue(outcome.results.isEmpty)
     }
 
+    // MARK: - Coverage
+
+    /// A clean 3 s take at 10 samples/s lays down 31 grid slots; 29 or more scored counts as
+    /// complete, since the first and last slots can straddle the file's own start and end.
+    func testCoverageAcceptsACleanRecordingWithinTheSampleTolerance() {
+        XCTAssertEqual(LivePoseCoverage.expectedSamples(duration: 3.0), 31)
+        XCTAssertEqual(LivePoseCoverage.expectedSamples(duration: 0), 0)
+
+        XCTAssertTrue(LivePoseCoverage.isComplete(outcome(kept: 31, inferred: 31, duration: 3.0)))
+        XCTAssertTrue(LivePoseCoverage.isComplete(outcome(kept: 29, inferred: 29, duration: 3.0)))
+        XCTAssertFalse(
+            LivePoseCoverage.isComplete(outcome(kept: 28, inferred: 28, duration: 3.0)),
+            "three missing slots is a gap the detector would feel")
+    }
+
+    /// Every way a recording can fall short of the file path sends it through Processing.
+    func testCoverageRejectsEveryIncompleteEnding() {
+        let clean = outcome(kept: 31, inferred: 31, duration: 3.0)
+        XCTAssertTrue(LivePoseCoverage.isComplete(clean), "the baseline must pass for the rejections to mean anything")
+
+        let rejected: [(String, LivePoseOutcome)] = [
+            ("a queue drop", outcome(kept: 31, inferred: 31, duration: 3.0) { $0.queueDrops = 1 }),
+            ("a preprocess failure", outcome(kept: 31, inferred: 31, duration: 3.0) { $0.preprocessFailures = 1 }),
+            ("a thermal stop", outcome(kept: 31, inferred: 31, duration: 3.0) { $0.stoppedForThermal = true }),
+            ("time at serious", outcome(kept: 31, inferred: 31, duration: 3.0) { $0.secondsAtSerious = 0.5 }),
+            ("cancellation", outcome(kept: 31, inferred: 31, duration: 3.0) { $0.wasCancelled = true }),
+            ("a kept sample never scored", outcome(kept: 31, inferred: 30, duration: 3.0)),
+            ("an inference error", outcome(kept: 31, inferred: 31, duration: 3.0, errorMessage: "op unsupported")),
+            ("nothing scored", outcome(kept: 0, inferred: 0, duration: 0))
+        ]
+        for (reason, outcome) in rejected {
+            XCTAssertFalse(LivePoseCoverage.isComplete(outcome), "\(reason) must send the take through Processing")
+        }
+    }
+
+    /// The sensor is landscape; a portrait movie connection turns it a quarter-turn, so the size
+    /// the live keypoints are normalized against transposes.
+    func testRenderedPixelSizeTransposesForAQuarterTurn() {
+        XCTAssertEqual(
+            LivePoseCoverage.renderedPixelSize(sensorWidth: 1920, sensorHeight: 1080, movieRotationDegrees: 90),
+            CGSize(width: 1080, height: 1920))
+        XCTAssertEqual(
+            LivePoseCoverage.renderedPixelSize(sensorWidth: 1920, sensorHeight: 1080, movieRotationDegrees: 270),
+            CGSize(width: 1080, height: 1920))
+        XCTAssertEqual(
+            LivePoseCoverage.renderedPixelSize(sensorWidth: 1920, sensorHeight: 1080, movieRotationDegrees: 0),
+            CGSize(width: 1920, height: 1080))
+        XCTAssertEqual(
+            LivePoseCoverage.renderedPixelSize(sensorWidth: 1920, sensorHeight: 1080, movieRotationDegrees: 180),
+            CGSize(width: 1920, height: 1080))
+    }
+
     // MARK: - Overlay geometry
 
     /// Only confident joints are drawn, and a limb needs both of its joints; the conversion the
@@ -401,6 +453,20 @@ final class LivePoseTests: XCTestCase {
     }
 
     // MARK: - Fixtures
+
+    /// A recording outcome with the figures the coverage rule reads, plus any single-field
+    /// override for the rejection cases.
+    private func outcome(
+        kept: Int, inferred: Int, duration: TimeInterval, errorMessage: String? = nil,
+        adjust: (inout LivePoseMetrics) -> Void = { _ in }
+    ) -> LivePoseOutcome {
+        var metrics = LivePoseMetrics()
+        metrics.framesKept = kept
+        metrics.framesInferred = inferred
+        metrics.recordingDuration = duration
+        adjust(&metrics)
+        return LivePoseOutcome(results: [], metrics: metrics, errorMessage: errorMessage)
+    }
 
     /// Collects what the recording's live result handler receives. A class with a lock rather
     /// than an actor: the handler is synchronous and called from the drain's task.

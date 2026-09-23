@@ -1,12 +1,12 @@
 # Live pose inference during recording
 
-*Rev 3 · 2026-09-23 · Live on every recording, with the skeleton drawn on the camera preview; device gate not yet run. Rev 1 was the design draft, Rev 2 the flag-gated prototype.*
+*Rev 4 · 2026-09-23 · A take goes straight from Stop to the clip list on its live results; Processing is the fallback. Device gate not yet run. Rev 1 was the design draft, Rev 2 the flag-gated prototype, Rev 3 the preview overlay.*
 
 *Companion to [`DESIGN.md`](DESIGN.md). This doc covers one question: can the pose pass start when recording starts, instead of after the file is written? Pipeline shape, budgets and model choice stay as recorded in `DESIGN.md`.*
 
 ## Decision
 
-**Go, gated on one on-device test.** Add an `AVCaptureVideoDataOutput` alongside the existing `AVCaptureMovieFileOutput`, sample the live frames at the same 10 samples/sec the file path uses, and let inference lag behind the recording and finish after it. It runs on every recording and draws the scored skeleton on the camera preview while the take is being filmed. The gate in "Acceptance gate" still has to pass on the oldest supported device at 240 fps; until it does, the recording's own frame count is the thing to watch.
+**Go, gated on one on-device test.** Add an `AVCaptureVideoDataOutput` alongside the existing `AVCaptureMovieFileOutput`, sample the live frames at the same 10 samples/sec the file path uses, and let inference lag behind the recording and finish after it. It runs on every recording, draws the scored skeleton on the camera preview while the take is being filmed, and when it covered the whole take the same trick detection Processing runs is applied to its results and the take lands on the clip list with no second decode. The gate in "Acceptance gate" still has to pass on the oldest supported device at 240 fps; until it does, the recording's own frame count is the thing to watch.
 
 The recorder itself does not change. If the gate fails on the recording side, the fallback is the `AVCaptureVideoDataOutput` + `AVAssetWriter` rewrite described under "Alternatives", not a weaker version of this design.
 
@@ -60,9 +60,19 @@ The tensor is 256 × 256 × 3 bytes ≈ 196 KB. At 10 samples/sec that is ≈ 11
 1. `MoveNetThunderModel` is loaded once, when the camera first starts, and reused across recordings. A take that starts before it has loaded records normally without live pose; a load failure is a build problem (the `.tflite` is not bundled) and is logged, never shown as a recording error. The diagnostic screen's own "Run diagnostic" still loads per run.
 2. The letterbox and RGB repack live in `PoseInputPreparer`, a synchronous function callable from the capture queue and exposed off the actor as `MoveNetThunderModel.inputPreparer`. The actor takes a `PoseModelInput` (tensor plus letterbox mapping). The pixel-buffer overload the file path calls delegates to the same preparer, so there is one preprocess implementation.
 3. A per-recording queue (`LivePoseSampleChannel` over `BoundedSampleQueue`), bounded to 30 entries ≈ 3 s ≈ 6 MB. Drop-oldest on overflow; drops and the high-water mark are counted. `LivePoseRecording` drains it through the model actor and appends results in dequeue order, which is timestamp order because the queue is FIFO and the capture callback is serial.
-4. The queue is created on the Record tap and owned by the recording, not the screen. Stop finishes the producer and lets the consumer drain, then logs the recording's metrics; the finished file is handed on immediately, not after the drain. Leaving the camera tab, session teardown and a new Record tap cancel a drain still in progress: its results only fed the overlay, which is gone by then. A consumer that outlives the recording is always the one for that recording, never a shared one.
+4. The queue is created on the Record tap and owned by the recording, not the screen. Stop finishes the producer, waits for the consumer to drain — one inference in steady state, at most the queue bound — then logs the recording's metrics and hands the file on together with the take's clips. The record button is disabled for that wait so a new take cannot cancel it. Leaving the camera tab and session teardown cancel a drain still in progress, and the file is still handed on, without clips. A consumer that outlives the recording is always the one for that recording, never a shared one.
 5. Results reach the overlay through the recording's result handler as each one is scored, so the skeleton lags the picture by one inference plus whatever is queued — tens of milliseconds when the queue sits empty. The overlay clears when the recording ends.
 6. Per-sample preprocess time and inference time are recorded separately (`LivePoseMetrics`). A Debug build runs the letterbox loop unoptimized, so when the gate is read from a Debug run the two must not be conflated.
+
+### From results to clips
+
+The live results are the same shape the file sampler produces — frame-normalized keypoints in the file's display orientation, file-relative timestamps, ten per second — so steps 4-6 (motion signal, trick windows, crop rects) run on them unchanged, through the one `ProcessingPipeline.detectClips` both routes call. The crop step measures against the sensor's dimensions transposed for a portrait movie connection, the live equivalent of the file path's composition render size.
+
+A take only skips Processing when live inference covered it end to end at the normal rate (`LivePoseCoverage`): no inference error, not cancelled, no thermal stop, no time under `.serious` (a halved rate changes what the detector's per-sample thresholds mean), no queue drops, no preprocess failures, every kept sample scored, and the scored count within two of the grid's count over the recording's duration. Anything short of that hands the file on with no clips, and Home goes to Processing exactly as it does for a tapped tile. The user never gets a worse clip list than the file path gives, only a faster one.
+
+A take with complete coverage and zero detected windows still lands on the clip list (the original tile and the add tile), not on Processing's "No tricks found" state: a second decode would find nothing, and the clip list is where a clip can be added by hand.
+
+The clips are attached to the `SelectedVideo` Home pushes, so the windows are applied to the asset PhotoKit hands back for the saved take. That asset is a plain file on the recording's real timeline: the saved take carries no slow-motion adjustment, so PhotoKit does not answer with the retimed composition it builds for the Camera app's slo-mo videos, and the live timestamps line up with it. If the saver ever writes that adjustment, this is the assumption that breaks.
 
 ### Timestamps
 
@@ -82,11 +92,9 @@ Coverage under backoff is not deterministic. If a consumer needs full coverage, 
 
 ### Where it lives
 
-The camera screen. `CameraCaptureViewModel` owns the tap and the model, arms a recording on each Record tap, publishes the latest pose for `CameraPreviewView` to draw, and logs each recording's metrics (`LivePoseLogger`, log category `LivePose`) once the consumer has drained. There is no flag and no review screen: the metrics line is the gate's readout, collected from the device log.
+The camera screen. `CameraCaptureViewModel` owns the tap and the model, arms a recording on each Record tap, publishes the latest pose for `CameraPreviewView` to draw, and on Stop waits for the drain, logs the recording's metrics (`LivePoseLogger`, log category `LivePose`), and hands the file on with the take's clips when coverage was complete. `RootTabView` saves the file to Photos and selects the saved asset with those clips; `VideoLibraryViewModel.select` carries them onto the pushed `SelectedVideo`, and Home's destination lands a video that has them on the clip list and one that does not on Processing. There is no flag and no review screen: the metrics line is the gate's readout, collected from the device log.
 
-Everything live-specific is in `Turnip/LivePose/`; the only shared change is the preprocess seam in `Turnip/Pose/`.
-
-The payoff is `ProcessingPipeline`. Its `FrameSampling` protocol takes an `AVURLAsset`, so a live source cannot conform to it as written. The pipeline needs a second source abstraction that yields `(timestamp, tensor)` and feeds the same inference closure. That refactor is out of scope for the prototype and in scope for shipping.
+Everything live-specific is in `Turnip/LivePose/`; the shared changes are the preprocess seam in `Turnip/Pose/` and `detectClips` on `ProcessingPipeline`. The live path did not need a second `FrameSampling` source: the pipeline's detection step is separable from its sampling step, so the live results go in after sampling rather than through it.
 
 ## Acceptance gate
 
@@ -96,7 +104,7 @@ The unverified combination is a movie file output and a video data output both a
 2. **Inference sustains about 10 samples/sec** with the queue near empty. The "Live:" log line reports samples/sec, queue drops, maximum queue depth, late-frame discards, and preprocess and inference times separately.
 3. **Thermal state stays at or below `.fair`** for the whole take, and the recording keeps its frame rate under `.serious` if it is reached. The "Live:" line reports seconds spent at `.serious` and whether `.critical` stopped sampling.
 
-Also check on the device, since no test here can: that the skeleton lands on the athlete on the preview in portrait, on both the rear and the mirrored front camera (the keypoint rotation's sign pairing and the preview layer's device-point mapping).
+Also check on the device, since no test here can: that the skeleton lands on the athlete on the preview in portrait, on both the rear and the mirrored front camera (the keypoint rotation's sign pairing and the preview layer's device-point mapping); that a clean take lands on the clip list with its windows on the tricks; and that the "Live:" line for a take that fell back to Processing names why.
 
 Fail (1): the recorder is the constraint; move to the `AVAssetWriter` alternative. Fail (2) or (3) only: the model is the constraint; try `Interpreter.Options.threadCount` first, then the Core ML delegate, and rerun the gate. The Core ML delegate brings the Neural Engine into play and has its own op-support risk for MoveNet, so it is the second lever, not the first.
 
@@ -112,13 +120,12 @@ Fail (1): the recorder is the constraint; move to the `AVAssetWriter` alternativ
 
 ## Tradeoffs recorded
 
-- Results are ready seconds after Stop, and the post-hoc decode of a 240 fps file is skipped.
-- Coverage is not deterministic under thermal backoff or drops. Backfill from the file is the recovery, not part of this change.
-- Two frame sources feed one model. The preprocess step is shared; the sampling abstraction is not, until the pipeline refactor.
+- Results are ready within one inference of Stop, and the post-hoc decode of a 240 fps file is skipped for a take with complete coverage.
+- Coverage is not deterministic under thermal backoff or drops. A take with incomplete coverage goes through Processing, which decodes the whole file; backfilling only the gaps from the file would be cheaper and is a follow-on.
+- Two frame sources feed one model and one detection step. The preprocess and detection steps are shared; the sampling step is not, and does not need to be.
 - A lagging consumer has an explicit lifecycle. Stop finishes its queue and lets it drain; every path that abandons a recording cancels it.
-- The simulator has no camera. Every change on the capture side needs a device run; `LivePoseTests` covers the frame gate, the queue bound and drop policy, the channel hand-off, the drain loop's endings, the timestamp offset, the thermal policy, the keypoint rotation and the overlay geometry as pure functions, and `PoseInputPreparerTests` covers the shared preprocess on 420v and BGRA buffers.
-- The live results are consumed only by the overlay so far. The post-recording analysis still decodes the file; feeding it the live results is the `ProcessingPipeline` work below.
+- The simulator has no camera. Every change on the capture side needs a device run; `LivePoseTests` covers the frame gate, the queue bound and drop policy, the channel hand-off, the drain loop's endings, the timestamp offset, the thermal policy, the keypoint rotation, the overlay geometry and the coverage rule as pure functions; `PoseInputPreparerTests` covers the shared preprocess on 420v and BGRA buffers; `ProcessingPipelineRunTests` pins `detectClips` to what `run` produces for the same frames; and `VideoLibrarySelectionTests` covers clips travelling with the pushed video.
 
 ## Out of scope
 
-On-screen inference metrics for users, changing the recording format or codec, and the `ProcessingPipeline` source abstraction beyond noting that it is needed.
+On-screen inference metrics for users, changing the recording format or codec, and backfilling incomplete live coverage from the file instead of re-analyzing the whole take.

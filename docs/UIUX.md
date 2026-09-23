@@ -33,7 +33,8 @@ flowchart TD
     A[Home / Video Gallery] -->|tap a video tile| B[Processing]
     A -->|tap camera icon / swipe right| G[Camera]
     G -->|tap gallery icon / swipe left| A
-    G -->|recording saved| B
+    G -->|recording saved, analyzed live| C
+    G -->|recording saved, live analysis incomplete| B
     B -->|clips found| C[Clip List]
     B -->|no tricks detected| E1[Empty state]
     B -->|pipeline error| E2[Error state]
@@ -124,13 +125,17 @@ out-of-process picker, so it needs real Photos access. As built:
 - Needs `NSCameraUsageDescription` and `NSMicrophoneUsageDescription`
   (Info.plist); denied/restricted access shows a message pointing at
   Settings, matching Home's own denied state.
+- While recording, pose inference runs on the live camera frames and the
+  scored skeleton is drawn over the preview (`docs/LIVE_POSE.md`).
 - A finished recording is saved to the Photos library (via the same
-  `ClipPhotosSaver` Export Confirmation already uses) rather than kept as a
-  private file — that turns it into an ordinary `PHAsset`, so it re-enters
-  the flow exactly the way a tapped gallery tile does: `RootTabView` calls
-  `VideoLibraryViewModel.select(_:)` on the newly-created asset and switches
-  to the gallery tab, landing on Processing's idle state exactly as if the
-  user had tapped a tile.
+  `ClipPhotosSaver` Clip List uses) rather than kept as a private file —
+  that turns it into an ordinary `PHAsset`, so it re-enters the flow the
+  way a tapped gallery tile does: `RootTabView` calls
+  `VideoLibraryViewModel.select(_:detectedClips:)` on the newly-created
+  asset and switches to the gallery tab. When live inference covered the
+  whole take, its clips travel with the selection and the take lands on
+  Clip List directly (§3) with no analysis step; otherwise it lands on
+  Processing's idle state exactly as if the user had tapped a tile.
 
 ### 2. Processing
 
@@ -286,3 +291,11 @@ Resolved 2026-09-04.
    Photos, which Done carries out once every derived clip has confirmed it
    saved. The "Select All" / "Deselect All" toolbar action is gone along with
    the keep/discard concept it bulk-toggled.
+7. **Camera takes skip Processing → Added.** Recorded 2026-09-23: the camera
+   scores pose on its live frames while recording and draws the skeleton on
+   the preview; when that covered the whole take, the same trick detection
+   Processing runs is applied to the live results and the take lands on Clip
+   List straight from Stop. A take live inference could not cover end to end
+   (model still loading, device throttling, samples shed) still lands on
+   Processing's idle state, so the fallback is never worse than before.
+   Tapped gallery tiles are unchanged.

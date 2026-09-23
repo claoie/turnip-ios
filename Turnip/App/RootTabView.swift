@@ -68,22 +68,22 @@ struct RootTabView: View {
 
     /// A recording finished: save it to Photos (reusing the same `ClipPhotosSaver` the
     /// export flow already uses), then hand the resulting `PHAsset` to `viewModel.select`
-    /// — the exact call a tapped gallery tile makes — and switch to the gallery tab so the
-    /// user sees the pick land, Photos-app style.
+    /// — the call a tapped gallery tile makes, plus the clips the camera detected live —
+    /// and switch to the gallery tab so the user sees the pick land, Photos-app style.
     ///
     /// The temp file is only removed once it's safely in Photos — deleting it
     /// unconditionally (e.g. in a `defer`) would destroy the user's only copy of the
     /// footage if the save fails, such as when Photos access is denied.
-    private func handleRecorded(_ fileURL: URL) {
+    private func handleRecorded(_ recording: CameraRecording) {
         Task {
             do {
-                let identifier = try await ClipPhotosSaver().saveVideo(at: fileURL)
-                try? FileManager.default.removeItem(at: fileURL)
+                let identifier = try await ClipPhotosSaver().saveVideo(at: recording.fileURL)
+                try? FileManager.default.removeItem(at: recording.fileURL)
                 guard let asset = PHAsset.fetchAssets(
                     withLocalIdentifiers: [identifier], options: nil
                 ).firstObject else { return }
                 selectedTab = .home
-                viewModel.select(asset)
+                viewModel.select(asset, detectedClips: recording.detectedClips)
             } catch {
                 recordingSaveError = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription

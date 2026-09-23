@@ -22,9 +22,26 @@ final class VideoLibrarySelectionTests: XCTestCase {
         XCTAssertEqual(model.path.first?.assetIdentifier, "asset-1")
         XCTAssertEqual(model.path.first?.asset.url, url)
         XCTAssertEqual(model.path.first?.duration, 12.5)
+        XCTAssertNil(model.path.first?.detectedClips, "a tapped tile has not been analyzed")
         XCTAssertNil(model.errorMessage)
         XCTAssertNil(model.resolution)
         XCTAssertFalse(model.isResolving(asset), "the spinner clears once the video is pushed")
+    }
+
+    /// A take the camera analyzed while recording carries its clips onto the path, which is
+    /// what makes Home land it on the clip list instead of Processing.
+    func testClipsDetectedLiveTravelWithThePushedVideo() async {
+        let url = URL(filePath: "/tmp/turnip-selection-live.mov")
+        let manager = ScriptedImageManager(.asset(AVURLAsset(url: url)))
+        let model = VideoLibraryViewModel(resolver: PhotoVideoResolver(imageManager: manager))
+        let clips = [ProcessedClip(
+            window: TrickWindow(startTime: 1, endTime: 3),
+            cropRect: NormalizedRect(minX: 0.1, maxX: 0.9, minY: 0, maxY: 1))]
+
+        model.select(StubAsset("take-1", duration: 4), detectedClips: clips)
+        await wait(until: { model.path.count == 1 }, "the resolved take should reach the path")
+
+        XCTAssertEqual(model.path.first?.detectedClips, clips)
     }
 
     /// Tiles are disabled while a resolution is in flight, but the state machine must not lean on

@@ -46,10 +46,12 @@ Steps 4-6 of the pipeline — turning pose keypoints into trick windows and
 a crop rect — are library code under `Turnip/TrickDetection/`, unit-tested
 and driven by `Processing`'s pipeline rather than by a screen of their own.
 
-The camera also runs pose inference on its live frames while a take is
-being recorded and draws the skeleton on the preview (`Turnip/LivePose/`,
-per [`docs/LIVE_POSE.md`](docs/LIVE_POSE.md)). The analysis after
-recording does not yet use those results; that is the next step there.
+The camera runs pose inference on its live frames while a take is being
+recorded, draws the skeleton on the preview, and — when live inference
+covered the whole take — runs the same trick detection on those results
+so the take lands on `ClipList` straight from Stop, with no second decode
+(`Turnip/LivePose/`, per [`docs/LIVE_POSE.md`](docs/LIVE_POSE.md)). A take
+it could not cover end to end goes through `Processing` like a tapped tile.
 
 Two directories sit outside that flow. `PoseDiagnostic` — the design doc's
 "empirical test" first work item, which runs MoveNet Thunder over a video

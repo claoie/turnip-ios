@@ -1,3 +1,4 @@
+import AVFoundation
 import Photos
 import SwiftUI
 
@@ -16,28 +17,25 @@ struct HomeView: View {
                 // declare their own bars.
                 .modifier(HomeNavigationBar())
                 .navigationDestination(for: SelectedVideo.self) { video in
-                    // The Processing screen shows the picked video and runs the real
-                    // detection pipeline on the user's tap, then pushes the clip list
-                    // on success — analysis never auto-starts (docs/UIUX.md
-                    // § "Processing"). `popToRoot` threads the flow's "back to Home"
-                    // action through the pushed screens so their back chevrons return
-                    // here instead of stepping back through the flow.
-                    ProcessingView(
-                        video: video,
-                        autostart: false,
-                        popToRoot: { viewModel.path = [] },
-                        destination: { result, popToRoot in
-                            ClipListView(
-                                items: result.clips.map {
-                                    ClipListItem(window: $0.window, cropRect: $0.cropRect)
-                                },
-                                asset: result.asset,
-                                assetIdentifier: video.assetIdentifier,
-                                duration: video.duration,
-                                popToRoot: popToRoot
-                            )
-                        }
-                    )
+                    // A video the camera already analyzed while recording it lands on the
+                    // clip list directly. Otherwise the Processing screen shows the picked
+                    // video and runs the real detection pipeline on the user's tap, then
+                    // pushes the clip list on success — analysis never auto-starts
+                    // (docs/UIUX.md § "Processing"). `popToRoot` threads the flow's "back
+                    // to Home" action through the pushed screens so their back chevrons
+                    // return here instead of stepping back through the flow.
+                    if let clips = video.detectedClips {
+                        clipList(for: video, clips: clips, asset: video.asset, popToRoot: popToRoot)
+                    } else {
+                        ProcessingView(
+                            video: video,
+                            autostart: false,
+                            popToRoot: popToRoot,
+                            destination: { result, popToRoot in
+                                clipList(for: video, clips: result.clips, asset: result.asset, popToRoot: popToRoot)
+                            }
+                        )
+                    }
                 }
         }
         .task { await viewModel.start() }
@@ -46,6 +44,22 @@ struct HomeView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
+    }
+
+    private func popToRoot() {
+        viewModel.path = []
+    }
+
+    private func clipList(
+        for video: SelectedVideo, clips: [ProcessedClip], asset: AVURLAsset, popToRoot: @escaping () -> Void
+    ) -> ClipListView {
+        ClipListView(
+            items: clips.map { ClipListItem(window: $0.window, cropRect: $0.cropRect) },
+            asset: asset,
+            assetIdentifier: video.assetIdentifier,
+            duration: video.duration,
+            popToRoot: popToRoot
+        )
     }
 
     @ViewBuilder

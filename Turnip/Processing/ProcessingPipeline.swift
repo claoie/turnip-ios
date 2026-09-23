@@ -55,7 +55,7 @@ struct ProcessingProgress: Sendable {
 /// reuses — `ClipListItem` (Turnip/ClipList/ClipListItem.swift): a screen's output contract
 /// should not be its neighbour's view model, so the home flow maps each clip with
 /// `ClipListItem(window: clip.window, cropRect: clip.cropRect)` when it wires the two.
-struct ProcessedClip: Equatable, Sendable {
+struct ProcessedClip: Hashable, Sendable {
     let window: TrickWindow
     let cropRect: NormalizedRect
 }
@@ -157,7 +157,6 @@ struct ProcessingPipeline: Sendable {
         }
 
         let frames = await accumulator.frames
-        let windows = windowDetector.detectWindows(in: MotionSignalBuilder.buildSignal(from: frames))
         // Pose keypoints are measured in the composition's display-orientation space (see
         // SampledFrame.renderSize), so the crop rect is computed against the frames' renderSize,
         // not the track's encoded naturalSize: on a rotated (portrait phone) clip naturalSize
@@ -166,8 +165,16 @@ struct ProcessingPipeline: Sendable {
         // `.zero` marks it unknown, which the calculator treats as unlocatable and buildClips
         // turns into the full-frame fallback.
         let renderedPixelSize = await accumulator.renderSize ?? .zero
-        let clips = buildClips(windows: windows, frames: frames, renderedPixelSize: renderedPixelSize)
-        return ProcessingResult(clips: clips, asset: asset)
+        return ProcessingResult(clips: detectClips(in: frames, renderedPixelSize: renderedPixelSize), asset: asset)
+    }
+
+    /// Steps 4-6 over frames that have already been scored: motion signal, trick windows, crop
+    /// rects. The one detection implementation for both frame sources — the file sampler above
+    /// and the camera's live inference, whose results arrive in the same frame-normalized,
+    /// display-orientation space with file-relative timestamps at the same sample rate.
+    func detectClips(in frames: [PoseFrameResult], renderedPixelSize: CGSize) -> [ProcessedClip] {
+        let windows = windowDetector.detectWindows(in: MotionSignalBuilder.buildSignal(from: frames))
+        return buildClips(windows: windows, frames: frames, renderedPixelSize: renderedPixelSize)
     }
 
     /// Pairs each detected window with the sampled frames inside it and computes its crop

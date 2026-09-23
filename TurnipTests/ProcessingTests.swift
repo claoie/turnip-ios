@@ -231,6 +231,35 @@ final class ProcessingPipelineRunTests: XCTestCase {
         XCTAssertNotEqual(expected, buggy, "fixture does not discriminate the size mixup")
         XCTAssertEqual(result.clips[0].cropRect, expected)
     }
+
+    /// The camera's live path hands already-scored frames to `detectClips` instead of running
+    /// the sampler. Both routes must produce the same clips for the same frames, or a take
+    /// analyzed live would get a different triage list from the same take analyzed from the file.
+    func testDetectClipsMatchesWhatRunProducesForTheSameFrames() async throws {
+        let videoURL = try await TestVideoWriter.writeTestVideo(
+            frameCount: 35, width: 64, height: 48, fps: 30)
+        defer { try? FileManager.default.removeItem(at: videoURL) }
+
+        let yPositions = PoseFixture.slide(
+            quietFrames: 15, from: 0.2, perFrame: 0.1, movingFrames: 6, tailFrames: 14)
+        let fixtures = yPositions.enumerated().map { index, y in
+            PoseFixture.frame(index: index, hip: (x: 0.5, y: y))
+        }
+        let renderSize = CGSize(width: 48, height: 64)
+        let sampler = ScriptedSampler(renderSize: renderSize, results: fixtures)
+        let makeInference: ProcessingPipeline.InferenceFactory = {
+            { frame in fixtures[frame.frameIndex].keypoints }
+        }
+        let pipeline = ProcessingPipeline(sampler: sampler, makeInference: makeInference)
+        let video = SelectedVideo(
+            assetIdentifier: "test", asset: AVURLAsset(url: videoURL), duration: 3.5)
+
+        let viaRun = try await pipeline.run(video: video) { _ in }
+        let viaDetect = pipeline.detectClips(in: fixtures, renderedPixelSize: renderSize)
+
+        XCTAssertFalse(viaRun.clips.isEmpty, "the fixture should yield at least one clip to compare")
+        XCTAssertEqual(viaDetect, viaRun.clips)
+    }
 }
 
 @MainActor
