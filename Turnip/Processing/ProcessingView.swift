@@ -264,6 +264,11 @@ struct ProcessingView<Destination: View>: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.55).ignoresSafeArea())
         .allowsHitTesting(true)
+        // Covers the whole screen for as long as a browse is resolving, so it needs the same
+        // gesture attachment `videoStage` has — otherwise a swipe here has no recognizer of
+        // its own and falls through to the page `TabView` beneath it. The gesture's own
+        // `browsingNeighbor == nil` guard is what keeps it a no-op while this overlay is up.
+        .highPriorityGesture(videoSwipeGesture)
     }
 
     /// The video stage: the picked video fills the screen with no native playback
@@ -294,9 +299,11 @@ struct ProcessingView<Destination: View>: View {
         // including a swipe starting at the leading edge, which means this also supersedes
         // the system's interactive edge-swipe-to-pop; the back chevron (visible whenever
         // `isAnalyzing` is false) is the affordance for going back on this screen, the same as
-        // every other pushed screen in the flow (docs/UIUX.md). Attached to the video stage
-        // itself, not the whole screen, so it never competes with `VideoScrubBar`'s own drag in
-        // the safe-area inset below.
+        // every other pushed screen in the flow (docs/UIUX.md). This attachment only covers the
+        // video area itself; the safe-area inset below is a sibling, not a descendant, of it, so
+        // `idleControls` and `processingOverlay` each carry their own separate attachment of the
+        // same gesture rather than one covering this whole stage — the one deliberate gap is
+        // `VideoScrubBar`, which needs horizontal drags for its own scrubbing.
         .highPriorityGesture(videoSwipeGesture)
         // `.safeAreaInset`, not `.overlay`: an overlay sizes its content at its own
         // ideal width and aligns it, so `PrimaryActionBar`'s full-width button has no
@@ -331,6 +338,10 @@ struct ProcessingView<Destination: View>: View {
     private var idleControls: some View {
         VStack(spacing: 12) {
             if let player {
+                // Deliberately outside the gesture attachment below: this is the one place a
+                // horizontal drag means something else (scrubbing), so it's the one place the
+                // swipe stays unrecognized and falls through — to the system's edge-swipe-to-pop
+                // if this happens to sit at the leading edge, otherwise nowhere in particular.
                 VideoScrubBar(player: player)
                     .padding(.horizontal)
             }
@@ -341,6 +352,10 @@ struct ProcessingView<Destination: View>: View {
                 player?.pause()
                 viewModel.start(video: video)
             }
+            // `videoStage`'s own gesture attachment only covers the video area above; this bar
+            // sits in the safe-area inset, a sibling rather than a descendant of that area, so
+            // it needs its own attachment or a swipe starting here reaches the page `TabView`.
+            .highPriorityGesture(videoSwipeGesture)
         }
     }
 
@@ -371,6 +386,10 @@ struct ProcessingView<Destination: View>: View {
         .padding(.bottom, 24)
         .frame(maxWidth: .infinity)
         .background(Color.black.opacity(0.55))
+        // Same reason as `idleControls`' attachment: this panel is a safe-area-inset sibling of
+        // `videoStage`'s gesture host, not a descendant of it, and it's exactly the surface a
+        // swipe mid-run (`isAnalyzing`) must not be allowed to abandon through.
+        .highPriorityGesture(videoSwipeGesture)
     }
 
     private var emptyState: some View {
