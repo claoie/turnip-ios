@@ -157,6 +157,12 @@ out-of-process picker, so it needs real Photos access. As built:
     user picked a video with no motion peaks). Message + back to Home.
   - **Error state** — pipeline throws (unreadable video, pose model failure).
     Message + retry, or back to Home.
+- A swipe here navigates the grid rather than reaching Camera: right browses
+  to the previous video in Home's grid order, left to the next, replacing the
+  screen in place (not stacking a new one, so the back chevron still returns
+  to Home in one step) — disabled while an analysis is running. Home's own
+  swipe-right-for-Camera (§1) does not apply once a video is pushed onto
+  this screen.
 
 ### 3. Clip List (triage)
 

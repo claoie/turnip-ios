@@ -28,11 +28,18 @@ struct ProcessingView<Destination: View>: View {
     /// destination so its back button returns to the start of the flow.
     let popToRoot: () -> Void
     /// Browses to the previous/next video in Home's grid order, swiping right/left over the
-    /// video respectively — nil at either end of the grid, where the swipe is a no-op instead
-    /// of wrapping around. Both stay nil in previews and while a run is in flight (`isAnalyzing`
-    /// guards the gesture itself, since a swipe mid-run must not abandon it).
+    /// screen respectively — nil at either end of the grid, where the swipe is a no-op instead
+    /// of wrapping around. Both are nil in previews and the screenshot harness, which have no
+    /// grid to browse. The gesture itself, not this nilness, is what disables the swipe while
+    /// a run is in flight (`isAnalyzing`), since a swipe mid-run must not abandon it.
     let previousVideo: (() -> Void)?
     let nextVideo: (() -> Void)?
+    /// A browsed-to neighbor is resolving (possibly downloading from iCloud) and hasn't
+    /// replaced this screen yet — shows a blocking spinner so the swipe that triggered it
+    /// doesn't just look ignored, and so a second swipe here is a deliberate no-op rather than
+    /// a silently dropped one (`VideoLibraryViewModel.resolveAndInsert`'s own `resolution == nil`
+    /// guard drops it either way; this only makes that visible).
+    let isBrowsingNeighbor: Bool
 
     @StateObject private var viewModel: ProcessingViewModel
     @State private var player: AVPlayer?
@@ -57,6 +64,7 @@ struct ProcessingView<Destination: View>: View {
         popToRoot: @escaping () -> Void = {},
         previousVideo: (() -> Void)? = nil,
         nextVideo: (() -> Void)? = nil,
+        isBrowsingNeighbor: Bool = false,
         destination: @escaping (ProcessingResult, @escaping () -> Void) -> Destination
     ) {
         self.video = video
@@ -64,6 +72,7 @@ struct ProcessingView<Destination: View>: View {
         self.popToRoot = popToRoot
         self.previousVideo = previousVideo
         self.nextVideo = nextVideo
+        self.isBrowsingNeighbor = isBrowsingNeighbor
         self.destination = destination
         _viewModel = StateObject(wrappedValue: ProcessingViewModel(runner: runner))
     }
@@ -72,15 +81,31 @@ struct ProcessingView<Destination: View>: View {
         Group {
             switch viewModel.state {
             case .idle, .processing:
+                // The gesture lives inside `videoStage` itself, scoped to the video area only
+                // — see its own comment for why the other three branches attach it here instead.
                 videoStage
             case .empty:
                 emptyState
+                    .highPriorityGesture(videoSwipeGesture)
             case .failed(let message):
                 errorState(message: message)
+                    .highPriorityGesture(videoSwipeGesture)
             case .succeeded:
                 // Covered by the pushed destination; only visible when navigating back here.
                 Text("Analysis complete.")
                     .foregroundStyle(.secondary)
+                    .highPriorityGesture(videoSwipeGesture)
+            }
+        }
+        // A neighbor resolving from a swipe blocks the whole screen, not just the video area —
+        // `isBrowsingNeighbor` can be true from any of the four branches above.
+        .overlay {
+            if isBrowsingNeighbor {
+                ZStack {
+                    Color.black.opacity(0.45).ignoresSafeArea()
+                    ProgressView().tint(.white)
+                }
+                .allowsHitTesting(true)
             }
         }
         .navigationBarBackButtonHidden(isAnalyzing)
@@ -175,14 +200,22 @@ struct ProcessingView<Destination: View>: View {
     /// generic type.
     private static var swipeThreshold: CGFloat { 60 }
 
+    /// A drag starting within this many points of the leading edge is left alone, so it
+    /// doesn't compete with the system's own edge-swipe-to-pop gesture for the same
+    /// rightward drag `NavigationStack`'s back chevron already offers.
+    private static var leadingEdgeExclusion: CGFloat { 24 }
+
     /// A right drag browses to the previous video, a left drag to the next — same mapping
-    /// as `MainTab`'s Home/Camera pages, and disabled mid-run so a swipe never abandons an
-    /// in-flight analysis. A run that hasn't started something for it (nil `previousVideo`/
-    /// `nextVideo` at either end of the grid) makes the swipe a no-op there too.
+    /// as `MainTab`'s Home/Camera pages. Disabled while a run is in flight (a swipe must not
+    /// abandon it) or while a previously-triggered browse is still resolving; a swipe with no
+    /// neighbor to go to (nil `previousVideo`/`nextVideo` at either end of the grid) is a
+    /// no-op regardless, via `browse(_:)`'s own guard.
     private var videoSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 20)
             .onEnded { value in
-                guard !isAnalyzing else { return }
+                guard !isAnalyzing, !isBrowsingNeighbor,
+                      value.startLocation.x > Self.leadingEdgeExclusion
+                else { return }
                 if value.translation.width > Self.swipeThreshold {
                     browse(previousVideo)
                 } else if value.translation.width < -Self.swipeThreshold {

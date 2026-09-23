@@ -81,4 +81,36 @@ final class VideoLibraryPagingTests: XCTestCase {
     func testThereIsNoNeighborInAnEmptyLibrary() {
         XCTAssertNil(VideoLibraryViewModel.neighborIndex(currentIndex: 0, offset: 1, count: 0))
     }
+
+    // MARK: - On-demand prefix growth for a browse past the loaded grid
+
+    func testGrowthReachesExactlyTheRequestedMinimum() {
+        XCTAssertEqual(
+            VideoLibraryViewModel.growthRange(loadedCount: 60, total: 500, minimumCount: 65), 60..<65)
+    }
+
+    /// A browse can ask for an index past a full page's worth — the grid was scrolled far
+    /// ahead of where the user is browsing from — and growth still reaches it in one step.
+    func testGrowthCanReachPastAFullPage() {
+        XCTAssertEqual(
+            VideoLibraryViewModel.growthRange(loadedCount: 60, total: 500, minimumCount: 150),
+            60..<150)
+    }
+
+    func testGrowthStopsAtTheEndOfTheLibrary() {
+        XCTAssertEqual(
+            VideoLibraryViewModel.growthRange(loadedCount: 60, total: 75, minimumCount: 200), 60..<75)
+    }
+
+    func testThereIsNoGrowthOnceTheLoadedPrefixAlreadyReachesTheMinimum() {
+        XCTAssertNil(
+            VideoLibraryViewModel.growthRange(loadedCount: 60, total: 500, minimumCount: 60))
+    }
+
+    /// The same shrink guard as `pageRange`: a library that lost assets between browses must
+    /// not produce a backwards range.
+    func testThereIsNoGrowthWhenTheLibraryShrankBelowTheLoadedPrefix() {
+        XCTAssertNil(
+            VideoLibraryViewModel.growthRange(loadedCount: 500, total: 120, minimumCount: 600))
+    }
 }

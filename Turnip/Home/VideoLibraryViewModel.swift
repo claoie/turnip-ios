@@ -170,6 +170,27 @@ final class VideoLibraryViewModel: ObservableObject {
         videos.append(contentsOf: fetchResult.objects(at: IndexSet(integersIn: range)))
     }
 
+    /// The slice of a fetch result that materializing up to `minimumCount` needs, capped at the
+    /// library's real size — nil once the loaded prefix already reaches it. Unlike `pageRange`,
+    /// the target isn't a fixed page size: `neighbor(of:offset:)` asks for exactly the index a
+    /// browse needs, which may be less than a full page or (rarely) more than one.
+    static func growthRange(loadedCount: Int, total: Int, minimumCount: Int) -> Range<Int>? {
+        let end = min(total, minimumCount)
+        guard end > loadedCount else { return nil }
+        return loadedCount..<end
+    }
+
+    /// Materializes exactly enough of the fetch result to reach `minimumCount` —
+    /// `neighbor(of:offset:)`'s on-demand counterpart to the grid's own page-at-a-time
+    /// `loadNextPage()`, since a browse can ask for an index the grid hasn't scrolled to yet.
+    private func growPrefix(toAtLeast minimumCount: Int) {
+        guard let fetchResult,
+              let range = Self.growthRange(
+                  loadedCount: videos.count, total: fetchResult.count, minimumCount: minimumCount)
+        else { return }
+        videos.append(contentsOf: fetchResult.objects(at: IndexSet(integersIn: range)))
+    }
+
     private func observeLibraryChanges() {
         guard changeForwarder == nil else { return }
         let forwarder = PhotoLibraryChangeForwarder { [weak self] change in
@@ -265,11 +286,19 @@ final class VideoLibraryViewModel: ObservableObject {
         resolveAndInsert(asset, detectedClips: nil, replacingTop: true)
     }
 
-    /// The video next to `assetIdentifier` in `videos`' loaded order — `offset: -1` for the
-    /// previous (older) video, `+1` for the next (newer). Nil past either end; no wraparound.
+    /// The video next to `assetIdentifier` in `videos`' loaded order — `offset: -1` for the one
+    /// before it in the grid (`videos` is newest-first, so that's the chronologically newer
+    /// video), `+1` for the one after (older). Nil past either end; no wraparound. Grows the
+    /// loaded prefix first when the neighbor sits past it but is still in the library, so
+    /// browsing isn't capped at wherever the grid happened to be scrolled to.
     func neighbor(of assetIdentifier: String, offset: Int) -> PHAsset? {
-        guard let currentIndex = videos.firstIndex(where: { $0.localIdentifier == assetIdentifier }),
-              let index = Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: videos.count)
+        guard let currentIndex = videos.firstIndex(where: { $0.localIdentifier == assetIdentifier })
+        else { return nil }
+        let candidate = currentIndex + offset
+        if candidate >= videos.count {
+            growPrefix(toAtLeast: candidate + 1)
+        }
+        guard let index = Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: videos.count)
         else { return nil }
         return videos[index]
     }
@@ -316,10 +345,18 @@ final class VideoLibraryViewModel: ObservableObject {
                     PhotoVideoResolver.deleteTemporaryExport(for: avAsset)
                     return
                 }
+                if replacingTop, path.isEmpty {
+                    // The screen this browse meant to replace is gone — the user backed out
+                    // to Home while a neighbor was still resolving. Landing on `path.append`
+                    // here would push that screen right back, so drop the result instead, the
+                    // same as an ordinary cancellation.
+                    PhotoVideoResolver.deleteTemporaryExport(for: avAsset)
+                    return
+                }
                 let video = SelectedVideo(
                     assetIdentifier: identifier, asset: avAsset, duration: asset.duration,
                     detectedClips: detectedClips)
-                if replacingTop, !path.isEmpty {
+                if replacingTop {
                     path[path.count - 1] = video
                 } else {
                     path.append(video)

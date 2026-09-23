@@ -33,6 +33,10 @@ struct HomeView: View {
                             popToRoot: popToRoot,
                             previousVideo: browse(to: viewModel.neighbor(of: video.assetIdentifier, offset: -1)),
                             nextVideo: browse(to: viewModel.neighbor(of: video.assetIdentifier, offset: 1)),
+                            // A browse always targets the video currently on screen, so a
+                            // resolution in flight here can only be the swipe this screen just
+                            // triggered — never a grid tile tap, which needs the (hidden) grid.
+                            isBrowsingNeighbor: viewModel.resolution != nil,
                             destination: { result, popToRoot in
                                 clipList(for: video, clips: result.clips, asset: result.asset, popToRoot: popToRoot)
                             }
