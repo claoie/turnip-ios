@@ -211,10 +211,12 @@ private struct ClipCardView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .task {
-            // The thumbnail decode and the shared asset duration each dedupe/cache in
-            // the view model, so a re-fired `.task` (e.g. scrolling the card off-screen
-            // and back) joins the work already done instead of repeating it.
+        .task(id: item) {
+            // Keyed by the item value, not just its id: `ForEach` keeps this card's own
+            // identity stable across an editor commit, so an unkeyed `.task` would never
+            // re-fire when window/cropRect/cropAdjustment change. The thumbnail decode and
+            // the shared asset duration each dedupe/cache in the view model, so a re-fired
+            // task joins work already done instead of repeating it.
             async let image = viewModel.thumbnail(for: item)
             async let assetDuration = viewModel.assetDuration()
             thumbnail = await image
