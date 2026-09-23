@@ -98,6 +98,22 @@ final class VideoLibrarySelectionTests: XCTestCase {
         XCTAssertTrue(model.path.isEmpty)
     }
 
+    /// Processing's swipe-to-browse replaces the top of `path` rather than pushing a new entry,
+    /// so the back chevron reaches Home in one step regardless of how many videos were browsed.
+    func testBrowsingToANeighborReplacesTheTopOfThePathInsteadOfPushing() async {
+        let manager = ScriptedImageManager(.asset(AVURLAsset(url: URL(filePath: "/tmp/turnip-browse-1.mov"))))
+        let model = VideoLibraryViewModel(resolver: PhotoVideoResolver(imageManager: manager))
+
+        model.select(StubAsset("asset-1"))
+        await wait(until: { model.path.count == 1 }, "the first selection should reach the path")
+
+        model.browse(to: StubAsset("asset-2"))
+        await wait(until: { model.path.first?.assetIdentifier == "asset-2" }, "browsing should land")
+
+        XCTAssertEqual(model.path.count, 1, "browsing must not grow the path")
+        XCTAssertNil(model.path.first?.detectedClips, "a browsed-to neighbor has not been analyzed")
+    }
+
     /// A cancelled PhotoKit request can still emit a tick or two, by which time the user has tapped
     /// something else. Without the identifier guard that late fraction would repaint whatever is
     /// being resolved now, so the assertion is that a painted ring survives a stale tick unchanged.

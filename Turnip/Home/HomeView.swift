@@ -31,10 +31,17 @@ struct HomeView: View {
                             video: video,
                             autostart: false,
                             popToRoot: popToRoot,
+                            previousVideo: browse(to: viewModel.neighbor(of: video.assetIdentifier, offset: -1)),
+                            nextVideo: browse(to: viewModel.neighbor(of: video.assetIdentifier, offset: 1)),
                             destination: { result, popToRoot in
                                 clipList(for: video, clips: result.clips, asset: result.asset, popToRoot: popToRoot)
                             }
                         )
+                        // Ties the screen's identity to the video it's showing: without this,
+                        // browsing to a neighbor replaces `path`'s top element but SwiftUI can
+                        // reuse the existing `ProcessingView`, leaving its `@StateObject` and
+                        // player pointed at the video that just left.
+                        .id(video.assetIdentifier)
                     }
                 }
         }
@@ -48,6 +55,14 @@ struct HomeView: View {
 
     private func popToRoot() {
         viewModel.path = []
+    }
+
+    /// Wraps `viewModel.browse(to:)` as the closure Processing's swipe gesture calls — nil
+    /// when `asset` is nil (already at that end of the grid), which is what makes the swipe
+    /// a no-op there instead of wrapping around.
+    private func browse(to asset: PHAsset?) -> (() -> Void)? {
+        guard let asset else { return nil }
+        return { viewModel.browse(to: asset) }
     }
 
     private func clipList(

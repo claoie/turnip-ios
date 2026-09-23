@@ -50,4 +50,35 @@ final class VideoLibraryPagingTests: XCTestCase {
     func testThereIsNoPageWhenTheLibraryShrankBelowTheLoadedPrefix() {
         XCTAssertNil(VideoLibraryViewModel.pageRange(loadedCount: 500, total: 120, pageSize: 60))
     }
+
+    // MARK: - Processing's swipe-to-browse neighbor lookup
+
+    func testANegativeOffsetStepsToTheIndexBefore() {
+        XCTAssertEqual(
+            VideoLibraryViewModel.neighborIndex(currentIndex: 5, offset: -1, count: 10), 4)
+    }
+
+    func testAPositiveOffsetStepsToTheIndexAfter() {
+        XCTAssertEqual(
+            VideoLibraryViewModel.neighborIndex(currentIndex: 5, offset: 1, count: 10), 6)
+    }
+
+    func testThereIsNoNeighborBeforeTheFirstVideo() {
+        XCTAssertNil(VideoLibraryViewModel.neighborIndex(currentIndex: 0, offset: -1, count: 10))
+    }
+
+    func testThereIsNoNeighborAfterTheLastVideo() {
+        XCTAssertNil(VideoLibraryViewModel.neighborIndex(currentIndex: 9, offset: 1, count: 10))
+    }
+
+    /// Not a wraparound carousel: stepping off either end of the grid stays off it, however far
+    /// the offset reaches.
+    func testAnOffsetPastBothEndsStaysNil() {
+        XCTAssertNil(VideoLibraryViewModel.neighborIndex(currentIndex: 0, offset: -3, count: 10))
+        XCTAssertNil(VideoLibraryViewModel.neighborIndex(currentIndex: 9, offset: 3, count: 10))
+    }
+
+    func testThereIsNoNeighborInAnEmptyLibrary() {
+        XCTAssertNil(VideoLibraryViewModel.neighborIndex(currentIndex: 0, offset: 1, count: 0))
+    }
 }

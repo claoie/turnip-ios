@@ -255,6 +255,40 @@ final class VideoLibraryViewModel: ObservableObject {
     /// the camera scored while recording — and Home then lands on the clip list instead of
     /// Processing. A tapped tile has none.
     func select(_ asset: PHAsset, detectedClips: [ProcessedClip]? = nil) {
+        resolveAndInsert(asset, detectedClips: detectedClips, replacingTop: false)
+    }
+
+    /// Resolves `asset` and swaps it in for the current top of `path`, rather than pushing a new
+    /// entry — Processing's swipe-to-browse between adjacent videos, so the back chevron still
+    /// returns to Home in one step instead of walking back through every video swiped past.
+    func browse(to asset: PHAsset) {
+        resolveAndInsert(asset, detectedClips: nil, replacingTop: true)
+    }
+
+    /// The video next to `assetIdentifier` in `videos`' loaded order — `offset: -1` for the
+    /// previous (older) video, `+1` for the next (newer). Nil past either end; no wraparound.
+    func neighbor(of assetIdentifier: String, offset: Int) -> PHAsset? {
+        guard let currentIndex = videos.firstIndex(where: { $0.localIdentifier == assetIdentifier }),
+              let index = Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: videos.count)
+        else { return nil }
+        return videos[index]
+    }
+
+    /// The index arithmetic behind `neighbor(of:offset:)`, split out as the reachable, testable
+    /// seam — `videos` itself only comes from a live `PHFetchResult`.
+    static func neighborIndex(currentIndex: Int, offset: Int, count: Int) -> Int? {
+        let candidate = currentIndex + offset
+        guard candidate >= 0, candidate < count else { return nil }
+        return candidate
+    }
+
+    func cancelSelection() {
+        resolveTask?.cancel()
+    }
+
+    private func resolveAndInsert(
+        _ asset: PHAsset, detectedClips: [ProcessedClip]?, replacingTop: Bool
+    ) {
         guard resolution == nil else { return }
         errorMessage = nil
         resolution = Resolution(assetIdentifier: asset.localIdentifier, downloadProgress: nil)
@@ -276,25 +310,26 @@ final class VideoLibraryViewModel: ObservableObject {
                     }
                 }
                 guard !Task.isCancelled else {
-                    // The export finished but the task was cancelled before the append: no
+                    // The export finished but the task was cancelled before it lands: no
                     // `SelectedVideo` ever enters `path`, so the `didSet` cleanup never sees
                     // the file. Delete it here — ordinary Photos videos are a no-op.
                     PhotoVideoResolver.deleteTemporaryExport(for: avAsset)
                     return
                 }
-                path.append(SelectedVideo(
+                let video = SelectedVideo(
                     assetIdentifier: identifier, asset: avAsset, duration: asset.duration,
-                    detectedClips: detectedClips))
+                    detectedClips: detectedClips)
+                if replacingTop, !path.isEmpty {
+                    path[path.count - 1] = video
+                } else {
+                    path.append(video)
+                }
             } catch is CancellationError {
                 // User backed out; nothing to report.
             } catch {
                 errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
-    }
-
-    func cancelSelection() {
-        resolveTask?.cancel()
     }
 }
 

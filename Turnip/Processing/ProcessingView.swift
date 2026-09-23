@@ -27,6 +27,12 @@ struct ProcessingView<Destination: View>: View {
     /// Pops the flow's navigation stack back to Home. Threaded into the success
     /// destination so its back button returns to the start of the flow.
     let popToRoot: () -> Void
+    /// Browses to the previous/next video in Home's grid order, swiping right/left over the
+    /// video respectively — nil at either end of the grid, where the swipe is a no-op instead
+    /// of wrapping around. Both stay nil in previews and while a run is in flight (`isAnalyzing`
+    /// guards the gesture itself, since a swipe mid-run must not abandon it).
+    let previousVideo: (() -> Void)?
+    let nextVideo: (() -> Void)?
 
     @StateObject private var viewModel: ProcessingViewModel
     @State private var player: AVPlayer?
@@ -49,11 +55,15 @@ struct ProcessingView<Destination: View>: View {
         runner: any ProcessingRunning = ProcessingPipeline(),
         autostart: Bool = true,
         popToRoot: @escaping () -> Void = {},
+        previousVideo: (() -> Void)? = nil,
+        nextVideo: (() -> Void)? = nil,
         destination: @escaping (ProcessingResult, @escaping () -> Void) -> Destination
     ) {
         self.video = video
         self.autostart = autostart
         self.popToRoot = popToRoot
+        self.previousVideo = previousVideo
+        self.nextVideo = nextVideo
         self.destination = destination
         _viewModel = StateObject(wrappedValue: ProcessingViewModel(runner: runner))
     }
@@ -159,6 +169,35 @@ struct ProcessingView<Destination: View>: View {
         return false
     }
 
+    /// How far a drag has to travel before it counts as a page swipe rather than an
+    /// incidental touch on the video.
+    private static let swipeThreshold: CGFloat = 60
+
+    /// A right drag browses to the previous video, a left drag to the next — same mapping
+    /// as `MainTab`'s Home/Camera pages, and disabled mid-run so a swipe never abandons an
+    /// in-flight analysis. A run that hasn't started something for it (nil `previousVideo`/
+    /// `nextVideo` at either end of the grid) makes the swipe a no-op there too.
+    private var videoSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onEnded { value in
+                guard !isAnalyzing else { return }
+                if value.translation.width > Self.swipeThreshold {
+                    browse(previousVideo)
+                } else if value.translation.width < -Self.swipeThreshold {
+                    browse(nextVideo)
+                }
+            }
+    }
+
+    /// Stops the idle player before handing off to a neighbor — nothing would call
+    /// `pause()` on it once this screen's identity changes underneath it, the same reason
+    /// `idleControls`' "Start analysis" button pauses first.
+    private func browse(_ navigate: (() -> Void)?) {
+        guard let navigate else { return }
+        player?.pause()
+        navigate()
+    }
+
     /// The video stage: the picked video fills the screen with no native playback
     /// chrome (`BareVideoPlayerView`) — Photos-app look, black background, no title, no
     /// caption. This backs both `.idle` (scrub bar + "Start analysis" button over the
@@ -181,6 +220,12 @@ struct ProcessingView<Destination: View>: View {
                 }
             }
         }
+        // `.highPriorityGesture`, not `.gesture`: this view sits inside the app's own
+        // page-style `TabView` (`RootTabView`), whose horizontal swipe would otherwise win
+        // the recognition race and switch tabs to Camera instead of browsing videos here.
+        // Scoped to the video stage itself, not the whole screen, so it never competes with
+        // `VideoScrubBar`'s own drag in the safe-area inset below.
+        .highPriorityGesture(videoSwipeGesture)
         // `.safeAreaInset`, not `.overlay`: an overlay sizes its content at its own
         // ideal width and aligns it, so `PrimaryActionBar`'s full-width button has no
         // wider proposal to expand into and stays text-hugging. A safe-area inset
