@@ -43,6 +43,15 @@ struct VideoTileView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
+            // This view is a `Button` label (`VideoGalleryView.tile(for:index:)`), and
+            // a Button's tap region follows its label's bounds — which, for a
+            // `scaledToFill` thumbnail, extend past what `.clipped()` draws whenever
+            // the source isn't square. That overflow still hit-tests even though it
+            // isn't drawn, so a later tile in the grid can end up with an earlier
+            // tile's overflow sitting on top of it. Pinning the shape here to the
+            // drawn square is the same fix `ClipListView.tile` already uses for its
+            // tiles' media layer.
+            .contentShape(Rectangle())
             .onAppear { load(targetSize: proxy.size) }
             .onChange(of: revision) { _ in load(targetSize: proxy.size, replacingCurrentImage: true) }
             .onDisappear(perform: cancel)
