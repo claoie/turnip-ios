@@ -479,6 +479,10 @@ final class FramePreprocessorTests: XCTestCase {
     /// top-left quadrant, a mark asymmetric on both axes so all four quarter turns land it
     /// somewhere different. Backed by an allocator-owned `CVPixelBuffer` (not test-owned storage
     /// like `withBGRABuffer` below) so the `CIImage` returned can safely outlive this call.
+    ///
+    /// `CIImage(cvPixelBuffer:)` is constructed only after the fill's lock is fully released —
+    /// matching, byte for byte, the standalone script this test's expected corners were measured
+    /// from — rather than while `defer` still holds it locked.
     private func makeQuadrantMarkedImage(width: Int, height: Int) throws -> CIImage {
         var buffer: CVPixelBuffer?
         let status = CVPixelBufferCreate(
@@ -488,6 +492,11 @@ final class FramePreprocessorTests: XCTestCase {
         guard status == kCVReturnSuccess, let buffer else {
             throw FixtureFailure(message: "could not allocate a \(width)x\(height) fixture buffer")
         }
+        fillTopLeftQuadrant(buffer, width: width, height: height)
+        return CIImage(cvPixelBuffer: buffer)
+    }
+
+    private func fillTopLeftQuadrant(_ buffer: CVPixelBuffer, width: Int, height: Int) {
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
         let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
@@ -502,7 +511,6 @@ final class FramePreprocessorTests: XCTestCase {
                 base[offset + 3] = 255
             }
         }
-        return CIImage(cvPixelBuffer: buffer)
     }
 
     /// Renders `image` into a fresh `width`x`height` buffer and hands each pixel's brightness to
