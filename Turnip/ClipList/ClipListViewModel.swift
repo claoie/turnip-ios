@@ -220,10 +220,9 @@ final class ClipListViewModel: ObservableObject {
         items.removeAll { $0.id == id && !$0.isOriginal }
     }
 
-    /// Flips one item's reversible trash flag. `trash(_:)` is the per-card button's
-    /// entry point; this stays its own method because the original tile's flag is
-    /// also read directly by `save()`. A no-op for unknown ids — the card that fired
-    /// it may have been removed by a re-run of detection.
+    /// Flips one item's reversible trash flag — the primitive `trash(_:)` composes
+    /// for the original tile. A no-op for unknown ids — the card that fired it may
+    /// have been removed by a re-run of detection.
     func toggleTrash(_ item: ClipListItem) {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[index].isTrashed.toggle()
