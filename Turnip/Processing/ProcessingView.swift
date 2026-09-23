@@ -27,6 +27,21 @@ struct ProcessingView<Destination: View>: View {
     /// Pops the flow's navigation stack back to Home. Threaded into the success
     /// destination so its back button returns to the start of the flow.
     let popToRoot: () -> Void
+    /// Browses to the previous/next video in Home's grid order, swiping right/left over the
+    /// screen respectively — nil at either end of the grid, where the swipe is a no-op instead
+    /// of wrapping around. Both are nil in previews and the screenshot harness, which have no
+    /// grid to browse. The gesture itself, not this nilness, is what disables the swipe while
+    /// a run is in flight (`isAnalyzing`), since a swipe mid-run must not abandon it.
+    let previousVideo: (() -> Void)?
+    let nextVideo: (() -> Void)?
+    /// A browsed-to neighbor's resolution state — non-nil blocks the screen with the same
+    /// determinate progress `ResolutionBanner` already renders on the grid (`Home`), so the
+    /// swipe that triggered it doesn't just look ignored, and a second swipe here is a
+    /// deliberate no-op rather than a silently dropped one (`VideoLibraryViewModel`'s own
+    /// `resolution == nil` guard drops it either way; this only makes that visible).
+    let browsingNeighbor: VideoLibraryViewModel.Resolution?
+    /// Cancels a browse in progress. Nil (never shown) in previews and the screenshot harness.
+    let cancelBrowsing: (() -> Void)?
 
     @StateObject private var viewModel: ProcessingViewModel
     @State private var player: AVPlayer?
@@ -49,11 +64,19 @@ struct ProcessingView<Destination: View>: View {
         runner: any ProcessingRunning = ProcessingPipeline(),
         autostart: Bool = true,
         popToRoot: @escaping () -> Void = {},
+        previousVideo: (() -> Void)? = nil,
+        nextVideo: (() -> Void)? = nil,
+        browsingNeighbor: VideoLibraryViewModel.Resolution? = nil,
+        cancelBrowsing: (() -> Void)? = nil,
         destination: @escaping (ProcessingResult, @escaping () -> Void) -> Destination
     ) {
         self.video = video
         self.autostart = autostart
         self.popToRoot = popToRoot
+        self.previousVideo = previousVideo
+        self.nextVideo = nextVideo
+        self.browsingNeighbor = browsingNeighbor
+        self.cancelBrowsing = cancelBrowsing
         self.destination = destination
         _viewModel = StateObject(wrappedValue: ProcessingViewModel(runner: runner))
     }
@@ -64,13 +87,40 @@ struct ProcessingView<Destination: View>: View {
             case .idle, .processing:
                 videoStage
             case .empty:
+                // `StatusStateView` sizes to its own content otherwise, and the swipe's hit
+                // region needs the full screen, the same as every other consumer of this view
+                // (`HomeView`'s empty grid and denied states apply the same frame externally).
+                // `.ignoresSafeArea()` extends that hit region under the home-indicator strip
+                // too, matching `videoStage`'s own `Color.black.ignoresSafeArea()` base — scoped
+                // to these three branches rather than the whole `Group`, so it can't change what
+                // safe area `videoStage`'s own `.safeAreaInset` insets its bottom bar from.
                 emptyState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
             case .failed(let message):
                 errorState(message: message)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
             case .succeeded:
                 // Covered by the pushed destination; only visible when navigating back here.
                 Text("Analysis complete.")
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+            }
+        }
+        .contentShape(Rectangle())
+        // One attachment, covering every branch above (each already reports a full-screen
+        // frame) plus the safe-area-inset content `videoStage` adds below its own video area —
+        // see this gesture's own doc comment for why a single high-priority attachment this
+        // high in the tree is safe rather than swallowing `VideoScrubBar`'s own drag.
+        .highPriorityGesture(videoSwipeGesture)
+        // A neighbor resolving from a swipe blocks the whole screen, not just the video area —
+        // `browsingOverlay` carries its own separate attachment of the same gesture, since
+        // `.overlay` content sits alongside this view rather than inside it.
+        .overlay {
+            if let browsingNeighbor {
+                browsingOverlay(browsingNeighbor)
             }
         }
         .navigationBarBackButtonHidden(isAnalyzing)
@@ -159,6 +209,86 @@ struct ProcessingView<Destination: View>: View {
         return false
     }
 
+    /// How far a drag has to travel before it counts as a page swipe rather than an
+    /// incidental touch on the video. Computed, not a stored constant: `ProcessingView` is
+    /// generic over `Destination`, and Swift doesn't allow static stored properties on a
+    /// generic type.
+    private static var swipeThreshold: CGFloat { 60 }
+
+    /// A right drag browses to the previous video, a left drag to the next — same mapping
+    /// as `MainTab`'s Home/Camera pages. Disabled while a run is in flight (a swipe must not
+    /// abandon it) or while a previously-triggered browse is still resolving; a swipe with no
+    /// neighbor to go to (nil `previousVideo`/`nextVideo` at either end of the grid) is a
+    /// no-op regardless, via `browse(_:)`'s own guard.
+    ///
+    /// `body` attaches this once, as high in the tree as the screen's content goes, rather than
+    /// separately on every sub-region: this view sits inside the app's own page-style `TabView`
+    /// (`RootTabView`), whose horizontal swipe would otherwise win the recognition race
+    /// anywhere this gesture doesn't reach and switch tabs to Camera instead of browsing videos
+    /// here — including a swipe starting at the leading edge, so this also supersedes the
+    /// system's interactive edge-swipe-to-pop (the back chevron, visible whenever `isAnalyzing`
+    /// is false, is the way back instead, the same as every other pushed screen in the flow per
+    /// docs/UIUX.md). `.highPriorityGesture` on an ancestor beats a plain `.gesture` anywhere in
+    /// its subtree, but when a descendant *also* uses `.highPriorityGesture`, SwiftUI resolves
+    /// that tie in the descendant's favor — which is what lets `VideoScrubBar`'s own track keep
+    /// winning locally for scrubbing, without this attachment needing to carve that view out.
+    private var videoSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onEnded { value in
+                guard !isAnalyzing, browsingNeighbor == nil else { return }
+                if value.translation.width > Self.swipeThreshold {
+                    browse(previousVideo)
+                } else if value.translation.width < -Self.swipeThreshold {
+                    browse(nextVideo)
+                }
+            }
+    }
+
+    /// Stops the idle player before handing off to a neighbor — nothing would call
+    /// `pause()` on it once this screen's identity changes underneath it, the same reason
+    /// `idleControls`' "Start analysis" button pauses first.
+    private func browse(_ navigate: (() -> Void)?) {
+        guard let navigate else { return }
+        player?.pause()
+        navigate()
+    }
+
+    /// Mirrors `ResolutionBanner`'s two-state rendering of the same `Resolution` type — an
+    /// iCloud download shows its real progress, a local/composition resolve shows an
+    /// indeterminate spinner — so a swipe-triggered browse reports the same way the grid's
+    /// own tile-tap resolution already does.
+    private func browsingOverlay(_ resolution: VideoLibraryViewModel.Resolution) -> some View {
+        VStack(spacing: 12) {
+            if let progress = resolution.downloadProgress {
+                Text("Downloading from iCloud…")
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
+                ProgressView(value: progress)
+                    .tint(.white)
+            } else {
+                Text("Preparing video…")
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
+                ProgressView()
+                    .tint(.white)
+            }
+            if let cancelBrowsing {
+                Button("Cancel", role: .cancel, action: cancelBrowsing)
+                    .tint(.white)
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.55).ignoresSafeArea())
+        .allowsHitTesting(true)
+        // `.overlay` content sits alongside `body`'s `Group`, not inside it, so `body`'s own
+        // gesture attachment doesn't reach here — without this, a swipe on this overlay would
+        // have no recognizer of its own and fall through to the page `TabView` beneath it. The
+        // gesture's own `browsingNeighbor == nil` guard is what keeps it a no-op while this
+        // overlay is up.
+        .highPriorityGesture(videoSwipeGesture)
+    }
+
     /// The video stage: the picked video fills the screen with no native playback
     /// chrome (`BareVideoPlayerView`) — Photos-app look, black background, no title, no
     /// caption. This backs both `.idle` (scrub bar + "Start analysis" button over the
@@ -181,6 +311,9 @@ struct ProcessingView<Destination: View>: View {
                 }
             }
         }
+        // `body`'s single `.highPriorityGesture(videoSwipeGesture)` attachment (see its own doc
+        // comment) covers this whole stage, video area and safe-area inset alike — nothing is
+        // attached here directly.
         // `.safeAreaInset`, not `.overlay`: an overlay sizes its content at its own
         // ideal width and aligns it, so `PrimaryActionBar`'s full-width button has no
         // wider proposal to expand into and stays text-hugging. A safe-area inset
@@ -214,6 +347,10 @@ struct ProcessingView<Destination: View>: View {
     private var idleControls: some View {
         VStack(spacing: 12) {
             if let player {
+                // `VideoScrubBar`'s own track carries a `.highPriorityGesture` of its own
+                // (needed there, for horizontal drags to scrub) — see its doc comment for why
+                // that safely keeps priority here even though `body`'s swipe gesture is attached
+                // as an ancestor of this whole bar.
                 VideoScrubBar(player: player)
                     .padding(.horizontal)
             }

@@ -31,10 +31,24 @@ struct HomeView: View {
                             video: video,
                             autostart: false,
                             popToRoot: popToRoot,
+                            previousVideo: browseAction(for: video, offset: -1),
+                            nextVideo: browseAction(for: video, offset: 1),
+                            // Renders this screen's browse-in-flight overlay from the same
+                            // `Resolution` state `ResolutionBanner` already shows on the grid.
+                            // Almost always the swipe this screen just triggered; showing it for
+                            // the rare unrelated case too (a camera recording resolving in the
+                            // background) is harmless — it just dims an already-paused video.
+                            browsingNeighbor: viewModel.resolution,
+                            cancelBrowsing: viewModel.cancelSelection,
                             destination: { result, popToRoot in
                                 clipList(for: video, clips: result.clips, asset: result.asset, popToRoot: popToRoot)
                             }
                         )
+                        // Ties the screen's identity to the video it's showing: without this,
+                        // browsing to a neighbor replaces `path`'s top element but SwiftUI can
+                        // reuse the existing `ProcessingView`, leaving its `@StateObject` and
+                        // player pointed at the video that just left.
+                        .id(video.assetIdentifier)
                     }
                 }
         }
@@ -48,6 +62,16 @@ struct HomeView: View {
 
     private func popToRoot() {
         viewModel.path = []
+    }
+
+    /// The closure Processing's swipe gesture calls for `offset` (`-1` previous, `+1` next) —
+    /// nil when `viewModel.hasNeighbor` says there's nothing there, which is what makes the
+    /// swipe a no-op at that end of the grid instead of wrapping around. `hasNeighbor` is a
+    /// pure read, safe to call here in the view body; the actual browse — which can grow
+    /// `viewModel.videos`, a published mutation — happens only once the closure fires.
+    private func browseAction(for video: SelectedVideo, offset: Int) -> (() -> Void)? {
+        guard viewModel.hasNeighbor(of: video.assetIdentifier, offset: offset) else { return nil }
+        return { viewModel.browseToNeighbor(of: video.assetIdentifier, offset: offset) }
     }
 
     private func clipList(

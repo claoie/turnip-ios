@@ -38,7 +38,12 @@ struct VideoScrubBar: View {
                 Capsule().fill(.white).frame(width: width * fraction)
             }
             .contentShape(Rectangle().inset(by: -10)) // Widens the drag target past the thin visual track.
-            .gesture(
+            // `.highPriorityGesture`, not `.gesture`: `ProcessingView` wraps this whole bar in
+            // its own `.highPriorityGesture` for swipe-to-browse-videos, and SwiftUI resolves a
+            // priority tie between an ancestor and a descendant both using `.highPriorityGesture`
+            // in the descendant's favor — this stays the one place a horizontal drag scrubs
+            // instead of browsing, without `ProcessingView` needing to carve this view out.
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         isScrubbing = true

@@ -170,6 +170,28 @@ final class VideoLibraryViewModel: ObservableObject {
         videos.append(contentsOf: fetchResult.objects(at: IndexSet(integersIn: range)))
     }
 
+    /// The slice of a fetch result that materializing up to `minimumCount` needs, capped at the
+    /// library's real size — nil once the loaded prefix already reaches it. Unlike `pageRange`,
+    /// the target is an arbitrary count rather than a fixed page size, so this covers any gap a
+    /// caller asks for in one call; `browseToNeighbor(of:offset:)`, the only caller today, only
+    /// ever asks for one asset past the loaded prefix.
+    static func growthRange(loadedCount: Int, total: Int, minimumCount: Int) -> Range<Int>? {
+        let end = min(total, minimumCount)
+        guard end > loadedCount else { return nil }
+        return loadedCount..<end
+    }
+
+    /// Materializes exactly enough of the fetch result to reach `minimumCount` —
+    /// `browseToNeighbor(of:offset:)`'s on-demand counterpart to the grid's own page-at-a-time
+    /// `loadNextPage()`, since a browse can ask for an index the grid hasn't scrolled to yet.
+    private func growPrefix(toAtLeast minimumCount: Int) {
+        guard let fetchResult,
+              let range = Self.growthRange(
+                  loadedCount: videos.count, total: fetchResult.count, minimumCount: minimumCount)
+        else { return }
+        videos.append(contentsOf: fetchResult.objects(at: IndexSet(integersIn: range)))
+    }
+
     private func observeLibraryChanges() {
         guard changeForwarder == nil else { return }
         let forwarder = PhotoLibraryChangeForwarder { [weak self] change in
@@ -255,6 +277,61 @@ final class VideoLibraryViewModel: ObservableObject {
     /// the camera scored while recording — and Home then lands on the clip list instead of
     /// Processing. A tapped tile has none.
     func select(_ asset: PHAsset, detectedClips: [ProcessedClip]? = nil) {
+        resolveAndInsert(asset, detectedClips: detectedClips, replacingTop: false)
+    }
+
+    /// Resolves `asset` and swaps it in for the current top of `path`, rather than pushing a new
+    /// entry — Processing's swipe-to-browse between adjacent videos, so the back chevron still
+    /// returns to Home in one step instead of walking back through every video swiped past.
+    func browse(to asset: PHAsset) {
+        resolveAndInsert(asset, detectedClips: nil, replacingTop: true)
+    }
+
+    /// Whether a neighbor exists at `offset` from `assetIdentifier` — `-1` for the one before it
+    /// in the grid (`videos` is newest-first, so that's the chronologically newer video), `+1`
+    /// for the one after (older). Bounded by the real library size (`fetchResult`), not just the
+    /// loaded prefix, so this doesn't undercount before the grid has scrolled that far. Read-only
+    /// — never grows `videos` — so it's safe to call from a view body; `browseToNeighbor(of:offset:)`
+    /// is the mutating counterpart for when the swipe actually lands.
+    func hasNeighbor(of assetIdentifier: String, offset: Int) -> Bool {
+        guard let currentIndex = videos.firstIndex(where: { $0.localIdentifier == assetIdentifier })
+        else { return false }
+        let total = fetchResult?.count ?? videos.count
+        return Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: total) != nil
+    }
+
+    /// Resolves the neighbor at `offset` from `assetIdentifier` and browses to it, growing the
+    /// loaded prefix first if it sits past what's currently materialized. Call only in response
+    /// to user action (the swipe gesture), never from a view body: growing the prefix publishes
+    /// into `videos`, which SwiftUI disallows from within a view update.
+    func browseToNeighbor(of assetIdentifier: String, offset: Int) {
+        guard let currentIndex = videos.firstIndex(where: { $0.localIdentifier == assetIdentifier })
+        else { return }
+        let candidate = currentIndex + offset
+        if candidate >= videos.count {
+            growPrefix(toAtLeast: candidate + 1)
+        }
+        guard let index = Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: videos.count)
+        else { return }
+        browse(to: videos[index])
+    }
+
+    /// The index arithmetic behind `hasNeighbor(of:offset:)` and `browseToNeighbor(of:offset:)`,
+    /// split out as the reachable, testable seam — `videos` itself only comes from a live
+    /// `PHFetchResult`.
+    static func neighborIndex(currentIndex: Int, offset: Int, count: Int) -> Int? {
+        let candidate = currentIndex + offset
+        guard candidate >= 0, candidate < count else { return nil }
+        return candidate
+    }
+
+    func cancelSelection() {
+        resolveTask?.cancel()
+    }
+
+    private func resolveAndInsert(
+        _ asset: PHAsset, detectedClips: [ProcessedClip]?, replacingTop: Bool
+    ) {
         guard resolution == nil else { return }
         errorMessage = nil
         resolution = Resolution(assetIdentifier: asset.localIdentifier, downloadProgress: nil)
@@ -276,25 +353,34 @@ final class VideoLibraryViewModel: ObservableObject {
                     }
                 }
                 guard !Task.isCancelled else {
-                    // The export finished but the task was cancelled before the append: no
+                    // The export finished but the task was cancelled before it lands: no
                     // `SelectedVideo` ever enters `path`, so the `didSet` cleanup never sees
                     // the file. Delete it here — ordinary Photos videos are a no-op.
                     PhotoVideoResolver.deleteTemporaryExport(for: avAsset)
                     return
                 }
-                path.append(SelectedVideo(
+                if replacingTop, path.isEmpty {
+                    // The screen this browse meant to replace is gone — the user backed out
+                    // to Home while a neighbor was still resolving. Landing on `path.append`
+                    // here would push that screen right back, so drop the result instead, the
+                    // same as an ordinary cancellation.
+                    PhotoVideoResolver.deleteTemporaryExport(for: avAsset)
+                    return
+                }
+                let video = SelectedVideo(
                     assetIdentifier: identifier, asset: avAsset, duration: asset.duration,
-                    detectedClips: detectedClips))
+                    detectedClips: detectedClips)
+                if replacingTop {
+                    path[path.count - 1] = video
+                } else {
+                    path.append(video)
+                }
             } catch is CancellationError {
                 // User backed out; nothing to report.
             } catch {
                 errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
-    }
-
-    func cancelSelection() {
-        resolveTask?.cancel()
     }
 }
 
