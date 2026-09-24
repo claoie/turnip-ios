@@ -46,6 +46,11 @@ import urllib.error
 MARKER = "<!-- turnip-ui-screenshots -->"
 BRANCH = "screenshots"
 PUSH_ATTEMPTS = 5
+# SCREENSHOTS_REPO (hoiekim/ci-artifacts) is a shared artifacts repo, not
+# turnip-ios's own -- every path pushed there is namespaced under this
+# prefix so a future project using the same repo can never collide with
+# turnip's screenshots.
+PROJECT_PREFIX = "turnip-ios"
 
 # --- Untrusted-artifact hardening ------------------------------------------
 # Everything under SCREENSHOTS_DIR comes from the PR's own CI run, which a
@@ -95,10 +100,12 @@ def api(token, method, path, data=None):
         raise GitHubApiError(method, path, e.code, detail)
 
 
-README_CONTENT = (b"# Turnip CI screenshots\n\n"
-                  b"CI-captured UI screenshots, namespaced by PR and run:\n"
-                  b"`pr-<number>/<run_id>/*.png`. Written by automation; "
-                  b"safe to prune old entries.\n")
+README_CONTENT = (b"# CI screenshots\n\n"
+                  b"CI-captured UI screenshots for one or more projects, each\n"
+                  b"namespaced by its own prefix, PR, and run:\n"
+                  b"`<project>/pr-<number>/<run_id>/*.png` -- turnip-ios's own are\n"
+                  b"under `turnip-ios/`. Written by automation; safe to prune old\n"
+                  b"entries.\n")
 
 
 def ensure_branch_empty_repo(pat, shots_repo, branch):
@@ -173,8 +180,9 @@ def push_to_shots_repo(pat, shots_repo, pr_number, run_id, pngs,
                 blob = api(pat, "POST", "/repos/%s/git/blobs" % shots_repo,
                            {"content": base64.b64encode(data).decode(),
                             "encoding": "base64"})
-                entries.append({"path": "pr-%s/%s/%s" % (pr_number, run_id,
-                                                        name),
+                entries.append({"path": "%s/pr-%s/%s/%s" % (PROJECT_PREFIX,
+                                                            pr_number, run_id,
+                                                            name),
                                 "mode": "100644", "type": "blob",
                                 "sha": blob["sha"]})
             tree_payload = {"tree": entries}
@@ -211,9 +219,10 @@ def push_to_shots_repo(pat, shots_repo, pr_number, run_id, pngs,
 
     urls = {}
     for name, _ in pngs:
-        urls[name] = ("https://raw.githubusercontent.com/%s/%s/pr-%s/%s/%s"
-                      % (shots_repo, branch, pr_number, run_id,
-                         urllib.parse.quote(name)))
+        urls[name] = (
+            "https://raw.githubusercontent.com/%s/%s/%s/pr-%s/%s/%s"
+            % (shots_repo, branch, PROJECT_PREFIX, pr_number, run_id,
+               urllib.parse.quote(name)))
     return urls
 
 
