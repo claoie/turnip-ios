@@ -23,10 +23,14 @@ struct HomeView: View {
                 // scrolls away with the tiles (docs/UIUX.md). Root-only — pushed screens
                 // declare their own bars.
                 .modifier(HomeNavigationBar())
-                // Floats above `content` at the ROOT only — attached here, inside the
+                // Attached AFTER `HomeNavigationBar`, at the ROOT only — inside the
                 // `NavigationStack`'s root closure, so a pushed Processing/ClipList screen
-                // doesn't inherit it. See `settingsButton` below for why this replaced the
-                // scroll-content placement.
+                // doesn't inherit it, and outside the band `HomeNavigationBar` reserves for
+                // its own (invisible-but-real) `UINavigationBar`: that system bar hit-tests
+                // its own frame ahead of SwiftUI content drawn under it, opaque to touches
+                // regardless of how transparent it looks — any control layered inside that
+                // band is unreachable no matter its own touch-target size. See
+                // `settingsButton` below.
                 .overlay(alignment: .topTrailing) { settingsButton }
                 .navigationDestination(for: SelectedVideo.self) { video in
                     // A video the camera already analyzed while recording it lands on the
@@ -118,18 +122,8 @@ struct HomeView: View {
         }
     }
 
-    /// Floating over `content` rather than scrolling with it (same
-    /// `.overlay(alignment: .topTrailing) { ScrimIconButton(...).padding() }` shape Camera's
-    /// `cancelButton` uses) — the scroll-content placement this replaced was unreachable on a
-    /// real device despite passing every static check (touch-target size, accessibility
-    /// identifier, screenshot coverage). A floating corner button can sit over a scrolled-up
-    /// tile, the same tradeoff Camera's corner buttons already accept over the viewfinder.
     private var settingsButton: some View {
-        ScrimIconButton(
-            systemImage: "gearshape", accessibilityLabel: "Settings",
-            action: { showSettings = true })
-            .padding()
-            .accessibilityIdentifier("settings-button")
+        HomeSettingsButton(action: { showSettings = true })
     }
 
     private var errorPresented: Binding<Bool> {
@@ -137,6 +131,29 @@ struct HomeView: View {
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.errorMessage = nil } }
         )
+    }
+}
+
+/// The settings entry point's fixed corner overlay. Attached to `HomeView`'s root content,
+/// outside the band `HomeNavigationBar` reserves for its own system `UINavigationBar` — that
+/// bar hit-tests its own frame ahead of SwiftUI content drawn under it, opaque to touches
+/// regardless of how transparent it looks (`.toolbarBackground(.hidden, ...)` hides its
+/// paint, not its hit area), so a control layered inside that band is unreachable no matter
+/// its own touch-target size. A prior revision drew this gear as `HomeHeader` scroll content,
+/// inside that band, and it was untappable on a real device despite passing every static
+/// check (44×44 pt touch target, accessibility identifier, screenshot coverage) — none of
+/// which exercises hit-testing against a real `UINavigationBar`.
+///
+/// Extracted to its own type, not a private computed property, so the DEBUG screenshot
+/// harness composes the exact same view `HomeView` does instead of a hand-built duplicate
+/// that can drift from it.
+struct HomeSettingsButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        ScrimIconButton(systemImage: "gearshape", accessibilityLabel: "Settings", action: action)
+            .padding()
+            .accessibilityIdentifier("settings-button")
     }
 }
 

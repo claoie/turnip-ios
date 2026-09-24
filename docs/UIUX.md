@@ -117,13 +117,18 @@ out-of-process picker, so it needs real Photos access. As built:
 ### 1a. Settings
 
 - Reached by tapping the gear icon floating at Home's top-trailing corner (the same
-  `ScrimIconButton` corner-overlay shape Camera's own controls use), not chrome inside the
-  scrolling header — a scroll-content placement was tried first and shipped unreachable on a
-  real device, so the floating placement's tradeoff (it can sit over a scrolled-up tile, same as
-  Camera's controls over its viewfinder) is accepted. Not nav-bar chrome either — Home's own bar
-  is kept content-free for the iOS 26 scroll-edge glass described under "1. Home / Video Gallery"
-  above. Presented as a sheet, not pushed onto the flow's `NavigationStack`: it has nothing to
-  hand back to Home and isn't part of "pick a video, get clips."
+  `ScrimIconButton` corner-overlay shape Camera's own controls use), attached outside the band
+  `HomeNavigationBar` reserves for its own system `UINavigationBar`. That bar is visually
+  transparent (`.toolbarBackground(.hidden, ...)`, for the iOS 26 scroll-edge glass described
+  under "1. Home / Video Gallery" above) but still hit-tests its own frame ahead of SwiftUI
+  content drawn under it — a scroll-content placement inside that band was tried first and
+  shipped unreachable on a real device despite passing every static check (touch-target size,
+  accessibility identifier, screenshot coverage), none of which exercises real hit-testing
+  against a system nav bar. The floating placement's own tradeoff: at the grid's resting scroll
+  position the gear's fixed rect sits over the top-right tile, not just "sometimes" over
+  whatever scrolls up — same acceptance Camera's own corner controls already have over its
+  viewfinder. Presented as a sheet, not pushed onto the flow's `NavigationStack`: it has nothing
+  to hand back to Home and isn't part of "pick a video, get clips."
 - Four preferences, `UserDefaults`-backed (`Turnip/Settings/TurnipSettingsStore.swift`), each
   taking effect at its own integration point rather than needing a restart:
   - **Analysis mode** (segmented Real-time / Offline) — whether the camera scores pose live while

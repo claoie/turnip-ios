@@ -25,6 +25,22 @@ final class ScreenshotTests: XCTestCase {
         addScreenshot(named: "home-access-denied")
     }
 
+    /// Guards the settings gear's touch target specifically, not just its presence —
+    /// `waitForExistence` (what `testHomeAccessDenied` above checks) is true whether or not
+    /// a real tap can reach the element. `isHittable` performs a real hit-test through the
+    /// actual view hierarchy, so a control drawn under `HomeNavigationBar`'s (invisible but
+    /// real) system nav bar reads `false` here even though it's fully present and correctly
+    /// sized — that gap between "exists" and "hittable" is exactly what shipped untappable
+    /// past every prior static check on this button.
+    func testHomeSettingsButtonIsHittable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotHome"]
+        app.launch()
+        let button = app.buttons["settings-button"]
+        XCTAssertTrue(button.waitForExistence(timeout: 15))
+        XCTAssertTrue(button.isHittable)
+    }
+
     /// Clip list triage: three detected windows, one trashed, thumbnails as
     /// placeholder tiles (the /dev/null asset decodes nothing; the loader falls
     /// back to the placeholder — the test waits for the placeholder's
