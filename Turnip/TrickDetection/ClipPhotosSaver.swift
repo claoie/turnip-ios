@@ -41,10 +41,17 @@ enum ClipPhotosSaveError: LocalizedError, Equatable {
 /// this saver itself created in an earlier call — `PHAccessLevel.addOnly`'s general contract is
 /// read visibility scoped to what the app added, but `fetchAssetCollections(with:subtype:options:)`
 /// takes no parameter that states this, and it has not been run under either full or limited
-/// Photos access on a real device or Simulator (none available in this environment). If the
-/// assumption is wrong and the fetch instead sees nothing, every save with the same album name
-/// creates a new, separately-titled album instead of reusing the first one — the album feature
-/// would still add each clip *somewhere*, just not somewhere consolidated.
+/// Photos access on a real device or Simulator (none available in this environment). Two ways
+/// that assumption can be wrong, in opposite directions:
+/// - **The fetch sees nothing** (a collision with an album another app created, invisible under
+///   add-only) — every save with the same album name creates a new, separately-titled album
+///   instead of reusing the first one. The clip still lands *somewhere*, just not consolidated.
+/// - **The fetch sees an album it can't edit** (the complementary collision: an existing album
+///   this saver didn't create, visible but not modifiable under add-only) — `addToAlbum` returns
+///   `false`, and `saveVideo` throws even though the asset itself was already created. The clip
+///   is in the library with no album membership; `ClipListViewModel.save()`'s retry re-exports
+///   and re-saves every non-failed clip too, since it has no per-clip success record, so a retry
+///   after this specific failure duplicates whatever already succeeded.
 struct ClipPhotosSaver: Sendable {
     /// Resolves the add-only Photos authorization, collapsed onto the app's
     /// shared Photos-domain authorization model (`PhotoLibraryAuthorization`,
@@ -63,8 +70,11 @@ struct ClipPhotosSaver: Sendable {
     /// (`TurnipSettings.albumDestination`): `nil` is the original default behavior — the asset
     /// is created with no album, landing wherever an ordinary Photos creation request lands it.
     /// A non-nil title adds the new asset to that album, creating it first if it doesn't already
-    /// exist, both inside the one change block below so a save either fully lands (asset plus
-    /// album membership) or fully doesn't.
+    /// exist, both inside the one change block below. That block is one PhotoKit transaction —
+    /// it either fully commits (asset plus whatever album-membership edit it made) or fully
+    /// doesn't — but asset creation and album membership are still two separate steps inside it,
+    /// so a `false` from `addToAlbum` still commits the asset without the membership; see the
+    /// type-level doc comment's second unverified-assumption bullet.
     @discardableResult
     func saveVideo(at fileURL: URL, albumTitle: String? = nil) async throws -> String {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {

@@ -113,9 +113,9 @@ struct HomeHeader: View {
 
     private static let logoHeight: CGFloat = 36
     private static let rowHeight: CGFloat = 44
-    /// Smaller than `ScrimIconButton`'s 44 pt default: this button sits in the same row as the
-    /// wordmark rather than alone in a corner, so a smaller tap target leaves more room for the
-    /// logo without the two visually colliding.
+    /// Drawn smaller than `ScrimIconButton`'s 44 pt default so the visible glyph leaves more
+    /// room for the logo in this shared row — the tappable region stays 44×44 regardless,
+    /// per `ScrimIconButton`'s own touch-target floor (docs/ACCESSIBILITY.md:94).
     private static let settingsButtonDiameter: CGFloat = 32
 
     var body: some View {
@@ -131,11 +131,6 @@ struct HomeHeader: View {
                     ScrimIconButton(
                         systemImage: "gearshape", accessibilityLabel: "Settings",
                         diameter: Self.settingsButtonDiameter, action: onSettingsTapped)
-                        // The 32 pt glyph is a visual choice (docs/ACCESSIBILITY.md:94's
-                        // 44×44 pt touch-target minimum still applies); the frame + shape
-                        // below expand the tappable region without changing the drawn size.
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
                         .padding(.trailing)
                         .accessibilityIdentifier("settings-button")
                 }
