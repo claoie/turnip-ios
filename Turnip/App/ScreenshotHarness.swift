@@ -50,6 +50,35 @@ struct ScreenshotHomeHarness: View {
     }
 }
 
+/// Gallery filter menu, open (`-screenshotGalleryFilter`): the actual feature the button in
+/// `ScreenshotHomeHarness` above only proves is disabled without access. Forced to `.authorized`
+/// so the button is enabled -- and, same as that harness, `reload()`/`start()` are never called,
+/// so this never touches the real `PHPhotoLibrary` or depends on the CI simulator's library
+/// contents. The menu's rows only read `viewModel.filter` and `viewModel.albums` (empty here,
+/// which just hides the Album submenu), not `videos`/`hasLoaded`, so the backdrop behind the
+/// open menu is the same not-yet-loaded spinner state `HomeView` shows before its first fetch
+/// completes -- deterministic, and not claiming a populated grid this harness never fetched.
+struct ScreenshotGalleryFilterHarness: View {
+    @StateObject private var viewModel = VideoLibraryViewModel(authorization: .authorized)
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                HomeHeader()
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .modifier(HomeNavigationBar())
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 0) {
+                    GalleryFilterButton(viewModel: viewModel)
+                    HomeSettingsButton(action: {})
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Clip list
 
 /// Clip list triage (`-screenshotClipList`): three detected windows, one trashed.

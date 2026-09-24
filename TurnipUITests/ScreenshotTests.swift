@@ -62,6 +62,22 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertFalse(app.buttons["All Items"].waitForExistence(timeout: 2))
     }
 
+    /// The actual filter feature, open (`-screenshotGalleryFilter`, CONTRIBUTING.md's
+    /// screenshots-on-UI-change ask) — the button being present-but-disabled above doesn't show
+    /// what the feature itself looks like. "All Items" carries a checkmark as the default
+    /// selection; asserting on it (not just the button) proves the menu's real content rendered.
+    func testGalleryFilterMenuOpen() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotGalleryFilter"]
+        app.launch()
+        let button = app.buttons["gallery-filter-button"]
+        XCTAssertTrue(button.waitForExistence(timeout: 15))
+        button.tap()
+        XCTAssertTrue(app.buttons["All Items"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["Favorites"].exists)
+        addScreenshot(named: "gallery-filter-menu")
+    }
+
     /// Clip list triage: three detected windows, one trashed, thumbnails as
     /// placeholder tiles (the /dev/null asset decodes nothing; the loader falls
     /// back to the placeholder — the test waits for the placeholder's

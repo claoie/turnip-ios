@@ -31,6 +31,8 @@ struct TurnipApp: App {
                 #if DEBUG
                 if CommandLine.arguments.contains("-screenshotHome") {
                     ScreenshotHomeHarness()
+                } else if CommandLine.arguments.contains("-screenshotGalleryFilter") {
+                    ScreenshotGalleryFilterHarness()
                 } else if CommandLine.arguments.contains("-screenshotClipListMedia") {
                     ScreenshotClipListMediaHarness()
                 } else if CommandLine.arguments.contains("-screenshotClipList") {
