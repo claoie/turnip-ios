@@ -42,16 +42,17 @@ enum ClipPhotosSaveError: LocalizedError, Equatable {
 /// read visibility scoped to what the app added, but `fetchAssetCollections(with:subtype:options:)`
 /// takes no parameter that states this, and it has not been run under either full or limited
 /// Photos access on a real device or Simulator (none available in this environment). Two ways
-/// that assumption can be wrong, in opposite directions:
+/// that assumption can be wrong, both degrading to the same outcome via `addToAlbum`'s fallback:
 /// - **The fetch sees nothing** (a collision with an album another app created, invisible under
-///   add-only) — every save with the same album name creates a new, separately-titled album
-///   instead of reusing the first one. The clip still lands *somewhere*, just not consolidated.
+///   add-only).
 /// - **The fetch sees an album it can't edit** (the complementary collision: an existing album
-///   this saver didn't create, visible but not modifiable under add-only) — `addToAlbum` returns
-///   `false`, and `saveVideo` throws even though the asset itself was already created. The clip
-///   is in the library with no album membership; `ClipListViewModel.save()`'s retry re-exports
-///   and re-saves every non-failed clip too, since it has no per-clip success record, so a retry
-///   after this specific failure duplicates whatever already succeeded.
+///   this saver didn't create, visible but not modifiable under add-only — `PHAssetCollectionChangeRequest`
+///   returns `nil`).
+///
+/// Either way, `addToAlbum` creates a new, separately-titled album instead of reusing the one
+/// `fetchAlbum` found or failed to find. The clip still lands *somewhere*, just not consolidated
+/// — a save never fails or drops album membership because of this, it can only fragment across
+/// more albums than intended.
 struct ClipPhotosSaver: Sendable {
     /// Resolves the add-only Photos authorization, collapsed onto the app's
     /// shared Photos-domain authorization model (`PhotoLibraryAuthorization`,
@@ -70,11 +71,10 @@ struct ClipPhotosSaver: Sendable {
     /// (`TurnipSettings.albumDestination`): `nil` is the original default behavior — the asset
     /// is created with no album, landing wherever an ordinary Photos creation request lands it.
     /// A non-nil title adds the new asset to that album, creating it first if it doesn't already
-    /// exist, both inside the one change block below. That block is one PhotoKit transaction —
-    /// it either fully commits (asset plus whatever album-membership edit it made) or fully
-    /// doesn't — but asset creation and album membership are still two separate steps inside it,
-    /// so a `false` from `addToAlbum` still commits the asset without the membership; see the
-    /// type-level doc comment's second unverified-assumption bullet.
+    /// exist, both inside the one change block below, so the asset and its album membership
+    /// either both land or neither does — `addToAlbum`'s fallback (see its doc comment) means
+    /// the album it lands in isn't always the one `albumTitle` names, but membership in *some*
+    /// album with that title is never separated from the asset's own creation.
     @discardableResult
     func saveVideo(at fileURL: URL, albumTitle: String? = nil) async throws -> String {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
@@ -95,12 +95,6 @@ struct ClipPhotosSaver: Sendable {
         // The commit itself throws a raw PhotoKit NSError (out of space, asset rejected);
         // it is wrapped so every failure out of this method is a ClipPhotosSaveError.
         var createdIdentifier: String?
-        // `PHAssetCollectionChangeRequest(for:)` returns nil when the collection exists but
-        // this app can't modify it (e.g. an existing "Turnip" album it doesn't have edit
-        // rights to under add-only authorization) — the `?` on that call swallows a real
-        // failure unless it's captured here, which would otherwise let the save report
-        // success while silently dropping album membership.
-        var albumEditFailed = false
         do {
             try await PHPhotoLibrary.shared().performChanges {
                 guard let placeholder = PHAssetCreationRequest
@@ -108,7 +102,7 @@ struct ClipPhotosSaver: Sendable {
                     .placeholderForCreatedAsset else { return }
                 createdIdentifier = placeholder.localIdentifier
                 guard let albumTitle else { return }
-                albumEditFailed = !Self.addToAlbum(placeholder, titled: albumTitle)
+                Self.addToAlbum(placeholder, titled: albumTitle)
             }
         } catch {
             throw ClipPhotosSaveError.saveRejected(reason: error.localizedDescription)
@@ -116,10 +110,6 @@ struct ClipPhotosSaver: Sendable {
         guard let createdIdentifier else {
             throw ClipPhotosSaveError.saveRejected(
                 reason: "Photos rejected the creation request for \(fileURL.lastPathComponent)")
-        }
-        if albumEditFailed {
-            throw ClipPhotosSaveError.saveRejected(
-                reason: "Saved to Photos, but \"\(albumTitle ?? "")\" couldn't be edited to add it")
         }
         return createdIdentifier
     }
@@ -137,23 +127,22 @@ struct ClipPhotosSaver: Sendable {
         ).firstObject
     }
 
-    /// Adds `placeholder` to the album titled `title`, creating it first if `fetchAlbum`
-    /// doesn't find one. Must run inside a `PHPhotoLibrary.performChanges` block. Returns
-    /// `false` when an existing album is visible but not editable by this app (add-only
-    /// authorization) — `saveVideo` turns that into a thrown error rather than a silent
-    /// partial save. Extracted from `saveVideo` to keep its cyclomatic complexity under the
-    /// repo's SwiftLint limit.
-    private static func addToAlbum(_ placeholder: PHObjectPlaceholder, titled title: String) -> Bool {
-        if let existingAlbum = fetchAlbum(titled: title) {
-            guard let editRequest = PHAssetCollectionChangeRequest(for: existingAlbum) else {
-                return false
-            }
+    /// Adds `placeholder` to the album titled `title`, creating a new album if `fetchAlbum`
+    /// doesn't find one — OR if it finds one this app can't edit (`PHAssetCollectionChangeRequest`
+    /// returns `nil` for a `fetchAlbum` hit that isn't add-only-modifiable): both cases fall
+    /// through to the same creation branch, so an unmodifiable existing album degrades into the
+    /// same "separately-titled duplicate album" outcome `fetchAlbum`'s doc comment already
+    /// discloses for the sees-nothing case, rather than a distinct failure mode. Must run inside
+    /// a `PHPhotoLibrary.performChanges` block. Extracted from `saveVideo` to keep its
+    /// cyclomatic complexity under the repo's SwiftLint limit.
+    private static func addToAlbum(_ placeholder: PHObjectPlaceholder, titled title: String) {
+        if let existingAlbum = fetchAlbum(titled: title),
+            let editRequest = PHAssetCollectionChangeRequest(for: existingAlbum) {
             editRequest.addAssets([placeholder] as NSArray)
         } else {
             PHAssetCollectionChangeRequest
                 .creationRequestForAssetCollection(withTitle: title)
                 .addAssets([placeholder] as NSArray)
         }
-        return true
     }
 }
