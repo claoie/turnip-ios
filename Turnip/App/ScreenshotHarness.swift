@@ -1,6 +1,7 @@
 #if DEBUG
 import AVFoundation
 import CoreVideo
+import Photos
 import SwiftUI
 
 // MARK: - Home
@@ -17,21 +18,33 @@ struct ScreenshotHomeHarness: View {
     private static let store = TurnipSettingsStore(
         defaults: UserDefaults(suiteName: "ScreenshotHomeHarness") ?? .standard)
     @State private var showSettings = false
+    // Real `VideoLibraryViewModel` — not a hand-built stand-in — so `GalleryFilterButton`'s
+    // `.disabled` wiring below is the same code path production uses. Forced to `.denied`
+    // rather than reading the CI simulator's actual (un-prompted) PHPhotoLibrary status: this
+    // view never calls `start()`, so nothing here ever raises the real permission prompt, but
+    // the *value* of an un-prompted status is a property of the simulator image, not of this
+    // harness, and this harness needs to be deterministic.
+    @StateObject private var viewModel = VideoLibraryViewModel(authorization: .denied(restricted: false))
 
     var body: some View {
         NavigationStack {
             // Same composition as `HomeView`'s denied branch: the wordmark header as content
-            // under Home's empty, transparent bar, with the same `HomeSettingsButton` overlay
+            // under Home's empty, transparent bar, with the same top-trailing overlay
             // `HomeView.body` attaches at the root, outside the bar's hit-testing band. Wired
-            // to a real sheet present, not a no-op action, so a UI test can `.tap()` the
-            // button and assert the sheet actually opened — the behavior the button exists
-            // for, not just its presence in the hit-testing tree.
+            // to a real sheet present, not a no-op action, so a UI test can `.tap()` a button
+            // and assert the sheet actually opened — the behavior the button exists for, not
+            // just its presence in the hit-testing tree.
             VStack(spacing: 0) {
                 HomeHeader()
                 PhotosAccessDeniedView(restricted: false)
             }
             .modifier(HomeNavigationBar())
-            .overlay(alignment: .topTrailing) { HomeSettingsButton(action: { showSettings = true }) }
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 0) {
+                    GalleryFilterButton(viewModel: viewModel)
+                    HomeSettingsButton(action: { showSettings = true })
+                }
+            }
             .sheet(isPresented: $showSettings) { SettingsView(settings: Self.store) }
         }
     }

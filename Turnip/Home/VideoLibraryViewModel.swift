@@ -94,10 +94,21 @@ final class VideoLibraryViewModel: ObservableObject {
     private var changeForwarder: PhotoLibraryChangeForwarder?
     private var resolveTask: Task<Void, Never>?
 
-    init(library: PHPhotoLibrary = .shared(), resolver: PhotoVideoResolver = PhotoVideoResolver()) {
+    /// `authorization` overrides the real `PHPhotoLibrary` read when non-nil — the screenshot
+    /// harness's denied-state view needs a `GalleryFilterButton` wired to a real
+    /// `VideoLibraryViewModel` (so `.disabled` is exercised by the same code path production
+    /// uses, not a hand-duplicated stand-in), but reading the CI simulator's actual, un-prompted
+    /// authorization status would make that harness state non-deterministic across simulator
+    /// versions. Same seam shape as `library`/`resolver` above.
+    init(
+        library: PHPhotoLibrary = .shared(),
+        resolver: PhotoVideoResolver = PhotoVideoResolver(),
+        authorization: PhotoLibraryAuthorization? = nil
+    ) {
         self.library = library
         self.resolver = resolver
-        authorization = PhotoLibraryAuthorization(PHPhotoLibrary.authorizationStatus(for: .readWrite))
+        self.authorization =
+            authorization ?? PhotoLibraryAuthorization(PHPhotoLibrary.authorizationStatus(for: .readWrite))
     }
 
     deinit {
