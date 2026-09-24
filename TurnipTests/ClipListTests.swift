@@ -276,8 +276,10 @@ final class ClipListTests: XCTestCase {
     // MARK: - clipCardPlaybackNeedsRebuild
     //
     // Covers the rebuild-decision logic in isolation, not the surrounding `ClipCardView`
-    // lifecycle it's called from — driving `.onAppear`/`.onChange`/`AVPlayerLooper`
-    // directly needs a simulator, which this test target has none of.
+    // lifecycle it's called from: `ClipCardView` is a private `View` with no
+    // view-hosting harness for a host-app unit test, and a UI test can't read an
+    // `AVPlayerLooper`'s `CMTimeRange` across the XCUITest process boundary to assert
+    // which range is actually looping.
 
     func testPlaybackNeedsRebuildWhenTheBuiltWindowDiffersFromTarget() {
         let builtFor = TrickWindow(startTime: 0, endTime: 2)
