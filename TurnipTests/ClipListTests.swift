@@ -666,44 +666,114 @@ final class ClipListTests: XCTestCase {
             9.0 / 16.0)
     }
 
-    // MARK: - ClipThumbnailLoader.croppedThumbnail
+    // MARK: - ClipThumbnailLoader.adjustedThumbnail
 
-    func testCroppedThumbnailExtractsTheDisplayedCropAtPixelScale() throws {
-        // 4x2 test image; the crop is given in displayed space (8x4), so the loader must
-        // scale it down to the image's pixels. Forgetting the scale would crop outside the
-        // image and return nil instead of a 2x2 thumbnail.
-        let image = try XCTUnwrap(Self.testImage(width: 4, height: 2))
+    /// Pins the `CGContext` flip `adjustedThumbnail` needs to draw `layerTransform`'s
+    /// top-left/y-down space correctly. Identity inputs (full-frame crop, no rotation, no
+    /// adjustment) collapse `layerTransform` to the identity map, so this isolates the
+    /// flip from the rotation/crop math `ClipExporterTests` already covers: if the flip
+    /// were dropped, or applied with the wrong sign, the quadrants would come back
+    /// swapped top-to-bottom.
+    func testAdjustedThumbnailWithIdentityInputsPreservesQuadrantLayout() throws {
+        let source = try XCTUnwrap(Self.quadrantImage())
 
-        let cropped = try XCTUnwrap(ClipThumbnailLoader.croppedThumbnail(
-            image,
-            to: CGRect(x: 4, y: 0, width: 4, height: 4),
-            in: CGSize(width: 8, height: 4)))
+        let result = try XCTUnwrap(ClipThumbnailLoader.adjustedThumbnail(
+            from: source,
+            naturalSize: CGSize(width: 4, height: 4),
+            preferredTransform: .identity,
+            cropRect: fullFrame,
+            cropAdjustment: .identity,
+            maxPixelSize: CGSize(width: 100, height: 100)))
 
-        XCTAssertEqual(cropped.width, 2)
-        XCTAssertEqual(cropped.height, 2)
-
-        // The crop is the right half of the displayed frame. Reading a pixel proves the
-        // *region* was extracted, not just the size: an implementation that dropped the
-        // crop's minX/minY and always cropped from the origin would read the red left
-        // half here instead of the green right half.
-        let pixel = try XCTUnwrap(Self.pixel(atX: 0, y: 0, in: cropped))
-        XCTAssertLessThan(pixel.red, 0.5)
-        XCTAssertGreaterThan(pixel.green, 0.5)
+        XCTAssertEqual(result.width, 4)
+        XCTAssertEqual(result.height, 4)
+        try Self.assertQuadrants(
+            of: result, topLeft: .red, topRight: .green, bottomLeft: .blue, bottomRight: .white)
     }
 
-    func testCroppedThumbnailReturnsNilWhenNothingSurvivesTheClamp() throws {
-        let image = try XCTUnwrap(Self.testImage(width: 4, height: 2))
+    /// A 90°-rotated track plus a partial (displayed right-half) crop — the same
+    /// discriminating shape as `ClipExporterTests.testRotatedTrackCropUsesTheDisplayedSize`,
+    /// now carried through the actual `CGContext` render instead of only the abstract
+    /// transform. Denormalizing the crop against the encoded (unrotated) size instead of
+    /// the displayed size — the bug class this codebase already hit once — would select
+    /// the wrong source region and this would read blue/white instead of red/green.
+    func testAdjustedThumbnailAppliesRotationAndPartialCropTogether() throws {
+        let source = try XCTUnwrap(Self.quadrantImage())
+        // A 90°-rotated track's preferredTransform, calibrated for this test's 4x4
+        // naturalSize (the class-level `rotate90` above is calibrated for 1920x1080).
+        let rotate90For4x4 = CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 4, ty: 0)
+        let displayedRightHalf = NormalizedRect(minX: 0.5, maxX: 1, minY: 0, maxY: 1)
 
-        // Entirely outside the displayed frame.
-        XCTAssertNil(ClipThumbnailLoader.croppedThumbnail(
-            image,
-            to: CGRect(x: 100, y: 100, width: 10, height: 10),
-            in: CGSize(width: 8, height: 4)))
-        // Degenerate displayed size.
-        XCTAssertNil(ClipThumbnailLoader.croppedThumbnail(
-            image,
-            to: CGRect(x: 0, y: 0, width: 4, height: 4),
-            in: .zero))
+        let result = try XCTUnwrap(ClipThumbnailLoader.adjustedThumbnail(
+            from: source,
+            naturalSize: CGSize(width: 4, height: 4),
+            preferredTransform: rotate90For4x4,
+            cropRect: displayedRightHalf,
+            cropAdjustment: .identity,
+            maxPixelSize: CGSize(width: 100, height: 100)))
+
+        XCTAssertEqual(result.width, 2)
+        XCTAssertEqual(result.height, 4)
+        let top = try XCTUnwrap(Self.pixel(atX: 1, y: 1, in: result))
+        let bottom = try XCTUnwrap(Self.pixel(atX: 1, y: 3, in: result))
+        XCTAssertGreaterThan(top.red, 0.5)
+        XCTAssertLessThan(top.green, 0.5)
+        XCTAssertGreaterThan(bottom.green, 0.5)
+        XCTAssertLessThan(bottom.red, 0.5)
+    }
+
+    /// Issue 172's regression: `cropAdjustment` reaching the thumbnail render at all. A
+    /// 90° `rotationRadians` on top of an untouched full-frame crop rotates the composited
+    /// transform the exact same way `ClipExportTransform`'s own rotation tests already
+    /// validate; here it's asserted against `adjustedThumbnail`'s actual pixels, both
+    /// against the algebraic prediction and directly against the identity-adjustment
+    /// output, so a no-op that silently drops `cropAdjustment` fails this either way.
+    func testAdjustedThumbnailAppliesCropAdjustmentRotation() throws {
+        let source = try XCTUnwrap(Self.quadrantImage())
+        let rotated = CropAdjustment(scale: 1, rotationRadians: .pi / 2, offset: .zero)
+
+        let identityResult = try XCTUnwrap(ClipThumbnailLoader.adjustedThumbnail(
+            from: source,
+            naturalSize: CGSize(width: 4, height: 4),
+            preferredTransform: .identity,
+            cropRect: fullFrame,
+            cropAdjustment: .identity,
+            maxPixelSize: CGSize(width: 100, height: 100)))
+        let rotatedResult = try XCTUnwrap(ClipThumbnailLoader.adjustedThumbnail(
+            from: source,
+            naturalSize: CGSize(width: 4, height: 4),
+            preferredTransform: .identity,
+            cropRect: fullFrame,
+            cropAdjustment: rotated,
+            maxPixelSize: CGSize(width: 100, height: 100)))
+
+        XCTAssertEqual(rotatedResult.width, 4)
+        XCTAssertEqual(rotatedResult.height, 4)
+        // Algebraic prediction: rotating the crop 90° about its own center carries the
+        // top-left quadrant to top-right, top-right to bottom-right, bottom-right to
+        // bottom-left, and bottom-left to top-left.
+        try Self.assertQuadrants(
+            of: rotatedResult, topLeft: .blue, topRight: .red, bottomLeft: .white, bottomRight: .green)
+        // Direct discriminator: the same source, window, and crop rect must decode to a
+        // visibly different thumbnail once the adjustment is non-identity — a fixture
+        // that read the same either way would pass whether or not the fix shipped.
+        let identityTopLeft = try XCTUnwrap(Self.pixel(atX: 1, y: 1, in: identityResult))
+        let rotatedTopLeft = try XCTUnwrap(Self.pixel(atX: 1, y: 1, in: rotatedResult))
+        XCTAssertNotEqual(identityTopLeft.red > 0.5, rotatedTopLeft.red > 0.5)
+    }
+
+    func testAdjustedThumbnailReturnsNilForADegenerateCropRect() throws {
+        let source = try XCTUnwrap(Self.quadrantImage())
+
+        let result = ClipThumbnailLoader.adjustedThumbnail(
+            from: source,
+            naturalSize: CGSize(width: 4, height: 4),
+            preferredTransform: .identity,
+            cropRect: NormalizedRect(minX: 0.5, maxX: 0.5, minY: 0, maxY: 1),
+            cropAdjustment: .identity,
+            maxPixelSize: CGSize(width: 100, height: 100))
+
+        XCTAssertNil(result)
     }
 
     // MARK: - ClipThumbnailLoader.thumbnail
@@ -751,40 +821,20 @@ final class ClipListTests: XCTestCase {
         return url
     }
 
-    /// Test image split into two distinguishable halves — left red, right green — so a
-    /// crop test can prove *which* region was extracted, not just its size. Colors are
-    /// built in the same device-RGB space the context uses, so the halves read back as
-    /// pure primaries.
-    private static func testImage(width: Int, height: Int) -> CGImage? {
-        let space = CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: space,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return nil
-        }
-        let halfWidth = width / 2
-        context.setFillColor(CGColor(colorSpace: space, components: [1, 0, 0, 1])!)
-        context.fill(CGRect(x: 0, y: 0, width: halfWidth, height: height))
-        context.setFillColor(CGColor(colorSpace: space, components: [0, 1, 0, 1])!)
-        context.fill(CGRect(x: halfWidth, y: 0, width: width - halfWidth, height: height))
-        return context.makeImage()
-    }
-
-    /// The RGBA bytes of one pixel, read in data order (top row first). The vertical
-    /// orientation doesn't matter for the left/right-half assertions below.
     /// A pixel's normalized RGB components (avoids a >2-member tuple return).
     private struct PixelRGB {
         let red: CGFloat
         let green: CGFloat
         let blue: CGFloat
+
+        static let red = PixelRGB(red: 1, green: 0, blue: 0)
+        static let green = PixelRGB(red: 0, green: 1, blue: 0)
+        static let blue = PixelRGB(red: 0, green: 0, blue: 1)
+        static let white = PixelRGB(red: 1, green: 1, blue: 1)
     }
 
+    /// The RGBA bytes of one pixel, read in the same row-major order `image(fromRows:)`
+    /// writes and `bytesPerRow` reports — offset `y * bytesPerRow + x * 4`.
     private static func pixel(atX x: Int, y: Int, in image: CGImage) -> PixelRGB? {
         guard image.bitsPerPixel == 32,
               let data = image.dataProvider?.data as Data?
@@ -796,5 +846,82 @@ final class ClipListTests: XCTestCase {
             green: CGFloat(data[offset + 1]) / 255,
             blue: CGFloat(data[offset + 2]) / 255
         )
+    }
+
+    /// Builds a CGImage from an explicit row-major RGBA buffer — `rows[y][x]` — so which
+    /// color sits at which row is pinned by construction rather than by `CGContext.fill`'s
+    /// row order, which this suite never asserts. Uses the same 8-bit device-RGB layout
+    /// `pixel(atX:y:in:)` reads.
+    private static func image(fromRows rows: [[PixelRGB]]) -> CGImage? {
+        let height = rows.count
+        guard height > 0, let width = rows.first?.count, width > 0,
+              rows.allSatisfy({ $0.count == width })
+        else { return nil }
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        for (y, row) in rows.enumerated() {
+            for (x, pixel) in row.enumerated() {
+                let offset = (y * width + x) * 4
+                bytes[offset] = UInt8((pixel.red * 255).rounded())
+                bytes[offset + 1] = UInt8((pixel.green * 255).rounded())
+                bytes[offset + 2] = UInt8((pixel.blue * 255).rounded())
+                bytes[offset + 3] = 255
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+        return CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
+    }
+
+    /// A 4x4 test image in four distinguishable quadrants — red (top-left), green
+    /// (top-right), blue (bottom-left), white (bottom-right) — in `NormalizedRect`'s own
+    /// space contract (origin top-left, y down), the same space `layerTransform` is
+    /// computed against.
+    private static func quadrantImage() -> CGImage? {
+        image(fromRows: [
+            [.red, .red, .green, .green],
+            [.red, .red, .green, .green],
+            [.blue, .blue, .white, .white],
+            [.blue, .blue, .white, .white]
+        ])
+    }
+
+    /// Samples one pixel inside each quadrant of a 4x4-grid image (at 1/4 and 3/4 of each
+    /// axis, comfortably clear of any resampling at the quadrant boundaries) and asserts
+    /// it against the expected color, loosely enough to tolerate interpolation but tightly
+    /// enough that the wrong quadrant's color — the discriminating failure — still fails.
+    private static func assertQuadrants(
+        of image: CGImage,
+        topLeft: PixelRGB,
+        topRight: PixelRGB,
+        bottomLeft: PixelRGB,
+        bottomRight: PixelRGB,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let nearX = image.width / 4, farX = 3 * image.width / 4
+        let nearY = image.height / 4, farY = 3 * image.height / 4
+        for (name, x, y, expected) in [
+            ("topLeft", nearX, nearY, topLeft),
+            ("topRight", farX, nearY, topRight),
+            ("bottomLeft", nearX, farY, bottomLeft),
+            ("bottomRight", farX, farY, bottomRight)
+        ] {
+            let actual = try XCTUnwrap(pixel(atX: x, y: y, in: image), name, file: file, line: line)
+            XCTAssertEqual(actual.red, expected.red, accuracy: 0.3, "\(name) red", file: file, line: line)
+            XCTAssertEqual(
+                actual.green, expected.green, accuracy: 0.3, "\(name) green", file: file, line: line)
+            XCTAssertEqual(actual.blue, expected.blue, accuracy: 0.3, "\(name) blue", file: file, line: line)
+        }
     }
 }

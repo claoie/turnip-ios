@@ -3,7 +3,9 @@ import CoreGraphics
 import Foundation
 
 /// Builds the card thumbnails for `docs/UIUX.md` § "Clip List (triage)": the source frame
-/// at each trick window's midpoint, cropped to the window's computed crop rect.
+/// at each trick window's midpoint, cropped to the window's computed crop rect and
+/// transformed by the editor's manual crop adjustment (rotate/zoom/pan), exactly as
+/// `ClipExporter` renders it.
 ///
 /// An actor so frame decoding stays off the main thread — `copyCGImage` blocks while it
 /// seeks and decodes, and the review bar for this repo treats main-thread decoding as a
@@ -13,9 +15,11 @@ import Foundation
 actor ClipThumbnailLoader {
     /// Loads the thumbnail for `item` from `asset`.
     ///
-    /// The generator returns the displayed (upright) frame, so the crop below is computed
-    /// in displayed space too — no second flip. `nil` when the frame can't be decoded or
-    /// the crop rect is degenerate; the card falls back to its placeholder tile.
+    /// The generator returns the raw, un-uprighted frame: `ClipExportTransform.make`
+    /// already composes `preferredTransform` into `layerTransform`, the same as the
+    /// export path, so applying it here too would rotate the frame twice. `nil` when the
+    /// frame can't be decoded or the crop rect is degenerate; the card falls back to its
+    /// placeholder tile.
     ///
     /// Cooperative cancellation: `Task.isCancelled` is checked once, before the decode
     /// starts, so a cancelled caller bails before the expensive seek+decode. After that
@@ -33,7 +37,7 @@ actor ClipThumbnailLoader {
             if Task.isCancelled { return nil }
             let midpoint = (item.window.startTime + item.window.endTime) / 2
             let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
+            generator.appliesPreferredTrackTransform = false
             // Exact seek: the default infinite tolerances let the generator return the
             // nearest keyframe, which can sit outside the trick window — but the crop
             // rect was derived from the athlete's pose *inside* the window.
@@ -46,27 +50,92 @@ actor ClipThumbnailLoader {
             )
             let naturalSize = try await track.load(.naturalSize)
             let preferredTransform = try await track.load(.preferredTransform)
-            guard let displayedCrop = Self.displayedCropRect(
-                cropRect: item.cropRect,
+            return Self.adjustedThumbnail(
+                from: image,
                 naturalSize: naturalSize,
-                preferredTransform: preferredTransform
-            ) else {
-                return nil
-            }
-            let displayedSize = Self.displayedFrameSize(
-                naturalSize: naturalSize, preferredTransform: preferredTransform)
-            return Self.croppedThumbnail(image, to: displayedCrop, in: displayedSize)
+                preferredTransform: preferredTransform,
+                cropRect: item.cropRect,
+                cropAdjustment: item.cropAdjustment,
+                maxPixelSize: Self.defaultMaxPixelSize
+            )
         } catch {
             return nil
         }
     }
 
     /// Decoded-frame bound for card thumbnails: the two-column triage grid gives ~170pt
-    /// cards on a ~390pt phone, at 9:16 and @3x. Unbounded, the generator hands back
-    /// native-resolution frames and the view model holds one per visible card resident.
-    /// `croppedThumbnail` scales the crop into whatever pixel size the generator actually
-    /// returns, so this only caps memory.
+    /// cards on a ~390pt phone, at 9:16 and @3x. Unbounded, the generator and the render
+    /// context below hand back native-resolution frames and the view model holds one per
+    /// visible card resident. `adjustedThumbnail` scales its render context to this bound,
+    /// so this caps both decode and render memory.
     static let defaultMaxPixelSize = CGSize(width: 512, height: 912)
+
+    /// Renders `image` — the raw, un-uprighted decoded frame — through the same
+    /// composited crop-and-adjustment geometry `ClipExporter` uses for export, so the
+    /// card thumbnail and the exported clip always agree on the framing.
+    ///
+    /// `ClipExportTransform.layerTransform` targets AVFoundation's video-composition
+    /// render space: top-left origin, y-down, the same convention `preferredTransform`
+    /// and `NormalizedRect` use. A `CGContext` is the opposite — bottom-left origin,
+    /// y-up — so the context is flipped before the transform is concatenated; without
+    /// the flip, `layerTransform`'s rotation and translation would land mirrored and
+    /// offset. `layerTransform`'s own render size is in the source's full-resolution
+    /// pixels, which would blow the per-card memory budget `defaultMaxPixelSize` guards,
+    /// so the context is additionally scaled down to fit within `maxPixelSize` before the
+    /// transform is applied — a uniform scale, so it doesn't disturb the transform's
+    /// rotation or aspect ratio.
+    ///
+    /// `nil` when the crop rect is degenerate, the scaled render size is non-finite, or
+    /// the context can't be created.
+    static func adjustedThumbnail(
+        from image: CGImage,
+        naturalSize: CGSize,
+        preferredTransform: CGAffineTransform,
+        cropRect: NormalizedRect,
+        cropAdjustment: CropAdjustment,
+        maxPixelSize: CGSize
+    ) -> CGImage? {
+        guard let transform = ClipExportTransform.make(
+            cropRect: cropRect,
+            naturalSize: naturalSize,
+            preferredTransform: preferredTransform,
+            cropAdjustment: cropAdjustment
+        ), transform.renderSize.width > 0, transform.renderSize.height > 0 else {
+            return nil
+        }
+
+        let scale = min(
+            1,
+            maxPixelSize.width / transform.renderSize.width,
+            maxPixelSize.height / transform.renderSize.height
+        )
+        guard scale.isFinite, scale > 0 else { return nil }
+        let pixelWidth = max(1, Int((transform.renderSize.width * scale).rounded()))
+        let pixelHeight = max(1, Int((transform.renderSize.height * scale).rounded()))
+
+        guard let context = CGContext(
+            data: nil,
+            width: pixelWidth,
+            height: pixelHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        // Flip into layerTransform's top-left/y-down space, scale down to the bounded
+        // pixel size, then apply the composited crop/adjustment transform — in that
+        // order, so layerTransform still sees the source's un-scaled coordinates.
+        context.translateBy(x: 0, y: CGFloat(pixelHeight))
+        context.scaleBy(x: 1, y: -1)
+        context.scaleBy(x: scale, y: scale)
+        context.concatenate(transform.layerTransform)
+        context.draw(image, in: CGRect(origin: .zero, size: naturalSize))
+
+        return context.makeImage()
+    }
 
     /// Maps the crop rect from `NormalizedRect`'s space contract — the decoded frames'
     /// normalized space (display orientation, y down from the top), matching the pose
@@ -110,30 +179,6 @@ actor ClipThumbnailLoader {
             return 9.0 / 16.0
         }
         return displayed.width / displayed.height
-    }
-
-    /// Crops `image` to `displayedCrop`, scaling from the displayed frame size to the
-    /// image's pixel size (the generator may hand back a scaled frame when `maximumSize`
-    /// is set). The crop is clamped to the image bounds and `nil` is returned when nothing
-    /// survives, so a rounding slip can't produce an out-of-bounds `cropping(to:)`.
-    static func croppedThumbnail(
-        _ image: CGImage,
-        to displayedCrop: CGRect,
-        in displayedSize: CGSize
-    ) -> CGImage? {
-        guard displayedSize.width > 0, displayedSize.height > 0 else { return nil }
-        let scaleX = CGFloat(image.width) / displayedSize.width
-        let scaleY = CGFloat(image.height) / displayedSize.height
-        let pixelCrop = CGRect(
-            x: displayedCrop.minX * scaleX,
-            y: displayedCrop.minY * scaleY,
-            width: displayedCrop.width * scaleX,
-            height: displayedCrop.height * scaleY
-        )
-        let clamped = pixelCrop.intersection(
-            CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        guard !clamped.isNull, clamped.width >= 1, clamped.height >= 1 else { return nil }
-        return image.cropping(to: clamped)
     }
 
     /// The displayed frame's size: the encoded frame's corners through
