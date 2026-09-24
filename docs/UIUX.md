@@ -181,9 +181,13 @@ out-of-process picker, so it needs real Photos access. As built:
 - A swipe here navigates the grid rather than reaching Camera: right browses
   to the previous video in Home's grid order, left to the next, replacing the
   screen in place (not stacking a new one, so the back chevron still returns
-  to Home in one step) — disabled while an analysis is running. Home's own
-  swipe-right-for-Camera (§1) does not apply once a video is pushed onto
-  this screen.
+  to Home in one step) — disabled while an analysis is running. The page
+  follows the finger for the whole drag and springs back if it falls short of
+  landing; at either end of the grid it gives only a little, since there is no
+  video that way. Where the drag starts makes no difference — neither Home's
+  own swipe-right-for-Camera (§1) nor the system's edge-swipe-to-pop reaches
+  this screen, which is why it draws its own back chevron rather than the
+  navigation stack's.
 
 ### 3. Clip List (triage)
 
