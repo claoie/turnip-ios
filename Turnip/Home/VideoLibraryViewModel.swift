@@ -51,6 +51,15 @@ final class VideoLibraryViewModel: ObservableObject {
     static let loadMoreThreshold = 18
 
     @Published private(set) var authorization: PhotoLibraryAuthorization
+    /// The active gallery filter (#176). Read by `reload()` to build the fetch, and by
+    /// `GalleryFilterButton` to show which row is checked.
+    @Published private(set) var filter: GalleryFilter = .all
+    /// User albums (regular + shared, not smart albums — `.smartAlbum` is a separate
+    /// `PHAssetCollectionType` and never appears here), for the filter menu's Album submenu.
+    /// Loaded once on first `reload()`, not re-fetched per filter change: album membership can
+    /// shift while the menu is open, but the album *list* rarely does, and there's no library
+    /// change observer wired to it (`observeLibraryChanges()` only watches `fetchResult`).
+    @Published private(set) var albums: [PHAssetCollection] = []
     /// Newest first. The loaded prefix of `fetchResult`, grown a page at a time as the user scrolls
     /// (`tileAppeared(at:)`). `PHAsset` objects are lightweight faults; the expensive part
     /// (thumbnails) is loaded lazily per visible tile and prefetched around it by `thumbnails`.
@@ -121,10 +130,40 @@ final class VideoLibraryViewModel: ObservableObject {
         }
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let result = PHAsset.fetchAssets(with: .video, options: options)
+        options.predicate = filter.predicate
+        let result: PHFetchResult<PHAsset>
+        if case .album(let collection) = filter {
+            result = PHAsset.fetchAssets(in: collection, options: options)
+        } else {
+            result = PHAsset.fetchAssets(with: options)
+        }
         fetchResult = result
         replaceVideos(with: Self.prefix(of: result, count: Self.pageSize))
         observeLibraryChanges()
+        loadAlbumsIfNeeded()
+    }
+
+    /// Applies a new gallery filter and reloads the grid against it. A no-op if `filter` is
+    /// already the requested value — reselecting the current row shouldn't drop the loaded
+    /// prefix and thumbnail cache for nothing.
+    func selectFilter(_ filter: GalleryFilter) {
+        guard filter != self.filter else { return }
+        self.filter = filter
+        reload()
+    }
+
+    /// User albums for the filter menu's Album submenu, fetched once. Not gated on
+    /// `authorization.canReadLibrary` beyond `reload()`'s own guard — `PHAssetCollection.fetchAssetCollections`
+    /// only ever returns what this app can already see, `.limited` included, the same way the
+    /// video fetch itself is silently scoped.
+    private func loadAlbumsIfNeeded() {
+        guard albums.isEmpty else { return }
+        let options = PHFetchOptions()
+        options.sortDescriptors = [NSSortDescriptor(key: "localizedTitle", ascending: true)]
+        let result = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: options)
+        var collections: [PHAssetCollection] = []
+        result.enumerateObjects { collection, _, _ in collections.append(collection) }
+        albums = collections
     }
 
     /// Limited-access affordance: iOS's own picker for extending the granted subset. Presented

@@ -114,6 +114,16 @@ out-of-process picker, so it needs real Photos access. As built:
   visible rows, over 60-asset pages, so a library with hundreds of
   videos scrolls without stalling on first load.
 
+**Filter** (shipped, `Turnip/Home/GalleryFilter.swift`): a `Menu` button beside
+the settings gear, mirroring the Photos app's own filter — All Items,
+Favorites, or a specific user album (nested submenu). The filter changes the
+underlying `PHFetchOptions`/`PHAssetCollection` fetch itself, not a
+post-filter of the loaded grid, so paging and Processing's swipe-to-browse
+stay correct against the filtered set. "Edited" is not offered: PhotoKit has
+no fetch-level predicate for it, only a per-asset resource scan that would
+make every filter change scale with library size instead of staying
+fetch-level.
+
 ### 1a. Settings
 
 - Reached by tapping the gear icon floating at Home's top-trailing corner (the same

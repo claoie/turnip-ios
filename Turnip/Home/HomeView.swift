@@ -31,7 +31,12 @@ struct HomeView: View {
                 // regardless of how transparent it looks — any control layered inside that
                 // band is unreachable no matter its own touch-target size. See
                 // `settingsButton` below.
-                .overlay(alignment: .topTrailing) { settingsButton }
+                .overlay(alignment: .topTrailing) {
+                    HStack(spacing: 0) {
+                        GalleryFilterButton(viewModel: viewModel)
+                        settingsButton
+                    }
+                }
                 .navigationDestination(for: SelectedVideo.self) { video in
                     // A video the camera already analyzed while recording it lands on the
                     // clip list directly. Otherwise the Processing screen shows the picked
@@ -154,6 +159,71 @@ struct HomeSettingsButton: View {
         ScrimIconButton(systemImage: "gearshape", accessibilityLabel: "Settings", action: action)
             .padding()
             .accessibilityIdentifier("settings-button")
+    }
+}
+
+/// The gallery filter entry point (#176): All Items / Favorites / a specific album, sitting
+/// left of the settings gear in the same top-trailing overlay — see the corner-occupancy note
+/// on `HomeSettingsButton` above; this shares that same nav-bar-band constraint.
+///
+/// Not `ScrimIconButton` directly: `Menu`'s `label` closure needs a bare glyph rather than a
+/// nested `Button`, the same reason `CameraCaptureView`'s `formatMenu` doesn't use it either —
+/// mirrors `ScrimIconButton`'s look so it still reads as the same control family.
+struct GalleryFilterButton: View {
+    @ObservedObject var viewModel: VideoLibraryViewModel
+
+    var body: some View {
+        Menu {
+            filterRow(.all, title: "All Items")
+            filterRow(.favorites, title: "Favorites")
+            if !viewModel.albums.isEmpty {
+                Menu {
+                    ForEach(viewModel.albums, id: \.localIdentifier) { album in
+                        filterRow(.album(album), title: album.localizedTitle ?? "Album")
+                    }
+                } label: {
+                    checkableLabel(albumRowTitle, isSelected: isAlbumSelected)
+                }
+            }
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(.black.opacity(0.4), in: Circle())
+        }
+        .padding()
+        .accessibilityLabel("Filter")
+        .accessibilityIdentifier("gallery-filter-button")
+    }
+
+    private func filterRow(_ filter: GalleryFilter, title: String) -> some View {
+        Button {
+            viewModel.selectFilter(filter)
+        } label: {
+            checkableLabel(title, isSelected: viewModel.filter == filter)
+        }
+    }
+
+    @ViewBuilder
+    private func checkableLabel(_ title: String, isSelected: Bool) -> some View {
+        if isSelected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+
+    private var isAlbumSelected: Bool {
+        if case .album = viewModel.filter { return true }
+        return false
+    }
+
+    private var albumRowTitle: String {
+        if case .album(let collection) = viewModel.filter {
+            return "Album: \(collection.localizedTitle ?? "Album")"
+        }
+        return "Album"
     }
 }
 

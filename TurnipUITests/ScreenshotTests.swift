@@ -43,6 +43,22 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
     }
 
+    /// Same real-touch guard as the settings gear above, for its neighbor in the same
+    /// top-trailing overlay (#176): a `Menu`-based button sitting in the exact band where a
+    /// `UINavigationBar` occluder has swallowed touches before (see the doc comment on
+    /// `HomeNavigationBar` in `HomeView.swift`). Asserts the real filter rows render, not just
+    /// that the button opens *something*.
+    func testGalleryFilterButtonOpensMenu() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotHome"]
+        app.launch()
+        let button = app.buttons["gallery-filter-button"]
+        XCTAssertTrue(button.waitForExistence(timeout: 15))
+        button.tap()
+        XCTAssertTrue(app.buttons["All Items"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["Favorites"].exists)
+    }
+
     /// Clip list triage: three detected windows, one trashed, thumbnails as
     /// placeholder tiles (the /dev/null asset decodes nothing; the loader falls
     /// back to the placeholder — the test waits for the placeholder's

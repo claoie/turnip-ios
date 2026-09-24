@@ -45,7 +45,10 @@ screen's PR rather than retrofitting later.
   shadow that assumes dark footage.
 - Stable `accessibilityIdentifier`s: `video-grid`, `video-tile-<localIdentifier>`,
   `limited-access-banner`, `select-more-videos`, `resolution-banner`,
-  `cancel-video-resolution`, `photos-access-denied`, `open-settings`, `settings-button`.
+  `cancel-video-resolution`, `photos-access-denied`, `open-settings`, `settings-button`,
+  `gallery-filter-button` (#176 — `accessibilityLabel` "Filter"; its `Menu` rows carry no
+  identifiers of their own, since XCUITest reaches a system menu's items by label/text, not
+  identifier, the same as `CameraCaptureView`'s existing format menu).
 
 ### Processing (#17)
 
