@@ -87,6 +87,10 @@ actor ClipThumbnailLoader {
     ///
     /// `nil` when the crop rect is degenerate, the scaled render size is non-finite, or
     /// the context can't be created.
+    // Every parameter is one input `ClipExportTransform.make` itself already takes, plus
+    // the decoded image and the thumbnail's own memory bound — grouping them behind a
+    // struct would move the same six values without reducing what a caller supplies.
+    // swiftlint:disable:next function_parameter_count
     static func adjustedThumbnail(
         from image: CGImage,
         naturalSize: CGSize,
