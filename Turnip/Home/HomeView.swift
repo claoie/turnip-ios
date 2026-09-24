@@ -23,6 +23,15 @@ struct HomeView: View {
                 // scrolls away with the tiles (docs/UIUX.md). Root-only — pushed screens
                 // declare their own bars.
                 .modifier(HomeNavigationBar())
+                // Attached AFTER `HomeNavigationBar`, at the ROOT only — inside the
+                // `NavigationStack`'s root closure, so a pushed Processing/ClipList screen
+                // doesn't inherit it, and outside the band `HomeNavigationBar` reserves for
+                // its own (invisible-but-real) `UINavigationBar`: that system bar hit-tests
+                // its own frame ahead of SwiftUI content drawn under it, opaque to touches
+                // regardless of how transparent it looks — any control layered inside that
+                // band is unreachable no matter its own touch-target size. See
+                // `settingsButton` below.
+                .overlay(alignment: .topTrailing) { settingsButton }
                 .navigationDestination(for: SelectedVideo.self) { video in
                     // A video the camera already analyzed while recording it lands on the
                     // clip list directly. Otherwise the Processing screen shows the picked
@@ -105,12 +114,16 @@ struct HomeView: View {
             ProgressView()
         case .denied(let restricted):
             VStack(spacing: 0) {
-                HomeHeader(onSettingsTapped: { showSettings = true })
+                HomeHeader()
                 PhotosAccessDeniedView(restricted: restricted)
             }
         case .authorized, .limited:
-            VideoGalleryView(viewModel: viewModel, onSettingsTapped: { showSettings = true })
+            VideoGalleryView(viewModel: viewModel)
         }
+    }
+
+    private var settingsButton: some View {
+        HomeSettingsButton(action: { showSettings = true })
     }
 
     private var errorPresented: Binding<Bool> {
@@ -121,26 +134,36 @@ struct HomeView: View {
     }
 }
 
-/// Home's title row: the "Turnip" wordmark image (mark + text baked into one asset),
-/// centered in a nav-bar-height band, with the settings gear trailing it when
-/// `onSettingsTapped` is supplied. Laid out as ordinary content — inside the grid's scroll
-/// view, or above a non-scrolling state — rather than as a nav bar title, so both the wordmark
-/// and the gear scroll away with the tiles instead of floating fixed over them: a fixed overlay
-/// at this corner would otherwise permanently sit over whatever grid tile scrolls underneath it
-/// and intercept taps meant for that tile, the way the wordmark itself scrolling away avoids
-/// that problem for the header row as a whole. Internal so the DEBUG screenshot harness can
-/// render the denied state exactly as Home does.
-struct HomeHeader: View {
-    /// `nil` renders no gear — every caller except Home's own states (denied and the video
-    /// gallery) that can actually reach Settings.
-    var onSettingsTapped: (() -> Void)?
+/// The settings entry point's fixed corner overlay. Must stay attached to `HomeView`'s root
+/// content, outside the band `HomeNavigationBar` reserves for its own system
+/// `UINavigationBar` — that bar hit-tests its own frame ahead of SwiftUI content drawn under
+/// it, opaque to touches regardless of how transparent it looks
+/// (`.toolbarBackground(.hidden, ...)` hides its paint, not its hit area). A control layered
+/// inside that band is unreachable no matter its own touch-target size, accessibility
+/// identifier, or screenshot coverage — none of those exercise hit-testing against a real
+/// `UINavigationBar`; only a synthesized touch does (`TurnipUITests/ScreenshotTests.swift`'s
+/// `testHomeSettingsButtonOpensSettings`).
+///
+/// Extracted to its own type, not a private computed property, so the DEBUG screenshot
+/// harness composes the exact same view `HomeView` does instead of a hand-built duplicate
+/// that can drift from it.
+struct HomeSettingsButton: View {
+    let action: () -> Void
 
+    var body: some View {
+        ScrimIconButton(systemImage: "gearshape", accessibilityLabel: "Settings", action: action)
+            .padding()
+            .accessibilityIdentifier("settings-button")
+    }
+}
+
+/// Home's title row: the "Turnip" wordmark image (mark + text baked into one asset), centered
+/// in a nav-bar-height band. Scroll content (not a nav bar title) so it scrolls away with the
+/// tiles like the rest of Home's header (docs/UIUX.md). Internal so the DEBUG screenshot
+/// harness can render the denied state exactly as Home does.
+struct HomeHeader: View {
     private static let logoHeight: CGFloat = 36
     private static let rowHeight: CGFloat = 44
-    /// Drawn smaller than `ScrimIconButton`'s 44 pt default so the visible glyph leaves more
-    /// room for the logo in this shared row — the tappable region stays 44×44 regardless,
-    /// per `ScrimIconButton`'s own touch-target floor (docs/ACCESSIBILITY.md:94).
-    private static let settingsButtonDiameter: CGFloat = 32
 
     var body: some View {
         Image("TitleLogo")
@@ -150,15 +173,6 @@ struct HomeHeader: View {
             .frame(maxWidth: .infinity, minHeight: Self.rowHeight)
             .accessibilityLabel("Turnip")
             .accessibilityAddTraits(.isHeader)
-            .overlay(alignment: .trailing) {
-                if let onSettingsTapped {
-                    ScrimIconButton(
-                        systemImage: "gearshape", accessibilityLabel: "Settings",
-                        diameter: Self.settingsButtonDiameter, action: onSettingsTapped)
-                        .padding(.trailing)
-                        .accessibilityIdentifier("settings-button")
-                }
-            }
     }
 }
 
@@ -167,9 +181,6 @@ struct HomeHeader: View {
 /// scrollable grid, newest videos first — no landing/reveal state.
 struct VideoGalleryView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
-    /// Threaded straight to every `HomeHeader()` this view constructs (loading, empty, and grid
-    /// states all show one) rather than each state re-deriving its own entry point.
-    var onSettingsTapped: (() -> Void)?
 
     private static let spacing: CGFloat = 2
     private let columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: 3)
@@ -193,13 +204,13 @@ struct VideoGalleryView: View {
         if !viewModel.hasLoaded {
             // Not yet the same thing as "no videos" — the first fetch hasn't run.
             VStack(spacing: 0) {
-                HomeHeader(onSettingsTapped: onSettingsTapped)
+                HomeHeader()
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else if viewModel.videos.isEmpty {
             VStack(spacing: 0) {
-                HomeHeader(onSettingsTapped: onSettingsTapped)
+                HomeHeader()
                 emptyState
             }
         } else {
@@ -209,9 +220,9 @@ struct VideoGalleryView: View {
 
     private var grid: some View {
         ScrollView {
-            // The header (with the settings gear, when reachable) is scroll content, not
-            // chrome: it leads the grid and leaves the screen with the first row.
-            HomeHeader(onSettingsTapped: onSettingsTapped)
+            // The header is scroll content, not chrome: it leads the grid and leaves the
+            // screen with the first row.
+            HomeHeader()
             LazyVGrid(columns: columns, spacing: Self.spacing) {
                 ForEach(
                     Array(viewModel.videos.enumerated()), id: \.element.localIdentifier

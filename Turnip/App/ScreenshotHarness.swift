@@ -12,17 +12,27 @@ import SwiftUI
 /// would raise the system permission prompt in the simulator. The denied state is pure
 /// SwiftUI and deterministic.
 struct ScreenshotHomeHarness: View {
+    // Isolated suite, like `ScreenshotSettingsHarness` — a tap here must never read or
+    // write the app's real stored preferences.
+    private static let store = TurnipSettingsStore(
+        defaults: UserDefaults(suiteName: "ScreenshotHomeHarness") ?? .standard)
+    @State private var showSettings = false
+
     var body: some View {
         NavigationStack {
-            // Same composition as `HomeView`'s denied branch: the wordmark header as
-            // content under Home's empty, transparent bar. `onSettingsTapped` is a
-            // no-op rather than `nil` so the gear renders — `HomeView` passes a real
-            // closure in its denied branch too.
+            // Same composition as `HomeView`'s denied branch: the wordmark header as content
+            // under Home's empty, transparent bar, with the same `HomeSettingsButton` overlay
+            // `HomeView.body` attaches at the root, outside the bar's hit-testing band. Wired
+            // to a real sheet present, not a no-op action, so a UI test can `.tap()` the
+            // button and assert the sheet actually opened — the behavior the button exists
+            // for, not just its presence in the hit-testing tree.
             VStack(spacing: 0) {
-                HomeHeader(onSettingsTapped: {})
+                HomeHeader()
                 PhotosAccessDeniedView(restricted: false)
             }
             .modifier(HomeNavigationBar())
+            .overlay(alignment: .topTrailing) { HomeSettingsButton(action: { showSettings = true }) }
+            .sheet(isPresented: $showSettings) { SettingsView(settings: Self.store) }
         }
     }
 }
