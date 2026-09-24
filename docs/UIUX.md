@@ -186,12 +186,13 @@ out-of-process picker, so it needs real Photos access. As built:
   falls short of landing; at either end of the grid it gives only a little,
   since there is no video that way. The back chevron itself stays put — it
   belongs to the flow's shared navigation stack, not this screen's own
-  content, the same as every other pushed screen. The drag starts from
-  anywhere on the page except the scrub bar's own track, which claims a
-  horizontal drag for scrubbing instead; neither Home's own
-  swipe-right-for-Camera (§1) nor the system's edge-swipe-to-pop reaches this
-  screen either way, which is why it draws its own back chevron rather than
-  the navigation stack's.
+  content, the same as every other pushed screen — and for that same reason
+  its own tap target is a second carve-out from the drag, alongside the
+  scrub bar's own track (see its own section below), which claims a
+  horizontal drag for scrubbing instead. Elsewhere on the page a drag
+  browses regardless of where it starts, rather than reaching Home's own
+  swipe-right-for-Camera (§1) or the system's edge-swipe-to-pop, which is why
+  this screen draws its own back chevron rather than the navigation stack's.
 
 ### 3. Clip List (triage)
 
