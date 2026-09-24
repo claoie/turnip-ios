@@ -73,7 +73,7 @@ actor ClipThumbnailLoader {
     // Every parameter is one input `ClipExportTransform.make` itself already takes, plus
     // the decoded image and the thumbnail's own memory bound — grouping them behind a
     // struct would move the same six values without reducing what a caller supplies.
-    // swiftlint:disable:next function_parameter_count
+    // swiftlint:disable function_parameter_count
     /// Renders `image` — the raw, un-uprighted decoded frame — through the same
     /// composited crop-and-adjustment geometry `ClipExporter` uses for export, so the
     /// card thumbnail and the exported clip always agree on the framing.
@@ -99,6 +99,7 @@ actor ClipThumbnailLoader {
         cropAdjustment: CropAdjustment,
         maxPixelSize: CGSize
     ) -> CGImage? {
+        // swiftlint:enable function_parameter_count
         guard let transform = ClipExportTransform.make(
             cropRect: cropRect,
             naturalSize: naturalSize,
