@@ -49,10 +49,12 @@ enum ClipPhotosSaveError: LocalizedError, Equatable {
 ///   this saver didn't create, visible but not modifiable under add-only — `PHAssetCollectionChangeRequest`
 ///   returns `nil`).
 ///
-/// Either way, `addToAlbum` creates a new, separately-titled album instead of reusing the one
-/// `fetchAlbum` found or failed to find. The clip still lands *somewhere*, just not consolidated
-/// — a save never fails or drops album membership because of this, it can only fragment across
-/// more albums than intended.
+/// Either way, `addToAlbum` creates a new album with the SAME title instead of adding to the
+/// one `fetchAlbum` found or failed to find — so a Photos search for that title can turn up
+/// more than one album, all named identically, none of them "the wrong one" to look in. The
+/// clip still lands *somewhere*, just not consolidated — a save never fails or drops album
+/// membership because of this, it can only spread one save's worth of clips across an extra,
+/// same-titled album per occurrence.
 struct ClipPhotosSaver: Sendable {
     /// Resolves the add-only Photos authorization, collapsed onto the app's
     /// shared Photos-domain authorization model (`PhotoLibraryAuthorization`,
@@ -127,14 +129,14 @@ struct ClipPhotosSaver: Sendable {
         ).firstObject
     }
 
-    /// Adds `placeholder` to the album titled `title`, creating a new album if `fetchAlbum`
-    /// doesn't find one — OR if it finds one this app can't edit (`PHAssetCollectionChangeRequest`
-    /// returns `nil` for a `fetchAlbum` hit that isn't add-only-modifiable): both cases fall
-    /// through to the same creation branch, so an unmodifiable existing album degrades into the
-    /// same "separately-titled duplicate album" outcome `fetchAlbum`'s doc comment already
-    /// discloses for the sees-nothing case, rather than a distinct failure mode. Must run inside
-    /// a `PHPhotoLibrary.performChanges` block. Extracted from `saveVideo` to keep its
-    /// cyclomatic complexity under the repo's SwiftLint limit.
+    /// Adds `placeholder` to the album titled `title`, creating a new same-titled album if
+    /// `fetchAlbum` doesn't find one — OR if it finds one this app can't edit
+    /// (`PHAssetCollectionChangeRequest` returns `nil` for a `fetchAlbum` hit that isn't
+    /// add-only-modifiable): both cases fall through to the same creation branch, so an
+    /// unmodifiable existing album degrades into the same-titled-duplicate outcome
+    /// `fetchAlbum`'s doc comment already discloses for the sees-nothing case, rather than a
+    /// distinct failure mode. Must run inside a `PHPhotoLibrary.performChanges` block. Extracted
+    /// from `saveVideo` to keep its cyclomatic complexity under the repo's SwiftLint limit.
     private static func addToAlbum(_ placeholder: PHObjectPlaceholder, titled title: String) {
         if let existingAlbum = fetchAlbum(titled: title),
             let editRequest = PHAssetCollectionChangeRequest(for: existingAlbum) {
