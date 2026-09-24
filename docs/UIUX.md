@@ -116,12 +116,14 @@ out-of-process picker, so it needs real Photos access. As built:
 
 ### 1a. Settings
 
-- Reached by tapping the gear icon trailing the wordmark in Home's header row, scrolling away
-  with the tiles rather than a fixed corner overlay (a fixed overlay would sit over whatever
-  tile scrolls underneath it and intercept taps meant for that tile). Not nav-bar chrome — Home's
-  own bar is kept content-free for the iOS 26 scroll-edge glass described under "1. Home / Video
-  Gallery" above. Presented as a sheet, not pushed onto the flow's `NavigationStack`: it has
-  nothing to hand back to Home and isn't part of "pick a video, get clips."
+- Reached by tapping the gear icon floating at Home's top-trailing corner (the same
+  `ScrimIconButton` corner-overlay shape Camera's own controls use), not chrome inside the
+  scrolling header — a scroll-content placement was tried first and shipped unreachable on a
+  real device, so the floating placement's tradeoff (it can sit over a scrolled-up tile, same as
+  Camera's controls over its viewfinder) is accepted. Not nav-bar chrome either — Home's own bar
+  is kept content-free for the iOS 26 scroll-edge glass described under "1. Home / Video Gallery"
+  above. Presented as a sheet, not pushed onto the flow's `NavigationStack`: it has nothing to
+  hand back to Home and isn't part of "pick a video, get clips."
 - Four preferences, `UserDefaults`-backed (`Turnip/Settings/TurnipSettingsStore.swift`), each
   taking effect at its own integration point rather than needing a restart:
   - **Analysis mode** (segmented Real-time / Offline) — whether the camera scores pose live while

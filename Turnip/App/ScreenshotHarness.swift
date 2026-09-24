@@ -15,14 +15,19 @@ struct ScreenshotHomeHarness: View {
     var body: some View {
         NavigationStack {
             // Same composition as `HomeView`'s denied branch: the wordmark header as
-            // content under Home's empty, transparent bar. `onSettingsTapped` is a
-            // no-op rather than `nil` so the gear renders — `HomeView` passes a real
-            // closure in its denied branch too.
+            // content under Home's empty, transparent bar, with the same floating
+            // settings gear `HomeView.body` overlays at the root (not scroll content —
+            // `HomeHeader` itself carries no gear since the settings-button regression).
             VStack(spacing: 0) {
-                HomeHeader(onSettingsTapped: {})
+                HomeHeader()
                 PhotosAccessDeniedView(restricted: false)
             }
             .modifier(HomeNavigationBar())
+            .overlay(alignment: .topTrailing) {
+                ScrimIconButton(systemImage: "gearshape", accessibilityLabel: "Settings", action: {})
+                    .padding()
+                    .accessibilityIdentifier("settings-button")
+            }
         }
     }
 }
