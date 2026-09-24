@@ -134,15 +134,15 @@ struct HomeView: View {
     }
 }
 
-/// The settings entry point's fixed corner overlay. Attached to `HomeView`'s root content,
-/// outside the band `HomeNavigationBar` reserves for its own system `UINavigationBar` — that
-/// bar hit-tests its own frame ahead of SwiftUI content drawn under it, opaque to touches
-/// regardless of how transparent it looks (`.toolbarBackground(.hidden, ...)` hides its
-/// paint, not its hit area), so a control layered inside that band is unreachable no matter
-/// its own touch-target size. A prior revision drew this gear as `HomeHeader` scroll content,
-/// inside that band, and it was untappable on a real device despite passing every static
-/// check (44×44 pt touch target, accessibility identifier, screenshot coverage) — none of
-/// which exercises hit-testing against a real `UINavigationBar`.
+/// The settings entry point's fixed corner overlay. Must stay attached to `HomeView`'s root
+/// content, outside the band `HomeNavigationBar` reserves for its own system
+/// `UINavigationBar` — that bar hit-tests its own frame ahead of SwiftUI content drawn under
+/// it, opaque to touches regardless of how transparent it looks
+/// (`.toolbarBackground(.hidden, ...)` hides its paint, not its hit area). A control layered
+/// inside that band is unreachable no matter its own touch-target size, accessibility
+/// identifier, or screenshot coverage — none of those exercise hit-testing against a real
+/// `UINavigationBar`; only a synthesized touch does (`TurnipUITests/ScreenshotTests.swift`'s
+/// `testHomeSettingsButtonOpensSettings`).
 ///
 /// Extracted to its own type, not a private computed property, so the DEBUG screenshot
 /// harness composes the exact same view `HomeView` does instead of a hand-built duplicate

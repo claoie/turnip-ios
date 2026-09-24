@@ -25,20 +25,22 @@ final class ScreenshotTests: XCTestCase {
         addScreenshot(named: "home-access-denied")
     }
 
-    /// Guards the settings gear's touch target specifically, not just its presence —
-    /// `waitForExistence` (what `testHomeAccessDenied` above checks) is true whether or not
-    /// a real tap can reach the element. `isHittable` performs a real hit-test through the
-    /// actual view hierarchy, so a control drawn under `HomeNavigationBar`'s (invisible but
-    /// real) system nav bar reads `false` here even though it's fully present and correctly
-    /// sized — that gap between "exists" and "hittable" is exactly what shipped untappable
-    /// past every prior static check on this button.
-    func testHomeSettingsButtonIsHittable() throws {
+    /// Guards the settings gear's touch target with a real synthesized touch, not just its
+    /// presence or `isHittable` — `waitForExistence` (what `testHomeAccessDenied` above
+    /// checks) is true whether or not a real tap can reach the element, and `isHittable`'s
+    /// exact fidelity against a system `UINavigationBar` occluder is itself unverified on
+    /// this machine (no Xcode/simulator to test XCTest's own hit-testing semantics against).
+    /// `.tap()` sends a real touch through UIKit's actual dispatch and asserting the sheet it
+    /// opens is the one thing a presence/hittability check cannot prove: that this exact
+    /// button, wired to its real action (not a no-op), is reachable end to end.
+    func testHomeSettingsButtonOpensSettings() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotHome"]
         app.launch()
         let button = app.buttons["settings-button"]
         XCTAssertTrue(button.waitForExistence(timeout: 15))
-        XCTAssertTrue(button.isHittable)
+        button.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
     }
 
     /// Clip list triage: three detected windows, one trashed, thumbnails as
