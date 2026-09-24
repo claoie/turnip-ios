@@ -35,6 +35,8 @@ actor ClipThumbnailLoader {
                 return nil
             }
             if Task.isCancelled { return nil }
+            let naturalSize = try await track.load(.naturalSize)
+            let preferredTransform = try await track.load(.preferredTransform)
             let midpoint = (item.window.startTime + item.window.endTime) / 2
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = false
@@ -43,13 +45,14 @@ actor ClipThumbnailLoader {
             // rect was derived from the athlete's pose *inside* the window.
             generator.requestedTimeToleranceBefore = .zero
             generator.requestedTimeToleranceAfter = .zero
-            generator.maximumSize = Self.defaultMaxPixelSize
+            // The bound applies to the raw (un-uprighted) frame this generator now
+            // returns, so a 90°/270°-rotated track needs it transposed — otherwise a
+            // portrait-shaped bound clips a landscape-encoded frame's long edge.
+            generator.maximumSize = Self.encodedMaxPixelSize(preferredTransform: preferredTransform)
             let image = try generator.copyCGImage(
                 at: CMTime(seconds: midpoint, preferredTimescale: 600),
                 actualTime: nil
             )
-            let naturalSize = try await track.load(.naturalSize)
-            let preferredTransform = try await track.load(.preferredTransform)
             return Self.adjustedThumbnail(
                 from: image,
                 naturalSize: naturalSize,
@@ -70,6 +73,17 @@ actor ClipThumbnailLoader {
     /// so this caps both decode and render memory.
     static let defaultMaxPixelSize = CGSize(width: 512, height: 912)
 
+    /// `defaultMaxPixelSize`, transposed for a track whose `preferredTransform` swaps
+    /// axes (a 90°/270° rotation: `a` and `d` are both zero). The generator this bounds
+    /// now returns the raw, un-uprighted frame, so the bound has to be sized in *that*
+    /// frame's orientation — not the displayed one `defaultMaxPixelSize` was chosen for.
+    static func encodedMaxPixelSize(preferredTransform: CGAffineTransform) -> CGSize {
+        guard preferredTransform.a == 0, preferredTransform.d == 0 else {
+            return defaultMaxPixelSize
+        }
+        return CGSize(width: defaultMaxPixelSize.height, height: defaultMaxPixelSize.width)
+    }
+
     // Every parameter is one input `ClipExportTransform.make` itself already takes, plus
     // the decoded image and the thumbnail's own memory bound — grouping them behind a
     // struct would move the same six values without reducing what a caller supplies.
@@ -81,13 +95,17 @@ actor ClipThumbnailLoader {
     /// `ClipExportTransform.layerTransform` targets AVFoundation's video-composition
     /// render space: top-left origin, y-down, the same convention `preferredTransform`
     /// and `NormalizedRect` use. A `CGContext` is the opposite — bottom-left origin,
-    /// y-up — so the context is flipped before the transform is concatenated; without
-    /// the flip, `layerTransform`'s rotation and translation would land mirrored and
-    /// offset. `layerTransform`'s own render size is in the source's full-resolution
-    /// pixels, which would blow the per-card memory budget `defaultMaxPixelSize` guards,
-    /// so the context is additionally scaled down to fit within `maxPixelSize` before the
-    /// transform is applied — a uniform scale, so it doesn't disturb the transform's
-    /// rotation or aspect ratio.
+    /// y-up — so two flips are needed, one on each side of `layerTransform`. The outer
+    /// flip (applied first, below) turns the context's own bottom-left/y-up device space
+    /// into `layerTransform`'s top-left/y-down render space. The inner flip (applied
+    /// last, right before `draw`) undoes `CGContext.draw(_:in:)`'s own behavior: it
+    /// places `image`'s first data row at the *high*-y edge of its destination rect in
+    /// whatever space is current at the call site, so without this second flip
+    /// `layerTransform` would be handed a vertically mirrored source. `layerTransform`'s
+    /// own render size is in the source's full-resolution pixels, which would blow the
+    /// per-card memory budget `defaultMaxPixelSize` guards, so the context is
+    /// additionally scaled down to fit within `maxPixelSize` — a uniform scale, so it
+    /// doesn't disturb either flip or the transform's rotation.
     ///
     /// `nil` when the crop rect is degenerate, the scaled render size is non-finite, or
     /// the context can't be created.
@@ -130,13 +148,17 @@ actor ClipThumbnailLoader {
             return nil
         }
 
-        // Flip into layerTransform's top-left/y-down space, scale down to the bounded
-        // pixel size, then apply the composited crop/adjustment transform — in that
-        // order, so layerTransform still sees the source's un-scaled coordinates.
+        // Outer flip into layerTransform's top-left/y-down space, then scale down to the
+        // bounded pixel size, then apply the composited crop/adjustment transform.
         context.translateBy(x: 0, y: CGFloat(pixelHeight))
         context.scaleBy(x: 1, y: -1)
         context.scaleBy(x: scale, y: scale)
         context.concatenate(transform.layerTransform)
+        // Inner flip: undoes draw(_:in:)'s own placement of image data at the high-y
+        // edge of its rect, so layerTransform (already concatenated above) receives an
+        // unmirrored source in its own coordinate space.
+        context.translateBy(x: 0, y: naturalSize.height)
+        context.scaleBy(x: 1, y: -1)
         context.draw(image, in: CGRect(origin: .zero, size: naturalSize))
 
         return context.makeImage()
@@ -166,11 +188,11 @@ actor ClipThumbnailLoader {
         return displayed
     }
 
-    /// The aspect ratio (width / height) of `cropRect` in the displayed frame's
-    /// space — the space the decoded thumbnail renders in. Derived from
-    /// `displayedCropRect`, the same mapping the thumbnail decode uses, so a
-    /// placeholder drawn at this ratio never reflows when the thumbnail lands.
-    /// Falls back to 9:16 for degenerate inputs.
+    /// The aspect ratio (width / height) of `cropRect` alone, in the displayed frame's
+    /// space, before any editor adjustment — `cropAdjustment` transforms the content
+    /// inside the crop, never the crop rect's own marker size, so this ratio still
+    /// matches what the decoded thumbnail renders at. Falls back to 9:16 for degenerate
+    /// inputs.
     static func displayedAspectRatio(
         cropRect: NormalizedRect,
         naturalSize: CGSize,

@@ -722,7 +722,7 @@ final class ClipListTests: XCTestCase {
         XCTAssertLessThan(bottom.red, 0.5)
     }
 
-    /// Issue 172's regression: `cropAdjustment` reaching the thumbnail render at all. A
+    /// `cropAdjustment` reaching the thumbnail render at all. A
     /// 90° `rotationRadians` on top of an untouched full-frame crop rotates the composited
     /// transform the exact same way `ClipExportTransform`'s own rotation tests already
     /// validate; here it's asserted against `adjustedThumbnail`'s actual pixels, both
