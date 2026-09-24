@@ -12,9 +12,11 @@ struct TrickWindow: Hashable, Sendable {
 
 /// Peak-detects the motion signal into trick windows (docs/DESIGN.md's pipeline step 5).
 ///
-/// Defaults are the design doc's, expressed in samples rather than seconds because the signal
-/// is one sample per kept frame pair: at 30 fps with the sampler's stride of 3, 3 samples is
-/// ~300 ms and 10 samples is ~1 s.
+/// `minimumSustainedSamples`/`minimumQuietSamples` default to the design doc's durations (300 ms
+/// / 1 s) rounded to samples at `sampleRate` — the signal is one sample per kept frame pair, so
+/// at the shipped default of 10 samples/sec that is 3 and 10 samples. Passing an explicit
+/// `minimumSustainedSamples`/`minimumQuietSamples` overrides the derivation, for a caller
+/// (tests) that wants exact sample counts regardless of rate.
 struct TrickWindowDetector: Sendable {
     /// Normalized units per sample.
     let displacementThreshold: Float
@@ -31,18 +33,31 @@ struct TrickWindowDetector: Sendable {
     /// beat. A short trailing buffer cuts clips before the landing lands.
     let trailingBufferSeconds: TimeInterval
 
+    private static let sustainedSeconds = 0.3
+    private static let quietSeconds = 1.0
+
     init(
         displacementThreshold: Float = 0.05,
-        minimumSustainedSamples: Int = 3,
-        minimumQuietSamples: Int = 10,
+        minimumSustainedSamples: Int? = nil,
+        minimumQuietSamples: Int? = nil,
+        sampleRate: Int = VideoFrameSampler.targetSamplesPerSecond,
         leadingBufferSeconds: TimeInterval = 1,
         trailingBufferSeconds: TimeInterval = 3
     ) {
         self.displacementThreshold = displacementThreshold
         self.minimumSustainedSamples = minimumSustainedSamples
+            ?? Self.sampleCount(seconds: Self.sustainedSeconds, sampleRate: sampleRate)
         self.minimumQuietSamples = minimumQuietSamples
+            ?? Self.sampleCount(seconds: Self.quietSeconds, sampleRate: sampleRate)
         self.leadingBufferSeconds = leadingBufferSeconds
         self.trailingBufferSeconds = trailingBufferSeconds
+    }
+
+    /// Rounds a duration to whole samples at `sampleRate`, floored at 1 — a zero-sample
+    /// threshold would trigger on any single moving/quiet sample instead of requiring the
+    /// sustained/quiet run the design doc specifies.
+    private static func sampleCount(seconds: Double, sampleRate: Int) -> Int {
+        max(1, Int((seconds * Double(sampleRate)).rounded()))
     }
 
     func detectWindows(in samples: [MotionSample]) -> [TrickWindow] {

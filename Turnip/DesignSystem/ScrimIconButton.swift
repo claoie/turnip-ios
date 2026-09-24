@@ -21,6 +21,13 @@ struct ScrimIconButton: View {
                 .foregroundStyle(.white)
                 .frame(width: diameter, height: diameter)
                 .background(.black.opacity(0.4), in: Circle())
+                // Touch-target floor (docs/ACCESSIBILITY.md's 44x44 pt minimum), applied
+                // on the label so it's part of the Button's own hit-testing region —
+                // same placement `BackChevronButton` uses. A no-op at the 44 pt default;
+                // expands the tappable area around a smaller `diameter` without
+                // changing what's drawn.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)

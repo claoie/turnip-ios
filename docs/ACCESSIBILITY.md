@@ -9,7 +9,21 @@ screen's PR rather than retrofitting later.
 
 ## Per-screen items
 
-### Camera (UIUX §1a)
+### Settings (UIUX §1a, #163)
+
+- Reachable from Home's gear button (`accessibilityLabel` "Settings", identifier
+  `settings-button`), which VoiceOver reads the same as any other icon button — no separate
+  affordance needed since it isn't decorative.
+- Every control carries a stable `accessibilityIdentifier`: `settings-analysis-mode` (the
+  segmented picker), `settings-auto-add-album`, `settings-album-name` (only present while the
+  toggle above is on), `settings-granularity`, `settings-done`.
+- The granularity `Stepper` exposes the `.adjustable` trait natively (SwiftUI's `Stepper`
+  already does — no extra work), so VoiceOver can change it with increment/decrement gestures
+  without a drag.
+- Section footers explain each option in plain language rather than relying on the control's
+  own label alone — read on entry to the section, same as any other `Form` footer.
+
+### Camera (UIUX §1b)
 
 - The record button carries the state: "Start recording" / "Stop recording" as its label, so
   the red shape's change is never the only signal. It is disabled, and dimmed, for the brief
@@ -31,7 +45,7 @@ screen's PR rather than retrofitting later.
   shadow that assumes dark footage.
 - Stable `accessibilityIdentifier`s: `video-grid`, `video-tile-<localIdentifier>`,
   `limited-access-banner`, `select-more-videos`, `resolution-banner`,
-  `cancel-video-resolution`, `photos-access-denied`, `open-settings`.
+  `cancel-video-resolution`, `photos-access-denied`, `open-settings`, `settings-button`.
 
 ### Processing (#17)
 

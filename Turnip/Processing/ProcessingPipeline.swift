@@ -107,20 +107,31 @@ struct ProcessingPipeline: Sendable {
     typealias InferenceFactory = @Sendable () async throws -> @Sendable (SampledFrame) async throws -> [PoseKeypoint]
 
     let sampler: any FrameSampling
+    /// Samples per second of footage this run targets — `TurnipSettings.analysisGranularity`
+    /// when a caller reads settings, `VideoFrameSampler.targetSamplesPerSecond` otherwise. Drives
+    /// both the default `sampler` and `windowDetector` below (when the caller doesn't supply its
+    /// own) and the progress denominator in `estimatedSampledFrames`, so all three agree on one
+    /// rate instead of each defaulting to 10 independently.
+    let sampleRate: Int
     let makeInference: InferenceFactory
     let cropRectCalculator: CropRectCalculator
     let windowDetector: TrickWindowDetector
 
     init(
-        sampler: any FrameSampling = VideoFrameSampler(),
+        sampler: (any FrameSampling)? = nil,
+        sampleRate: Int = VideoFrameSampler.targetSamplesPerSecond,
         makeInference: @escaping InferenceFactory = ProcessingPipeline.defaultInference,
         cropRectCalculator: CropRectCalculator = CropRectCalculator(),
-        windowDetector: TrickWindowDetector = TrickWindowDetector()
+        windowDetector: TrickWindowDetector? = nil
     ) {
-        self.sampler = sampler
+        self.sampler = sampler ?? VideoFrameSampler(sampleRate: sampleRate)
+        self.sampleRate = sampleRate
         self.makeInference = makeInference
         self.cropRectCalculator = cropRectCalculator
-        self.windowDetector = windowDetector
+        // TrickWindowDetector's sustained/quiet thresholds are stated in docs/DESIGN.md as
+        // durations (300 ms / 1 s), expressed as sample counts against the sampler's rate — so
+        // they're derived here from the same `sampleRate` the sampler above uses.
+        self.windowDetector = windowDetector ?? TrickWindowDetector(sampleRate: sampleRate)
     }
 
     /// Loads the bundled MoveNet Thunder model once, then answers each frame from it.
@@ -137,7 +148,7 @@ struct ProcessingPipeline: Sendable {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
             throw ProcessingError.assetHasNoVideoTrack
         }
-        let totalFrames = await Self.estimatedSampledFrames(of: videoTrack)
+        let totalFrames = await Self.estimatedSampledFrames(of: videoTrack, sampleRate: sampleRate)
 
         let infer = try await makeInference()
         let accumulator = FrameAccumulator()
@@ -202,7 +213,9 @@ struct ProcessingPipeline: Sendable {
     /// it keeps frame 0, so a 10-frame track at stride 3 yields 4 frames, not 3. Nil when the
     /// track reports no usable frame rate; the view then shows an indeterminate spinner with a
     /// counter.
-    static func estimatedSampledFrames(of track: AVAssetTrack) async -> Int? {
+    static func estimatedSampledFrames(
+        of track: AVAssetTrack, sampleRate: Int = VideoFrameSampler.targetSamplesPerSecond
+    ) async -> Int? {
         guard
             let timeRange = try? await track.load(.timeRange),
             timeRange.duration.isValid,
@@ -211,7 +224,7 @@ struct ProcessingPipeline: Sendable {
             frameRate > 0
         else { return nil }
         let total = Int((Float(timeRange.duration.seconds) * frameRate).rounded())
-        let stride = VideoFrameSampler.stride(forNominalFrameRate: frameRate)
+        let stride = VideoFrameSampler.stride(forNominalFrameRate: frameRate, sampleRate: sampleRate)
         return sampledFrameCount(trackFrameCount: total, stride: stride)
     }
 

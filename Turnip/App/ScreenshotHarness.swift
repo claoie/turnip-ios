@@ -15,9 +15,11 @@ struct ScreenshotHomeHarness: View {
     var body: some View {
         NavigationStack {
             // Same composition as `HomeView`'s denied branch: the wordmark header as
-            // content under Home's empty, transparent bar.
+            // content under Home's empty, transparent bar. `onSettingsTapped` is a
+            // no-op rather than `nil` so the gear renders — `HomeView` passes a real
+            // closure in its denied branch too.
             VStack(spacing: 0) {
-                HomeHeader()
+                HomeHeader(onSettingsTapped: {})
                 PhotosAccessDeniedView(restricted: false)
             }
             .modifier(HomeNavigationBar())
@@ -333,6 +335,20 @@ private struct ScreenshotProcessingRunner: ProcessingRunning {
         await onProgress(ProcessingProgress(frame: 400, totalFrames: 1200))
         try await Task.sleep(for: .seconds(60))
         throw CancellationError()
+    }
+}
+
+// MARK: - Settings
+
+/// Settings sheet (`-screenshotSettings`): the four preferences at their defaults, backed by
+/// an isolated `UserDefaults` suite so a screenshot run never reads or writes the app's real
+/// stored preferences.
+struct ScreenshotSettingsHarness: View {
+    private static let store = TurnipSettingsStore(
+        defaults: UserDefaults(suiteName: "ScreenshotSettingsHarness") ?? .standard)
+
+    var body: some View {
+        SettingsView(settings: Self.store)
     }
 }
 

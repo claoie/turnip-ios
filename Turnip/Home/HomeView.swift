@@ -8,6 +8,13 @@ import SwiftUI
 /// recordings feed into the same `select(_:)` a tapped tile calls) rather than by this view.
 struct HomeView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
+    /// Plain reference, not `@ObservedObject`: this view never displays a setting's value,
+    /// it only reads `analysisGranularity` at navigation time and hands the store to the
+    /// sheet, which observes it directly. `@ObservedObject` here would re-run this view's
+    /// whole body — including the video grid's `ForEach` — on every keystroke in the
+    /// Settings sheet's album-name field, for a value this view never shows.
+    private let settings = TurnipSettingsStore.shared
+    @State private var showSettings = false
 
     var body: some View {
         NavigationStack(path: $viewModel.path) {
@@ -29,6 +36,7 @@ struct HomeView: View {
                     } else {
                         ProcessingView(
                             video: video,
+                            runner: ProcessingPipeline(sampleRate: settings.analysisGranularity),
                             autostart: false,
                             popToRoot: popToRoot,
                             previousVideo: browseAction(for: video, offset: -1),
@@ -57,6 +65,9 @@ struct HomeView: View {
             Button("OK") {}
         } message: {
             Text(viewModel.errorMessage ?? "")
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(settings: settings)
         }
     }
 
@@ -94,11 +105,11 @@ struct HomeView: View {
             ProgressView()
         case .denied(let restricted):
             VStack(spacing: 0) {
-                HomeHeader()
+                HomeHeader(onSettingsTapped: { showSettings = true })
                 PhotosAccessDeniedView(restricted: restricted)
             }
         case .authorized, .limited:
-            VideoGalleryView(viewModel: viewModel)
+            VideoGalleryView(viewModel: viewModel, onSettingsTapped: { showSettings = true })
         }
     }
 
@@ -111,13 +122,25 @@ struct HomeView: View {
 }
 
 /// Home's title row: the "Turnip" wordmark image (mark + text baked into one asset),
-/// centered in a nav-bar-height band. Laid out as ordinary content — inside the grid's
-/// scroll view, or above a non-scrolling state — rather than as a nav bar title, so it
-/// scrolls away with the tiles instead of floating over them. Internal so the DEBUG
-/// screenshot harness can render the denied state exactly as Home does.
+/// centered in a nav-bar-height band, with the settings gear trailing it when
+/// `onSettingsTapped` is supplied. Laid out as ordinary content — inside the grid's scroll
+/// view, or above a non-scrolling state — rather than as a nav bar title, so both the wordmark
+/// and the gear scroll away with the tiles instead of floating fixed over them: a fixed overlay
+/// at this corner would otherwise permanently sit over whatever grid tile scrolls underneath it
+/// and intercept taps meant for that tile, the way the wordmark itself scrolling away avoids
+/// that problem for the header row as a whole. Internal so the DEBUG screenshot harness can
+/// render the denied state exactly as Home does.
 struct HomeHeader: View {
+    /// `nil` renders no gear — every caller except Home's own states (denied and the video
+    /// gallery) that can actually reach Settings.
+    var onSettingsTapped: (() -> Void)?
+
     private static let logoHeight: CGFloat = 36
     private static let rowHeight: CGFloat = 44
+    /// Drawn smaller than `ScrimIconButton`'s 44 pt default so the visible glyph leaves more
+    /// room for the logo in this shared row — the tappable region stays 44×44 regardless,
+    /// per `ScrimIconButton`'s own touch-target floor (docs/ACCESSIBILITY.md:94).
+    private static let settingsButtonDiameter: CGFloat = 32
 
     var body: some View {
         Image("TitleLogo")
@@ -127,6 +150,15 @@ struct HomeHeader: View {
             .frame(maxWidth: .infinity, minHeight: Self.rowHeight)
             .accessibilityLabel("Turnip")
             .accessibilityAddTraits(.isHeader)
+            .overlay(alignment: .trailing) {
+                if let onSettingsTapped {
+                    ScrimIconButton(
+                        systemImage: "gearshape", accessibilityLabel: "Settings",
+                        diameter: Self.settingsButtonDiameter, action: onSettingsTapped)
+                        .padding(.trailing)
+                        .accessibilityIdentifier("settings-button")
+                }
+            }
     }
 }
 
@@ -135,6 +167,9 @@ struct HomeHeader: View {
 /// scrollable grid, newest videos first — no landing/reveal state.
 struct VideoGalleryView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
+    /// Threaded straight to every `HomeHeader()` this view constructs (loading, empty, and grid
+    /// states all show one) rather than each state re-deriving its own entry point.
+    var onSettingsTapped: (() -> Void)?
 
     private static let spacing: CGFloat = 2
     private let columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: 3)
@@ -158,13 +193,13 @@ struct VideoGalleryView: View {
         if !viewModel.hasLoaded {
             // Not yet the same thing as "no videos" — the first fetch hasn't run.
             VStack(spacing: 0) {
-                HomeHeader()
+                HomeHeader(onSettingsTapped: onSettingsTapped)
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else if viewModel.videos.isEmpty {
             VStack(spacing: 0) {
-                HomeHeader()
+                HomeHeader(onSettingsTapped: onSettingsTapped)
                 emptyState
             }
         } else {
@@ -174,9 +209,9 @@ struct VideoGalleryView: View {
 
     private var grid: some View {
         ScrollView {
-            // The header is scroll content, not chrome: it leads the grid and leaves
-            // the screen with the first row.
-            HomeHeader()
+            // The header (with the settings gear, when reachable) is scroll content, not
+            // chrome: it leads the grid and leaves the screen with the first row.
+            HomeHeader(onSettingsTapped: onSettingsTapped)
             LazyVGrid(columns: columns, spacing: Self.spacing) {
                 ForEach(
                     Array(viewModel.videos.enumerated()), id: \.element.localIdentifier

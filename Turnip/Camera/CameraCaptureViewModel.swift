@@ -99,14 +99,39 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
     private var drainingLivePose: LivePoseRecording?
     /// The pixel size the current take's keypoints are normalized against, read at record start.
     private var liveRenderedPixelSize: CGSize = .zero
-    /// Steps 4-6 over the take's live results. Injected so the camera can be tested without the
-    /// real detector; the default is the same detection the Processing screen runs.
-    private let detectClips: ClipDetection
+    /// Steps 4-6 over the take's live results, built for the sample rate the take was actually
+    /// armed at (see `armedSampleRate` below) — the same `TrickWindowDetector` sustained/quiet
+    /// thresholds the file path derives from `TurnipSettings.analysisGranularity`, so a take
+    /// scored live and the same take analyzed from the file detect the same tricks. Injected so
+    /// the camera can be tested without a real `ProcessingPipeline`; the default is the same
+    /// detection the Processing screen runs.
+    private let makeDetectClips: (Int) -> ClipDetection
+    /// The granularity `armLivePose()` last armed the tap with, read again in `finishLivePose()`
+    /// so detection uses the same rate the recording was sampled at even if the setting changed
+    /// mid-recording.
+    private var armedSampleRate = VideoFrameSampler.targetSamplesPerSecond
+    /// Reads the current settings snapshot at the point a setting takes effect (Record tap),
+    /// rather than once at init — a change made while the camera tab is already open is picked
+    /// up by the next recording. `@MainActor`-typed (not plain, and not `@Sendable`/`async`) so
+    /// the default value below — a closure literal that reads the `@MainActor`-isolated
+    /// `TurnipSettingsStore.shared` — type-checks: a default argument's closure literal is
+    /// nonisolated unless its declared parameter type carries the actor annotation itself: the
+    /// enclosing `init` being a member of this `@MainActor` class does not carry over to it.
+    /// Every call site (`toggleRecording()`, `armLivePose()`) is already on the main actor, so
+    /// calling it is an ordinary synchronous call. Injected so tests can drive both
+    /// `AnalysisMode` cases without touching `UserDefaults`.
+    private let settingsProvider: @MainActor () -> TurnipSettings
 
     typealias ClipDetection = @Sendable ([PoseFrameResult], CGSize) -> [ProcessedClip]
 
-    init(detectClips: @escaping ClipDetection = ProcessingPipeline().detectClips) {
-        self.detectClips = detectClips
+    init(
+        makeDetectClips: @escaping (Int) -> ClipDetection = { rate in
+            ProcessingPipeline(sampleRate: rate).detectClips
+        },
+        settingsProvider: @escaping @MainActor () -> TurnipSettings = { TurnipSettingsStore.shared.current }
+    ) {
+        self.makeDetectClips = makeDetectClips
+        self.settingsProvider = settingsProvider
     }
 
     /// Candidate frame rates to probe each format against, rather than only reading off
@@ -184,7 +209,12 @@ final class CameraCaptureViewModel: NSObject, ObservableObject {
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("turnip-recording-\(UUID().uuidString)")
                 .appendingPathExtension("mov")
-            armLivePose()
+            // Offline mode never arms the tap: `endRecording()` then returns nil, `onFinished`
+            // hands on `detectedClips: nil`, and the take lands on Processing's idle state
+            // exactly like a tapped gallery tile (docs/UIUX.md § "Camera").
+            if settingsProvider().analysisMode == .realTime {
+                armLivePose()
+            }
             movieOutput.startRecording(to: url, recordingDelegate: self)
             isRecording = true
         }
@@ -669,6 +699,7 @@ extension CameraCaptureViewModel {
         guard let poseModel, let device = videoDevice,
               let dataConnection = livePoseTap.output.connection(with: .video),
               let movieConnection = movieOutput.connection(with: .video) else { return }
+        armedSampleRate = settingsProvider().analysisGranularity
         let movieRotation = LivePoseFrameTap.rotationDegrees(of: movieConnection)
         let rotation = LivePoseKeypointRotation.relativeDegrees(
             producer: LivePoseFrameTap.rotationDegrees(of: dataConnection), consumer: movieRotation)
@@ -690,7 +721,8 @@ extension CameraCaptureViewModel {
             recording: recording,
             preparer: poseModel.inputPreparer,
             frameRate: Self.activeFrameRate(of: device) ?? 30,
-            rotationDegrees: rotation)
+            rotationDegrees: rotation,
+            sampleRate: armedSampleRate)
     }
 
     /// The movie output finished. Waits for the consumer to score what is still queued — one
@@ -706,8 +738,12 @@ extension CameraCaptureViewModel {
         if drainingLivePose === recording {
             drainingLivePose = nil
         }
-        guard LivePoseCoverage.isComplete(outcome) else { return nil }
-        return detectClips(outcome.results, liveRenderedPixelSize)
+        // `armedSampleRate` is what the gate (`LivePoseFrameGate(baseInterval:)` in `armLivePose`)
+        // was actually configured with — the same granularity the file path's detector uses — so
+        // coverage is checked against the grid the recording actually ran, not the shipped default.
+        let interval = 1.0 / Double(armedSampleRate)
+        guard LivePoseCoverage.isComplete(outcome, interval: interval) else { return nil }
+        return makeDetectClips(armedSampleRate)(outcome.results, liveRenderedPixelSize)
     }
 
     private func cancelLivePose() {

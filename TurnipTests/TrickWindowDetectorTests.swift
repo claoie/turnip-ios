@@ -146,6 +146,42 @@ final class TrickWindowDetectorTests: XCTestCase {
         XCTAssertEqual(windows.count, 1)
     }
 
+    // MARK: - Sample-rate derivation (Settings screen's analysis granularity)
+
+    func testDefaultThresholdsMatchTheShippedTenSamplesPerSecondRate() {
+        let atDefaultRate = TrickWindowDetector(sampleRate: 10)
+
+        XCTAssertEqual(atDefaultRate.minimumSustainedSamples, 3)
+        XCTAssertEqual(atDefaultRate.minimumQuietSamples, 10)
+    }
+
+    /// At 30 samples/sec the same 300 ms / 1 s durations are 9 and 30 samples, not the fixed 3
+    /// and 10 a rate-naive default would keep — a burst that would have counted as sustained at
+    /// the default rate must not also count as sustained at 3x the rate.
+    func testThresholdsScaleWithTheConfiguredSampleRate() {
+        let atTripleRate = TrickWindowDetector(sampleRate: 30)
+
+        XCTAssertEqual(atTripleRate.minimumSustainedSamples, 9)
+        XCTAssertEqual(atTripleRate.minimumQuietSamples, 30)
+    }
+
+    /// An explicit sample count still overrides the derivation, regardless of rate — the seam
+    /// tests above (`detector`, built with no sample rate argument) lean on this staying 3 and
+    /// 10 at the default rate; this pins that an explicit override wins even off that default.
+    func testExplicitSampleCountsOverrideTheRateDerivation() {
+        let overridden = TrickWindowDetector(minimumSustainedSamples: 1, minimumQuietSamples: 2, sampleRate: 30)
+
+        XCTAssertEqual(overridden.minimumSustainedSamples, 1)
+        XCTAssertEqual(overridden.minimumQuietSamples, 2)
+    }
+
+    func testRateDerivedThresholdsAreNeverLessThanOneSample() {
+        let atMinimumGranularity = TrickWindowDetector(sampleRate: 1)
+
+        XCTAssertEqual(atMinimumGranularity.minimumSustainedSamples, 1)
+        XCTAssertEqual(atMinimumGranularity.minimumQuietSamples, 1)
+    }
+
     // MARK: - Window bounds
 
     func testExpandsEachWindowByItsOwnLeadingAndTrailingBuffer() {
