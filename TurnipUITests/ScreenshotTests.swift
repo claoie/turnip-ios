@@ -43,20 +43,23 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
     }
 
-    /// Same real-touch guard as the settings gear above, for its neighbor in the same
-    /// top-trailing overlay (#176): a `Menu`-based button sitting in the exact band where a
-    /// `UINavigationBar` occluder has swallowed touches before (see the doc comment on
-    /// `HomeNavigationBar` in `HomeView.swift`). Asserts the real filter rows render, not just
-    /// that the button opens *something*.
-    func testGalleryFilterButtonOpensMenu() throws {
+    /// The filter button's neighbor in the same top-trailing overlay, in the one Home state
+    /// this harness can script without real Photos access: denied. There, `GalleryFilterButton`
+    /// is deliberately dimmed and `.disabled` rather than hidden (`HomeView.swift`) — a Favorites
+    /// tap that silently changed nothing while access is denied would be worse than an
+    /// unavailable control. A real synthesized touch is the only way to prove `.disabled`
+    /// actually blocks the menu rather than just looking dimmed: `isEnabled` alone doesn't show
+    /// whether a `Menu` still opens under a real tap, the same reason
+    /// `testHomeSettingsButtonOpensSettings` above taps rather than trusting presence.
+    func testGalleryFilterButtonIsDisabledWithoutPhotosAccess() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotHome"]
         app.launch()
         let button = app.buttons["gallery-filter-button"]
         XCTAssertTrue(button.waitForExistence(timeout: 15))
+        XCTAssertFalse(button.isEnabled)
         button.tap()
-        XCTAssertTrue(app.buttons["All Items"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.buttons["Favorites"].exists)
+        XCTAssertFalse(app.buttons["All Items"].waitForExistence(timeout: 2))
     }
 
     /// Clip list triage: three detected windows, one trashed, thumbnails as

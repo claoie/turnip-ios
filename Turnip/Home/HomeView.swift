@@ -162,24 +162,27 @@ struct HomeSettingsButton: View {
     }
 }
 
-/// The gallery filter entry point (#176): All Items / Favorites / a specific album, sitting
-/// left of the settings gear in the same top-trailing overlay — see the corner-occupancy note
-/// on `HomeSettingsButton` above; this shares that same nav-bar-band constraint.
+/// The gallery filter entry point: All Items / Favorites / a specific album, sitting left of
+/// the settings gear in the same top-trailing overlay — see the corner-occupancy note on
+/// `HomeSettingsButton` above; this shares that same nav-bar-band constraint. Dimmed and
+/// disabled without library access, the same way `CameraCaptureView`'s `formatMenu` disables
+/// itself while recording — there is nothing for it to filter, and a Favorites tap that
+/// silently changes nothing would be worse than an unavailable control.
 ///
 /// Not `ScrimIconButton` directly: `Menu`'s `label` closure needs a bare glyph rather than a
-/// nested `Button`, the same reason `CameraCaptureView`'s `formatMenu` doesn't use it either —
-/// mirrors `ScrimIconButton`'s look so it still reads as the same control family.
+/// nested `Button`, the same reason `formatMenu` doesn't use it either — mirrors
+/// `ScrimIconButton`'s look so it still reads as the same control family.
 struct GalleryFilterButton: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
 
     var body: some View {
         Menu {
-            filterRow(.all, title: "All Items")
-            filterRow(.favorites, title: "Favorites")
+            filterRow(.all)
+            filterRow(.favorites)
             if !viewModel.albums.isEmpty {
                 Menu {
                     ForEach(viewModel.albums, id: \.localIdentifier) { album in
-                        filterRow(.album(album), title: album.localizedTitle ?? "Album")
+                        filterRow(.album(album))
                     }
                 } label: {
                     checkableLabel(albumRowTitle, isSelected: isAlbumSelected)
@@ -193,15 +196,17 @@ struct GalleryFilterButton: View {
                 .background(.black.opacity(0.4), in: Circle())
         }
         .padding()
+        .opacity(viewModel.authorization.canReadLibrary ? 1 : 0.4)
+        .disabled(!viewModel.authorization.canReadLibrary)
         .accessibilityLabel("Filter")
         .accessibilityIdentifier("gallery-filter-button")
     }
 
-    private func filterRow(_ filter: GalleryFilter, title: String) -> some View {
+    private func filterRow(_ filter: GalleryFilter) -> some View {
         Button {
             viewModel.selectFilter(filter)
         } label: {
-            checkableLabel(title, isSelected: viewModel.filter == filter)
+            checkableLabel(filter.label, isSelected: viewModel.filter == filter)
         }
     }
 
@@ -220,10 +225,7 @@ struct GalleryFilterButton: View {
     }
 
     private var albumRowTitle: String {
-        if case .album(let collection) = viewModel.filter {
-            return "Album: \(collection.localizedTitle ?? "Album")"
-        }
-        return "Album"
+        isAlbumSelected ? "Album: \(viewModel.filter.label)" : "Album"
     }
 }
 
@@ -341,15 +343,34 @@ struct VideoGalleryView: View {
         return String(localized: "\(count) videos")
     }
 
+    /// A filter matching nothing must not read as an empty library — a user with hundreds of
+    /// videos and none favorited would otherwise see "No videos" / "Record a tricking session",
+    /// which is simply false. Checked ahead of the access-driven branch below: a filter picked
+    /// under `.limited` access can still be the reason nothing shows, not just the access level.
+    @ViewBuilder
     private var emptyState: some View {
-        StatusStateView(
-            systemImage: "video.slash",
-            title: viewModel.authorization == .limited ? "No videos selected" : "No videos",
-            message: viewModel.authorization == .limited
-                ? "Turnip can only see the videos you choose. Select some to get started."
-                : "Record a tricking session, and it'll show up here."
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if viewModel.filter != .all {
+            StatusStateView(
+                systemImage: "line.3.horizontal.decrease.circle",
+                title: "No matches",
+                message: "No videos match \"\(viewModel.filter.label)\"."
+            ) {
+                Button("Clear Filter") { viewModel.selectFilter(.all) }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("clear-gallery-filter")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            StatusStateView(
+                systemImage: "video.slash",
+                title: viewModel.authorization == .limited ? "No videos selected" : "No videos",
+                message: viewModel.authorization == .limited
+                    ? "Turnip can only see the videos you choose. Select some to get started."
+                    : "Record a tricking session, and it'll show up here."
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 

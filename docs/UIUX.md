@@ -122,7 +122,11 @@ post-filter of the loaded grid, so paging and Processing's swipe-to-browse
 stay correct against the filtered set. "Edited" is not offered: PhotoKit has
 no fetch-level predicate for it, only a per-asset resource scan that would
 make every filter change scale with library size instead of staying
-fetch-level.
+fetch-level. Dimmed and disabled without library access (denied or not yet
+determined) rather than left tappable with no effect. A filter matching no
+videos shows its own empty state ("No matches", the filter's name, a Clear
+Filter button) instead of the library's default empty state, so it never
+reads as "your library is empty."
 
 ### 1a. Settings
 
