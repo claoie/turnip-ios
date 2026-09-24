@@ -203,6 +203,16 @@ private struct ClipCardView: View {
     /// identity-bound rather than render-bound, so it reads live regardless of which
     /// snapshot of `self` touches it — the same property already relied on for `player`.
     @State private var suspended = false
+    /// A `@State` mirror of `item.window`, for the same reason `suspended` mirrors
+    /// `isSuspended` above. `startPlayback()` reads this instead of `item.window`
+    /// directly, so it stays correct even from a call site whose `self` is stale.
+    @State private var playbackWindow: TrickWindow?
+    /// The window the live `player`/`looper` are actually built to loop, or `nil` before
+    /// the first build. `startPlayback()` compares this against `playbackWindow` and
+    /// rebuilds on a mismatch, rather than trusting that whoever called it already tore
+    /// the player down — so a stale player left by any calling order self-corrects on the
+    /// next call instead of looping the wrong range indefinitely.
+    @State private var playerWindow: TrickWindow?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -216,7 +226,12 @@ private struct ClipCardView: View {
             // identity stable across an editor commit, so an unkeyed `.task` would never
             // re-fire when window/cropRect/cropAdjustment change. The thumbnail decode and
             // the shared asset duration each dedupe/cache in the view model, so a re-fired
-            // task joins work already done instead of repeating it.
+            // task joins work already done instead of repeating it. Also gives the preview
+            // loop a second, differently-scheduled path to the current window alongside
+            // `.onChange(of: item.window)` below.
+            suspended = isSuspended
+            playbackWindow = item.window
+            startPlayback()
             async let image = viewModel.thumbnail(for: item)
             async let assetDuration = viewModel.assetDuration()
             thumbnail = await image
@@ -224,6 +239,7 @@ private struct ClipCardView: View {
         }
         .onAppear {
             suspended = isSuspended
+            playbackWindow = item.window
             startPlayback()
         }
         .onDisappear { teardownPlayback() }
@@ -235,12 +251,12 @@ private struct ClipCardView: View {
                 startPlayback()
             }
         }
-        .onChange(of: item.window) { _ in
+        .onChange(of: item.window) { newValue in
             // `ForEach` keys tiles by `item.id`, so an editor commit that changes the
             // window reuses this same tile's identity — and its player/looper — rather
-            // than creating a fresh one. Without rebuilding here, the loop would keep
-            // playing the pre-edit range forever.
-            teardownPlayback()
+            // than creating a fresh one. `startPlayback()` decides whether the live player
+            // still needs rebuilding.
+            playbackWindow = newValue
             startPlayback()
         }
     }
@@ -290,22 +306,32 @@ private struct ClipCardView: View {
         }
     }
 
-    /// Builds the tile's own looping player on first need and starts it, unless the
-    /// system's video-autoplay setting is off (`docs/ACCESSIBILITY.md`'s Clip List
-    /// checklist rules out auto-playing loops in that case, so the tile just shows its
-    /// static poster) or the editor is currently covering the grid. Safe to call
-    /// repeatedly — an existing player is just resumed.
+    /// Builds the tile's own looping player if needed and starts it, unless the system's
+    /// video-autoplay setting is off (`docs/ACCESSIBILITY.md`'s Clip List checklist rules
+    /// out auto-playing loops in that case, so the tile just shows its static poster) or
+    /// the editor is currently covering the grid. Safe to call repeatedly — an existing
+    /// player matching `playbackWindow` is just resumed; one that doesn't match is torn
+    /// down and rebuilt first.
     private func startPlayback() {
         guard UIAccessibility.isVideoAutoplayEnabled, !suspended else { return }
+        // Falls back to `item.window` rather than a hard `guard let`: every call site sets
+        // `playbackWindow` before calling in, but a fallback to the same read this method
+        // used to do unconditionally is a strictly smaller regression than showing no
+        // video at all if some future call site doesn't.
+        let target = playbackWindow ?? item.window
+        if clipCardPlaybackNeedsRebuild(builtFor: playerWindow, target: target) {
+            teardownPlayback()
+        }
         if player == nil {
             let templateItem = AVPlayerItem(sdrAsset: viewModel.sourceAsset)
             let queuePlayer = AVQueuePlayer()
             queuePlayer.isMuted = true
             let timeRange = CMTimeRange(
-                start: CMTime(seconds: item.window.startTime, preferredTimescale: 600),
-                end: CMTime(seconds: item.window.endTime, preferredTimescale: 600))
+                start: CMTime(seconds: target.startTime, preferredTimescale: 600),
+                end: CMTime(seconds: target.endTime, preferredTimescale: 600))
             looper = AVPlayerLooper(player: queuePlayer, templateItem: templateItem, timeRange: timeRange)
             player = queuePlayer
+            playerWindow = target
         }
         player?.play()
     }
@@ -318,6 +344,7 @@ private struct ClipCardView: View {
         looper?.disableLooping()
         looper = nil
         player = nil
+        playerWindow = nil
     }
 
     /// The diameter every top-corner icon circle renders at.
@@ -356,6 +383,16 @@ private struct ClipCardView: View {
                 .background(.black.opacity(0.35))
         }
     }
+}
+
+/// Whether `ClipCardView.startPlayback()` should tear down and rebuild its live player:
+/// `builtFor` is `nil` before any player exists, which is never a mismatch since there's
+/// nothing yet to rebuild. Pulled out of `startPlayback()` as a plain value comparison —
+/// no `AVFoundation`/SwiftUI dependency — so the rebuild decision itself is unit-testable
+/// without a simulator, even though driving the player it gates is not.
+func clipCardPlaybackNeedsRebuild(builtFor: TrickWindow?, target: TrickWindow) -> Bool {
+    guard let builtFor else { return false }
+    return builtFor != target
 }
 
 #Preview {

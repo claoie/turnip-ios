@@ -273,6 +273,33 @@ final class ClipListTests: XCTestCase {
         XCTAssertEqual(after.width, 32)
     }
 
+    // MARK: - clipCardPlaybackNeedsRebuild
+    //
+    // Covers the rebuild-decision logic in isolation, not the surrounding `ClipCardView`
+    // lifecycle it's called from: `ClipCardView` is a private `View` with no
+    // view-hosting harness for a host-app unit test, and a UI test can't read an
+    // `AVPlayerLooper`'s `CMTimeRange` across the XCUITest process boundary to assert
+    // which range is actually looping.
+
+    func testPlaybackNeedsRebuildWhenTheBuiltWindowDiffersFromTarget() {
+        let builtFor = TrickWindow(startTime: 0, endTime: 2)
+        let target = TrickWindow(startTime: 1, endTime: 3)
+
+        XCTAssertTrue(clipCardPlaybackNeedsRebuild(builtFor: builtFor, target: target))
+    }
+
+    func testPlaybackDoesNotNeedRebuildWhenTheBuiltWindowMatchesTarget() {
+        let window = TrickWindow(startTime: 0, endTime: 2)
+
+        XCTAssertFalse(clipCardPlaybackNeedsRebuild(builtFor: window, target: window))
+    }
+
+    func testPlaybackDoesNotNeedRebuildWhenNothingHasBeenBuiltYet() {
+        let target = TrickWindow(startTime: 0, endTime: 2)
+
+        XCTAssertFalse(clipCardPlaybackNeedsRebuild(builtFor: nil, target: target))
+    }
+
     @MainActor
     func testDeleteRemovesTheMatchingItem() {
         let target = makeItem()
