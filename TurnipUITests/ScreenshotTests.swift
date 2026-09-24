@@ -150,6 +150,17 @@ final class ScreenshotTests: XCTestCase {
         addScreenshot(named: "pose-diagnostic")
     }
 
+    /// Settings sheet at its defaults: the analysis-mode segmented control, the
+    /// auto-add-album toggle, and the granularity stepper.
+    func testSettings() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotSettings"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.segmentedControls["settings-analysis-mode"].waitForExistence(timeout: 15))
+        addScreenshot(named: "settings")
+    }
+
     private func addScreenshot(named name: String) {
         let screenshot = XCUIScreen.main.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)

@@ -8,9 +8,12 @@ import SwiftUI
 /// recordings feed into the same `select(_:)` a tapped tile calls) rather than by this view.
 struct HomeView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
-    /// `@ObservedObject`, not `@StateObject`: this view doesn't own the singleton's
-    /// lifecycle, it only needs to re-render when a setting changes.
-    @ObservedObject private var settings = TurnipSettingsStore.shared
+    /// Plain reference, not `@ObservedObject`: this view never displays a setting's value,
+    /// it only reads `analysisGranularity` at navigation time and hands the store to the
+    /// sheet, which observes it directly. `@ObservedObject` here would re-run this view's
+    /// whole body — including the video grid's `ForEach` — on every keystroke in the
+    /// Settings sheet's album-name field, for a value this view never shows.
+    private let settings = TurnipSettingsStore.shared
     @State private var showSettings = false
 
     var body: some View {
@@ -128,6 +131,11 @@ struct HomeHeader: View {
                     ScrimIconButton(
                         systemImage: "gearshape", accessibilityLabel: "Settings",
                         diameter: Self.settingsButtonDiameter, action: onSettingsTapped)
+                        // The 32 pt glyph is a visual choice (docs/ACCESSIBILITY.md:94's
+                        // 44×44 pt touch-target minimum still applies); the frame + shape
+                        // below expand the tappable region without changing the drawn size.
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                         .padding(.trailing)
                         .accessibilityIdentifier("settings-button")
                 }

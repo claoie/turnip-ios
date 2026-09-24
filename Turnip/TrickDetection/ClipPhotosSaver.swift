@@ -85,6 +85,12 @@ struct ClipPhotosSaver: Sendable {
         // The commit itself throws a raw PhotoKit NSError (out of space, asset rejected);
         // it is wrapped so every failure out of this method is a ClipPhotosSaveError.
         var createdIdentifier: String?
+        // `PHAssetCollectionChangeRequest(for:)` returns nil when the collection exists but
+        // this app can't modify it (e.g. an existing "Turnip" album it doesn't have edit
+        // rights to under add-only authorization) — the `?` on that call swallows a real
+        // failure unless it's captured here, which would otherwise let the save report
+        // success while silently dropping album membership.
+        var albumEditFailed = false
         do {
             try await PHPhotoLibrary.shared().performChanges {
                 guard let placeholder = PHAssetCreationRequest
@@ -93,7 +99,11 @@ struct ClipPhotosSaver: Sendable {
                 createdIdentifier = placeholder.localIdentifier
                 guard let albumTitle else { return }
                 if let existingAlbum = Self.fetchAlbum(titled: albumTitle) {
-                    PHAssetCollectionChangeRequest(for: existingAlbum)?.addAssets([placeholder] as NSArray)
+                    guard let editRequest = PHAssetCollectionChangeRequest(for: existingAlbum) else {
+                        albumEditFailed = true
+                        return
+                    }
+                    editRequest.addAssets([placeholder] as NSArray)
                 } else {
                     PHAssetCollectionChangeRequest
                         .creationRequestForAssetCollection(withTitle: albumTitle)
@@ -106,6 +116,10 @@ struct ClipPhotosSaver: Sendable {
         guard let createdIdentifier else {
             throw ClipPhotosSaveError.saveRejected(
                 reason: "Photos rejected the creation request for \(fileURL.lastPathComponent)")
+        }
+        if albumEditFailed {
+            throw ClipPhotosSaveError.saveRejected(
+                reason: "Saved to Photos, but \"\(albumTitle ?? "")\" couldn't be edited to add it")
         }
         return createdIdentifier
     }
