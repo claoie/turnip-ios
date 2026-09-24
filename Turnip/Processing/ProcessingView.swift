@@ -57,6 +57,14 @@ struct ProcessingView<Destination: View>: View {
     /// flight; a report that lands mid-seek just replaces the pending target.
     @State private var pendingSeekTime: TimeInterval?
     @State private var isSeeking = false
+    /// How far the page has been dragged from its resting position by a swipe-to-browse in
+    /// progress, and where an already-committed one has parked it while the neighbor
+    /// resolves. Reset by the drag's own end, or — when a committed browse is cancelled
+    /// rather than landing — by `browsingNeighbor` clearing with this screen still up.
+    @State private var dragTranslation: CGFloat = 0
+    /// The window's width, measured by `swipeBackdrop`: how far a committed swipe carries the
+    /// page so it leaves the screen entirely instead of parking partway across it.
+    @State private var pageWidth: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
 
     init(
@@ -87,13 +95,11 @@ struct ProcessingView<Destination: View>: View {
             case .idle, .processing:
                 videoStage
             case .empty:
-                // `StatusStateView` sizes to its own content otherwise, and the swipe's hit
-                // region needs the full screen, the same as every other consumer of this view
-                // (`HomeView`'s empty grid and denied states apply the same frame externally).
-                // `.ignoresSafeArea()` extends that hit region under the home-indicator strip
-                // too, matching `videoStage`'s own `Color.black.ignoresSafeArea()` base — scoped
-                // to these three branches rather than the whole `Group`, so it can't change what
-                // safe area `videoStage`'s own `.safeAreaInset` insets its bottom bar from.
+                // `StatusStateView` sizes to its own content otherwise, the same as every
+                // other consumer of this view (`HomeView`'s empty grid and denied states apply
+                // the same frame externally). None of these three branches carry a
+                // `.safeAreaInset` the way `videoStage` does, so extending each into the safe
+                // area can't move what that inset is measured from.
                 emptyState
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea()
@@ -109,21 +115,36 @@ struct ProcessingView<Destination: View>: View {
                     .ignoresSafeArea()
             }
         }
+        .offset(x: dragTranslation)
+        // The page itself is draggable edge to edge, whatever each branch happens to draw —
+        // `videoStage`'s player is a `UIViewRepresentable`, and the status states leave
+        // transparent space around their text. The backdrop behind covers the rest of the
+        // window, which is what a `contentShape` bounded by this view's own frame cannot.
         .contentShape(Rectangle())
-        // One attachment, covering every branch above (each already reports a full-screen
-        // frame) plus the safe-area-inset content `videoStage` adds below its own video area —
-        // see this gesture's own doc comment for why a single high-priority attachment this
-        // high in the tree is safe rather than swallowing `VideoScrubBar`'s own drag.
+        .background(swipeBackdrop)
+        // One attachment, covering every branch above plus the safe-area-inset content
+        // `videoStage` adds below its own video area, and — through the backdrop — the strips
+        // outside the safe area as well. See the gesture's own doc comment for why a single
+        // high-priority attachment this high in the tree is safe rather than swallowing
+        // `VideoScrubBar`'s own drag.
         .highPriorityGesture(videoSwipeGesture)
         // A neighbor resolving from a swipe blocks the whole screen, not just the video area —
         // `browsingOverlay` carries its own separate attachment of the same gesture, since
-        // `.overlay` content sits alongside this view rather than inside it.
+        // `.overlay` content sits alongside this view rather than inside it. Outside
+        // `.offset` too: it belongs to the video arriving, not the page leaving.
         .overlay {
             if let browsingNeighbor {
                 browsingOverlay(browsingNeighbor)
             }
         }
-        .navigationBarBackButtonHidden(isAnalyzing)
+        // Always hidden, not just while analyzing: SwiftUI's interactive edge-swipe-to-pop
+        // rides on the system back button, and a swipe that starts at the leading edge has to
+        // browse to the previous video like any other. The chevron below is the way back,
+        // matching the rest of the pushed flow (`ClipListView`).
+        .navigationBarBackButtonHidden(true)
+        // Hides the bar's own translucent background, the same as `ClipListView`'s custom
+        // chevron: otherwise its blur would opaque out `swipeBackdrop`'s black beneath it.
+        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             if isAnalyzing {
                 ToolbarItem(placement: .cancellationAction) {
@@ -131,6 +152,10 @@ struct ProcessingView<Destination: View>: View {
                         viewModel.cancel()
                         dismiss()
                     }
+                }
+            } else {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    BackChevronButton(accessibilityLabel: "Back to Home") { dismiss() }
                 }
             }
         }
@@ -161,6 +186,12 @@ struct ProcessingView<Destination: View>: View {
         .onChange(of: currentProgress?.timestamp) { newValue in
             guard let newValue, let player else { return }
             requestSeek(to: newValue, on: player)
+        }
+        .onChange(of: browsingNeighbor == nil) { settled in
+            // A browse that lands replaces this screen outright, so the only way back here
+            // with the page still parked off-screen is a cancelled one.
+            guard settled, dragTranslation != 0 else { return }
+            withAnimation(.easeOut(duration: 0.2)) { dragTranslation = 0 }
         }
         .onDisappear {
             viewModel.cancel()
@@ -209,39 +240,73 @@ struct ProcessingView<Destination: View>: View {
         return false
     }
 
-    /// How far a drag has to travel before it counts as a page swipe rather than an
-    /// incidental touch on the video. Computed, not a stored constant: `ProcessingView` is
-    /// generic over `Destination`, and Swift doesn't allow static stored properties on a
-    /// generic type.
-    private static var swipeThreshold: CGFloat { 60 }
+    /// Whether a swipe can browse right now: not while a run is in flight (a swipe must not
+    /// abandon it), and not while a previously-committed browse is still resolving.
+    private var canBrowse: Bool {
+        !isAnalyzing && browsingNeighbor == nil
+    }
 
-    /// A right drag browses to the previous video, a left drag to the next — same mapping
-    /// as `MainTab`'s Home/Camera pages. Disabled while a run is in flight (a swipe must not
-    /// abandon it) or while a previously-triggered browse is still resolving; a swipe with no
-    /// neighbor to go to (nil `previousVideo`/`nextVideo` at either end of the grid) is a
-    /// no-op regardless, via `browse(_:)`'s own guard.
+    /// A right drag browses to the previous video, a left drag to the next, the video and its
+    /// controls following the finger the whole way and springing back if the drag falls short —
+    /// `BrowseSwipe` owns that arithmetic, including the shortened travel at either end of the
+    /// grid, where there is no neighbor and the drag can only ever spring back. The back chevron
+    /// stays fixed: it's hosted by the navigation bar the shared `NavigationStack` owns, outside
+    /// this view's own content, so no offset applied here reaches it — unlike `RootTabView`'s
+    /// Camera/Home swipe, which pages between two fully separate hosted views and carries each
+    /// one's own chrome along with it.
     ///
     /// `body` attaches this once, as high in the tree as the screen's content goes, rather than
     /// separately on every sub-region: this view sits inside the app's own page-style `TabView`
     /// (`RootTabView`), whose horizontal swipe would otherwise win the recognition race
     /// anywhere this gesture doesn't reach and switch tabs to Camera instead of browsing videos
-    /// here — including a swipe starting at the leading edge, so this also supersedes the
-    /// system's interactive edge-swipe-to-pop (the back chevron, visible whenever `isAnalyzing`
-    /// is false, is the way back instead, the same as every other pushed screen in the flow per
-    /// docs/UIUX.md). `.highPriorityGesture` on an ancestor beats a plain `.gesture` anywhere in
-    /// its subtree, but when a descendant *also* uses `.highPriorityGesture`, SwiftUI resolves
-    /// that tie in the descendant's favor — which is what lets `VideoScrubBar`'s own track keep
-    /// winning locally for scrubbing, without this attachment needing to carve that view out.
+    /// here — `swipeBackdrop` gives the gesture a full-window black surface behind the content,
+    /// ignoring the safe area, and the navigation bar's own background is hidden the same way
+    /// `ClipListView`'s is. `.highPriorityGesture` on an ancestor beats a plain
+    /// `.gesture` anywhere in its subtree, but when a descendant *also* uses
+    /// `.highPriorityGesture`, SwiftUI resolves that tie in the descendant's favor — which is
+    /// what lets `VideoScrubBar`'s own track keep winning locally for scrubbing, without this
+    /// attachment needing to carve that view out.
     private var videoSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 20)
-            .onEnded { value in
-                guard !isAnalyzing, browsingNeighbor == nil else { return }
-                if value.translation.width > Self.swipeThreshold {
-                    browse(previousVideo)
-                } else if value.translation.width < -Self.swipeThreshold {
-                    browse(nextVideo)
-                }
+            .onChanged { value in
+                guard canBrowse else { return }
+                dragTranslation = BrowseSwipe.pageOffset(
+                    translation: value.translation.width,
+                    hasPrevious: previousVideo != nil, hasNext: nextVideo != nil)
             }
+            .onEnded { value in
+                // Every path that doesn't browse springs the page back, including a drag that
+                // started while browsing was still allowed and ended after it stopped being.
+                guard canBrowse,
+                      let direction = BrowseSwipe.commit(
+                        translation: value.translation.width,
+                        hasPrevious: previousVideo != nil, hasNext: nextVideo != nil)
+                else {
+                    withAnimation(.easeOut(duration: 0.2)) { dragTranslation = 0 }
+                    return
+                }
+                // Carried the rest of the way off screen rather than snapped back: the video
+                // being left is gone, and the neighbor's `browsingOverlay` takes the screen
+                // from here.
+                withAnimation(.easeOut(duration: 0.2)) {
+                    dragTranslation = direction == .previous ? pageWidth : -pageWidth
+                }
+                browse(direction == .previous ? previousVideo : nextVideo)
+            }
+    }
+
+    /// The full-window surface the swipe is measured and hit-tested against. A `.background`
+    /// rather than an `.ignoresSafeArea()` on the screen's own content: that would also move
+    /// what `videoStage`'s `.safeAreaInset` insets from, dropping the scrub bar and the
+    /// "Start analysis" button under the home indicator. Black, so it reads as the same
+    /// backdrop `videoStage` already draws — and as the empty space a dragged page uncovers.
+    private var swipeBackdrop: some View {
+        GeometryReader { proxy in
+            Color.black
+                .onAppear { pageWidth = proxy.size.width }
+                .onChange(of: proxy.size.width) { pageWidth = $0 }
+        }
+        .ignoresSafeArea()
     }
 
     /// Stops the idle player before handing off to a neighbor — nothing would call
