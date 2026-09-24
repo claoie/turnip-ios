@@ -203,6 +203,21 @@ private struct ClipCardView: View {
     /// identity-bound rather than render-bound, so it reads live regardless of which
     /// snapshot of `self` touches it — the same property already relied on for `player`.
     @State private var suspended = false
+    /// A `@State` mirror of `item.window`, for the same reason `suspended` mirrors
+    /// `isSuspended`: it's refreshed from `.onAppear` and from `.task(id: item)` (both
+    /// read `item` at a point trusted to be current) and from `.onChange(of: item.window)`'s
+    /// own `newValue` parameter, which SwiftUI supplies directly rather than through
+    /// `self` and so is correct even when that closure's `self` is stale. Every
+    /// `startPlayback()` call site reads this instead of `item.window`, including the
+    /// resume path off `.onChange(of: isSuspended)` — the exact closure this file already
+    /// documented firing against a stale `self`.
+    @State private var playbackWindow: TrickWindow?
+    /// The window the live `player`/`looper` were actually built to loop, or `nil` before
+    /// the first build. `startPlayback()` tears down and rebuilds whenever this stops
+    /// matching `playbackWindow`, rather than trusting that whichever caller invoked it
+    /// already tore down a stale player — so a mismatch left by any ordering of the calls
+    /// above self-corrects on the next `startPlayback()` instead of looping indefinitely.
+    @State private var playerWindow: TrickWindow?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -217,6 +232,14 @@ private struct ClipCardView: View {
             // re-fire when window/cropRect/cropAdjustment change. The thumbnail decode and
             // the shared asset duration each dedupe/cache in the view model, so a re-fired
             // task joins work already done instead of repeating it.
+            //
+            // Also re-syncs `playbackWindow`/`startPlayback()` independently of the
+            // `.onChange(of: item.window)` handler below: this task is keyed on the whole
+            // item, so it re-fires on the same editor commit that changes the window,
+            // giving the preview loop a second, differently-triggered path to the current
+            // range rather than depending on exactly one handler firing correctly.
+            playbackWindow = item.window
+            startPlayback()
             async let image = viewModel.thumbnail(for: item)
             async let assetDuration = viewModel.assetDuration()
             thumbnail = await image
@@ -224,6 +247,7 @@ private struct ClipCardView: View {
         }
         .onAppear {
             suspended = isSuspended
+            playbackWindow = item.window
             startPlayback()
         }
         .onDisappear { teardownPlayback() }
@@ -235,12 +259,12 @@ private struct ClipCardView: View {
                 startPlayback()
             }
         }
-        .onChange(of: item.window) { _ in
+        .onChange(of: item.window) { newValue in
             // `ForEach` keys tiles by `item.id`, so an editor commit that changes the
             // window reuses this same tile's identity — and its player/looper — rather
-            // than creating a fresh one. Without rebuilding here, the loop would keep
-            // playing the pre-edit range forever.
-            teardownPlayback()
+            // than creating a fresh one. `newValue` (not `item.window`) is what's actually
+            // trusted here, and `startPlayback()` itself decides whether to rebuild.
+            playbackWindow = newValue
             startPlayback()
         }
     }
@@ -290,22 +314,32 @@ private struct ClipCardView: View {
         }
     }
 
-    /// Builds the tile's own looping player on first need and starts it, unless the
-    /// system's video-autoplay setting is off (`docs/ACCESSIBILITY.md`'s Clip List
-    /// checklist rules out auto-playing loops in that case, so the tile just shows its
-    /// static poster) or the editor is currently covering the grid. Safe to call
-    /// repeatedly — an existing player is just resumed.
+    /// Builds the tile's own looping player if needed and starts it, unless the system's
+    /// video-autoplay setting is off (`docs/ACCESSIBILITY.md`'s Clip List checklist rules
+    /// out auto-playing loops in that case, so the tile just shows its static poster) or
+    /// the editor is currently covering the grid. Safe to call repeatedly — an existing
+    /// player matching `playbackWindow` is just resumed; one that doesn't match is torn
+    /// down and rebuilt first.
     private func startPlayback() {
         guard UIAccessibility.isVideoAutoplayEnabled, !suspended else { return }
+        // `.onAppear` and `.task(id:)` both set `playbackWindow` before calling this, so
+        // it's only `nil` here in some case neither anticipated — falls back to
+        // `item.window` rather than a hard `guard let`, so that case degrades to today's
+        // behavior instead of silently showing no video at all.
+        let target = playbackWindow ?? item.window
+        if player != nil, clipCardPlaybackNeedsRebuild(builtFor: playerWindow, target: target) {
+            teardownPlayback()
+        }
         if player == nil {
             let templateItem = AVPlayerItem(sdrAsset: viewModel.sourceAsset)
             let queuePlayer = AVQueuePlayer()
             queuePlayer.isMuted = true
             let timeRange = CMTimeRange(
-                start: CMTime(seconds: item.window.startTime, preferredTimescale: 600),
-                end: CMTime(seconds: item.window.endTime, preferredTimescale: 600))
+                start: CMTime(seconds: target.startTime, preferredTimescale: 600),
+                end: CMTime(seconds: target.endTime, preferredTimescale: 600))
             looper = AVPlayerLooper(player: queuePlayer, templateItem: templateItem, timeRange: timeRange)
             player = queuePlayer
+            playerWindow = target
         }
         player?.play()
     }
@@ -318,6 +352,7 @@ private struct ClipCardView: View {
         looper?.disableLooping()
         looper = nil
         player = nil
+        playerWindow = nil
     }
 
     /// The diameter every top-corner icon circle renders at.
@@ -356,6 +391,16 @@ private struct ClipCardView: View {
                 .background(.black.opacity(0.35))
         }
     }
+}
+
+/// Whether `ClipCardView.startPlayback()` should tear down and rebuild its live player:
+/// `builtFor` is `nil` before any player exists, which is never a mismatch since there's
+/// nothing yet to rebuild. Pulled out of `startPlayback()` as a plain value comparison —
+/// no `AVFoundation`/SwiftUI dependency — so the rebuild decision itself is unit-testable
+/// without a simulator, even though driving the player it gates is not.
+func clipCardPlaybackNeedsRebuild(builtFor: TrickWindow?, target: TrickWindow) -> Bool {
+    guard let builtFor else { return false }
+    return builtFor != target
 }
 
 #Preview {

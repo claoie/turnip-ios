@@ -273,6 +273,32 @@ final class ClipListTests: XCTestCase {
         XCTAssertEqual(after.width, 32)
     }
 
+    // MARK: - clipCardPlaybackNeedsRebuild
+    //
+    // `ClipCardView`'s own lifecycle (`.onAppear`/`.onChange`/`AVPlayerLooper`) needs a
+    // simulator to drive, which this machine doesn't have. The rebuild decision it makes
+    // on every `startPlayback()` call is a plain value comparison with no such
+    // dependency, so it's pulled out and tested here.
+
+    func testPlaybackNeedsRebuildWhenTheBuiltWindowDiffersFromTarget() {
+        let builtFor = TrickWindow(startTime: 0, endTime: 2)
+        let target = TrickWindow(startTime: 1, endTime: 3)
+
+        XCTAssertTrue(clipCardPlaybackNeedsRebuild(builtFor: builtFor, target: target))
+    }
+
+    func testPlaybackDoesNotNeedRebuildWhenTheBuiltWindowMatchesTarget() {
+        let window = TrickWindow(startTime: 0, endTime: 2)
+
+        XCTAssertFalse(clipCardPlaybackNeedsRebuild(builtFor: window, target: window))
+    }
+
+    func testPlaybackDoesNotNeedRebuildWhenNothingHasBeenBuiltYet() {
+        let target = TrickWindow(startTime: 0, endTime: 2)
+
+        XCTAssertFalse(clipCardPlaybackNeedsRebuild(builtFor: nil, target: target))
+    }
+
     @MainActor
     func testDeleteRemovesTheMatchingItem() {
         let target = makeItem()
