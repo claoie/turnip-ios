@@ -97,17 +97,22 @@ struct ProcessingView<Destination: View>: View {
             case .empty:
                 // `StatusStateView` sizes to its own content otherwise, the same as every
                 // other consumer of this view (`HomeView`'s empty grid and denied states apply
-                // the same frame externally).
+                // the same frame externally). None of these three branches carry a
+                // `.safeAreaInset` the way `videoStage` does, so extending each into the safe
+                // area can't move what that inset is measured from.
                 emptyState
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
             case .failed(let message):
                 errorState(message: message)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
             case .succeeded:
                 // Covered by the pushed destination; only visible when navigating back here.
                 Text("Analysis complete.")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
             }
         }
         .offset(x: dragTranslation)
@@ -137,6 +142,9 @@ struct ProcessingView<Destination: View>: View {
         // browse to the previous video like any other. The chevron below is the way back,
         // matching the rest of the pushed flow (`ClipListView`).
         .navigationBarBackButtonHidden(true)
+        // Hides the bar's own translucent background, the same as `ClipListView`'s custom
+        // chevron: otherwise its blur would opaque out `swipeBackdrop`'s black beneath it.
+        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             if isAnalyzing {
                 ToolbarItem(placement: .cancellationAction) {
@@ -238,17 +246,22 @@ struct ProcessingView<Destination: View>: View {
         !isAnalyzing && browsingNeighbor == nil
     }
 
-    /// A right drag browses to the previous video, a left drag to the next, the page following
-    /// the finger the whole way and springing back if the drag falls short — `BrowseSwipe` owns
-    /// that arithmetic, including the shortened travel at either end of the grid, where there
-    /// is no neighbor and the drag can only ever spring back.
+    /// A right drag browses to the previous video, a left drag to the next, the video and its
+    /// controls following the finger the whole way and springing back if the drag falls short —
+    /// `BrowseSwipe` owns that arithmetic, including the shortened travel at either end of the
+    /// grid, where there is no neighbor and the drag can only ever spring back. The back chevron
+    /// stays fixed: it's hosted by the navigation bar the shared `NavigationStack` owns, outside
+    /// this view's own content, so no offset applied here reaches it — unlike `RootTabView`'s
+    /// Camera/Home swipe, which pages between two fully separate hosted views and carries each
+    /// one's own chrome along with it.
     ///
     /// `body` attaches this once, as high in the tree as the screen's content goes, rather than
     /// separately on every sub-region: this view sits inside the app's own page-style `TabView`
     /// (`RootTabView`), whose horizontal swipe would otherwise win the recognition race
     /// anywhere this gesture doesn't reach and switch tabs to Camera instead of browsing videos
-    /// here — `swipeBackdrop` is what extends that reach past the safe area, into the status-bar
-    /// band and the home-indicator strip. `.highPriorityGesture` on an ancestor beats a plain
+    /// here — `swipeBackdrop` gives the gesture a full-window black surface behind the content,
+    /// ignoring the safe area, and the navigation bar's own background is hidden the same way
+    /// `ClipListView`'s is. `.highPriorityGesture` on an ancestor beats a plain
     /// `.gesture` anywhere in its subtree, but when a descendant *also* uses
     /// `.highPriorityGesture`, SwiftUI resolves that tie in the descendant's favor — which is
     /// what lets `VideoScrubBar`'s own track keep winning locally for scrubbing, without this
