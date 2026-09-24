@@ -189,7 +189,13 @@ struct GalleryFilterButton: View {
                 }
             }
         } label: {
-            Image(systemName: "line.3.horizontal.decrease.circle")
+            // .fill for an active (non-.all) filter -- the same outline/filled convention
+            // Photos' own filter control and SF Symbols' own "selected" pattern use -- so a
+            // filtered grid with real results (not just the zero-match empty state) still
+            // shows that a filter is on. Without this the glyph is byte-identical whether 20
+            // of 300 videos are showing or all of them are.
+            Image(systemName: viewModel.filter == .all
+                ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)

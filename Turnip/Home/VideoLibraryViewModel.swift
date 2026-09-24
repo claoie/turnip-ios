@@ -169,12 +169,18 @@ final class VideoLibraryViewModel: ObservableObject {
     /// returns what this app can already see, `.limited` included, the same way the video fetch
     /// itself is silently scoped.
     private func loadAlbums() {
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "localizedTitle", ascending: true)]
-        let result = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: options)
+        let result = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
         var collections: [PHAssetCollection] = []
         result.enumerateObjects { collection, _, _ in collections.append(collection) }
-        albums = collections
+        // Sorted here, in Swift, rather than via a PHFetchOptions.sortDescriptors NSSortDescriptor
+        // keyed on "localizedTitle" -- whether PhotoKit actually supports sorting a
+        // PHAssetCollection fetch on that key is unverified, and nothing exercises this line in
+        // CI (the screenshot harness never calls reload()/loadAlbums(), and the unit tests only
+        // cover GalleryFilter's pure predicate) -- so a silently-ignored descriptor could ship
+        // unnoticed. localizedStandardCompare is the same comparison Finder/Files use for names.
+        albums = collections.sorted {
+            ($0.localizedTitle ?? "").localizedStandardCompare($1.localizedTitle ?? "") == .orderedAscending
+        }
     }
 
     /// Limited-access affordance: iOS's own picker for extending the granted subset. Presented
