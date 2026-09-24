@@ -275,10 +275,9 @@ final class ClipListTests: XCTestCase {
 
     // MARK: - clipCardPlaybackNeedsRebuild
     //
-    // `ClipCardView`'s own lifecycle (`.onAppear`/`.onChange`/`AVPlayerLooper`) needs a
-    // simulator to drive, which this machine doesn't have. The rebuild decision it makes
-    // on every `startPlayback()` call is a plain value comparison with no such
-    // dependency, so it's pulled out and tested here.
+    // Covers the rebuild-decision logic in isolation, not the surrounding `ClipCardView`
+    // lifecycle it's called from — driving `.onAppear`/`.onChange`/`AVPlayerLooper`
+    // directly needs a simulator, which this test target has none of.
 
     func testPlaybackNeedsRebuildWhenTheBuiltWindowDiffersFromTarget() {
         let builtFor = TrickWindow(startTime: 0, endTime: 2)
