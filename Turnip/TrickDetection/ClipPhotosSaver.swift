@@ -98,17 +98,7 @@ struct ClipPhotosSaver: Sendable {
                     .placeholderForCreatedAsset else { return }
                 createdIdentifier = placeholder.localIdentifier
                 guard let albumTitle else { return }
-                if let existingAlbum = Self.fetchAlbum(titled: albumTitle) {
-                    guard let editRequest = PHAssetCollectionChangeRequest(for: existingAlbum) else {
-                        albumEditFailed = true
-                        return
-                    }
-                    editRequest.addAssets([placeholder] as NSArray)
-                } else {
-                    PHAssetCollectionChangeRequest
-                        .creationRequestForAssetCollection(withTitle: albumTitle)
-                        .addAssets([placeholder] as NSArray)
-                }
+                albumEditFailed = !Self.addToAlbum(placeholder, titled: albumTitle)
             }
         } catch {
             throw ClipPhotosSaveError.saveRejected(reason: error.localizedDescription)
@@ -135,5 +125,25 @@ struct ClipPhotosSaver: Sendable {
         return PHAssetCollection.fetchAssetCollections(
             with: .album, subtype: .albumRegular, options: options
         ).firstObject
+    }
+
+    /// Adds `placeholder` to the album titled `title`, creating it first if `fetchAlbum`
+    /// doesn't find one. Must run inside a `PHPhotoLibrary.performChanges` block. Returns
+    /// `false` when an existing album is visible but not editable by this app (add-only
+    /// authorization) — `saveVideo` turns that into a thrown error rather than a silent
+    /// partial save. Extracted from `saveVideo` to keep its cyclomatic complexity under the
+    /// repo's SwiftLint limit.
+    private static func addToAlbum(_ placeholder: PHObjectPlaceholder, titled title: String) -> Bool {
+        if let existingAlbum = fetchAlbum(titled: title) {
+            guard let editRequest = PHAssetCollectionChangeRequest(for: existingAlbum) else {
+                return false
+            }
+            editRequest.addAssets([placeholder] as NSArray)
+        } else {
+            PHAssetCollectionChangeRequest
+                .creationRequestForAssetCollection(withTitle: title)
+                .addAssets([placeholder] as NSArray)
+        }
+        return true
     }
 }
