@@ -291,10 +291,26 @@ final class ClipEditorTests: XCTestCase {
     func testApplyCropOffsetAccumulates() {
         let viewModel = makeViewModel()
 
-        viewModel.applyCropOffset(CGSize(width: 10, height: -4))
-        viewModel.applyCropOffset(CGSize(width: 5, height: 1))
+        viewModel.applyCropOffset(CGSize(width: 10, height: -4), previewScale: 1)
+        viewModel.applyCropOffset(CGSize(width: 5, height: 1), previewScale: 1)
 
         XCTAssertEqual(viewModel.cropAdjustment.offset, CGSize(width: 15, height: -3))
+    }
+
+    /// `previewScale` is on-screen points per displayed pixel — a source video's displayed
+    /// size is almost always many times the preview's on-screen point size, so dividing by
+    /// a realistic sub-1 scale must MAGNIFY the committed offset, not pass it through
+    /// unconverted. A fixture using `previewScale: 1` (as the accumulation test above does)
+    /// can't tell a correct conversion from a dropped one, since both produce the same
+    /// number when the scale is 1.
+    @MainActor
+    func testApplyCropOffsetConvertsScreenPointsToDisplayedPixels() {
+        let viewModel = makeViewModel()
+
+        // A 380pt-wide preview of a 1900px-displayed video: 0.2 points per pixel.
+        viewModel.applyCropOffset(CGSize(width: 38, height: -19), previewScale: 0.2)
+
+        XCTAssertEqual(viewModel.cropAdjustment.offset, CGSize(width: 190, height: -95))
     }
 
     @MainActor
@@ -303,7 +319,7 @@ final class ClipEditorTests: XCTestCase {
 
         viewModel.applyCropScale(2)
         viewModel.applyCropRotation(.pi)
-        viewModel.applyCropOffset(CGSize(width: 10, height: 10))
+        viewModel.applyCropOffset(CGSize(width: 10, height: 10), previewScale: 1)
         viewModel.resetCropAdjustment()
 
         XCTAssertEqual(viewModel.cropAdjustment, .identity)
