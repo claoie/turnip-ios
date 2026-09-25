@@ -29,7 +29,6 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 MAX_PNG_BYTES = 2 * 1024 * 1024
 MAX_SCREENSHOTS = 20
 
-# Issue #93's adversarial cases, as re-verified in the PR's manual test plan.
 INJECTION_NAME = "x](evil.invalid) **LGTM** ![.png"
 JPEG_BYTES = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01" + b"\x00" * 64
 
@@ -161,8 +160,8 @@ class IsStaleHeadTest(unittest.TestCase):
 
     def test_no_pr_is_never_stale(self):
         # resolve_pr_by_head found no open PR for the branch at all --
-        # nothing to compare against, so the caller falls through to
-        # another resolution path instead of skipping.
+        # nothing to compare against, so this is never the "stale" case
+        # (main() has its own, separate handling for a missing PR).
         self.assertFalse(self.mod.is_stale_head(None, "abc123"))
 
     def test_matching_head_is_not_stale(self):
@@ -174,6 +173,52 @@ class IsStaleHeadTest(unittest.TestCase):
         # push landed while this run was in flight.
         pr = {"number": 42, "head": {"sha": "def456"}}
         self.assertTrue(self.mod.is_stale_head(pr, "abc123"))
+
+
+class MainDispatchTest(unittest.TestCase):
+    """Exercises main()'s own control flow by monkeypatching the network-
+    calling resolution functions, not the network -- proves main() actually
+    reaches and acts on is_stale_head()/the missing-PR case, not just that
+    those pieces are individually correct in isolation."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_script()
+
+    def setUp(self):
+        self._env = {
+            "GITHUB_TOKEN": "t", "BASE_REPO": "o/r",
+            "SCREENSHOTS_REPO": "o/shots", "RUN_ID": "1", "HEAD_SHA": "abc123",
+            "SCREENSHOTS_DIR": "/does/not/matter/for/these/paths",
+            "HEAD_OWNER": "fork-owner", "HEAD_BRANCH": "feature",
+        }
+        self._prior = {k: os.environ.get(k) for k in self._env}
+        os.environ.update(self._env)
+        self._prior_resolve_pr_by_head = self.mod.resolve_pr_by_head
+        self._prior_resolve_pr_number = self.mod.resolve_pr_number
+
+    def tearDown(self):
+        for key, value in self._prior.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.mod.resolve_pr_by_head = self._prior_resolve_pr_by_head
+        self.mod.resolve_pr_number = self._prior_resolve_pr_number
+
+    def test_stale_head_short_circuits_before_the_fork_broken_fallback(self):
+        self.mod.resolve_pr_by_head = (
+            lambda *a, **k: {"number": 42, "head": {"sha": "def456"}})
+        self.mod.resolve_pr_number = lambda *a, **k: self.fail(
+            "resolve_pr_number should never run on a stale head")
+        self.assertEqual(self.mod.main(), 0)
+
+    def test_missing_open_pr_skips_rather_than_the_fork_broken_fallback(self):
+        self.mod.resolve_pr_by_head = lambda *a, **k: None
+        self.mod.resolve_pr_number = lambda *a, **k: self.fail(
+            "resolve_pr_number is the known-broken-for-forks fallback; "
+            "a missing open PR must not reach it")
+        self.assertEqual(self.mod.main(), 0)
 
 
 if __name__ == "__main__":
