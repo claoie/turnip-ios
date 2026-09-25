@@ -12,9 +12,10 @@ final class ScreenshotTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// Home's Photos-denied empty state: the only Home state scriptable without the
-    /// Photos library (the grid needs real PHAssets, which have no public
-    /// initializer, and the real HomeView would raise the system permission prompt).
+    /// Home's Photos-denied empty state, one of the Home states scriptable without the
+    /// Photos library -- a populated grid isn't, since it needs real PHAssets, which have
+    /// no public initializer, and the real HomeView fetching would raise the system
+    /// permission prompt (see testGalleryFilterMenuOpen below for another such state).
     func testHomeAccessDenied() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotHome"]

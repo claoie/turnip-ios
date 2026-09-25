@@ -8,9 +8,11 @@ import SwiftUI
 
 /// Home's Photos-denied empty state (`-screenshotHome`).
 ///
-/// The only Home state scriptable without the Photos library: the gallery grid needs
-/// real `PHAsset`s, which have no public initializer, and launching the real `HomeView`
-/// would raise the system permission prompt in the simulator. The denied state is pure
+/// A populated grid is what's actually unscriptable without the Photos library -- it
+/// needs real `PHAsset`s, which have no public initializer. This state and
+/// `ScreenshotGalleryFilterHarness` below both sidestep that by never rendering a grid;
+/// launching the real `HomeView` and letting it fetch would raise the system permission
+/// prompt in the simulator. The denied state here is pure
 /// SwiftUI and deterministic.
 struct ScreenshotHomeHarness: View {
     // Isolated suite, like `ScreenshotSettingsHarness` — a tap here must never read or
