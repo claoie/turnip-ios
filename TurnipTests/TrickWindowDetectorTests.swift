@@ -201,12 +201,12 @@ final class TrickWindowDetectorTests: XCTestCase {
         XCTAssertEqual(overridden.displacementThreshold, 0.05, accuracy: 0.0001)
     }
 
-    /// Regression for issue 193: at 20 samples/sec, per-sample displacement of 0.03 is real
-    /// motion (roughly the same athlete speed `moving(_:)`'s 0.2 represents at the shipped
-    /// 10 samples/sec default) but sits below the *unscaled* 0.05 threshold — before this fix,
-    /// this exact signal detected zero windows at high granularity. `.count` alone wouldn't
-    /// discriminate a detector that returns no windows at all from one that merges wrongly, so
-    /// this also pins the window's bounds.
+    /// At 20 samples/sec, per-sample displacement of 0.03 is real motion (roughly the
+    /// same athlete speed `moving(_:)`'s 0.2 represents at the shipped 10 samples/sec
+    /// default) but sits below the *unscaled* 0.05 threshold — an unscaled detector would
+    /// find zero windows in this exact signal. `.count` alone wouldn't discriminate a
+    /// detector that returns no windows at all from one that merges wrongly, so this also
+    /// pins the window's bounds.
     func testHighSampleRateStillDetectsMotionBelowTheUnscaledThreshold() {
         let highRate = TrickWindowDetector(sampleRate: 20)
         let displacements: [Float?] = Array(repeating: 0.03, count: 8)
