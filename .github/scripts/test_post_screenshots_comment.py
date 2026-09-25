@@ -3,9 +3,12 @@
 
 Covers collect_pngs(), the security boundary that sanitizes the
 untrusted pr-screenshots artifact before the screenshots-comment
-workflow pushes PNGs or renders them into a PR comment (issue #93):
-names are allowlisted, bytes must carry the PNG magic number, each
-file is size-capped, and at most MAX_SCREENSHOTS files are published.
+workflow pushes PNGs or renders them into a PR comment: names are
+allowlisted, bytes must carry the PNG magic number, each file is
+size-capped, and at most MAX_SCREENSHOTS files are published.
+
+Also covers is_stale_head(), the pure decision behind skipping a
+comment for a workflow_run whose PR has since moved to a newer head.
 
 Stdlib only (unittest), so it runs on a stock runner:
 
@@ -149,6 +152,28 @@ class CollectPngsTest(unittest.TestCase):
             os.path.join(self.dir, "does-not-exist"))
         self.assertEqual(pngs, [])
         self.assertEqual(sum(skipped.values()), 0)
+
+
+class IsStaleHeadTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_script()
+
+    def test_no_pr_is_never_stale(self):
+        # resolve_pr_by_head found no open PR for the branch at all --
+        # nothing to compare against, so the caller falls through to
+        # another resolution path instead of skipping.
+        self.assertFalse(self.mod.is_stale_head(None, "abc123"))
+
+    def test_matching_head_is_not_stale(self):
+        pr = {"number": 42, "head": {"sha": "abc123"}}
+        self.assertFalse(self.mod.is_stale_head(pr, "abc123"))
+
+    def test_moved_head_is_stale(self):
+        # The PR now points at a commit this run never built -- a later
+        # push landed while this run was in flight.
+        pr = {"number": 42, "head": {"sha": "def456"}}
+        self.assertTrue(self.mod.is_stale_head(pr, "abc123"))
 
 
 if __name__ == "__main__":
