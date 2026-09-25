@@ -273,30 +273,38 @@ final class ClipListTests: XCTestCase {
         XCTAssertEqual(after.width, 32)
     }
 
-    /// Regression for the clip list's live preview player showing the raw, un-cropped
-    /// source regardless of the item's crop rect or adjustment: `videoComposition(cropRect:
-    /// cropAdjustment:)` — what `ClipCardView.startPlayback()` attaches to its
-    /// `AVPlayerItem` before looping — must render at the crop's own size, not the
-    /// source's, with the crop actually wired into the layer instruction, not just the
-    /// render size. A half-width crop discriminates `renderSize`: an un-composed player
-    /// would report the full 64px width. `getTransformRamp` reading back exactly the
+    /// Regression for the clip list's live preview player showing the raw, un-cropped,
+    /// un-adjusted source regardless of the item's crop rect or manual adjustment:
+    /// `videoComposition(cropRect:cropAdjustment:)` — what `ClipCardView.startPlayback()`
+    /// attaches to its `AVPlayerItem` before looping — must render at the crop's own
+    /// size, not the source's, with the crop AND the adjustment actually wired into the
+    /// layer instruction, not just the render size. A half-width crop discriminates
+    /// `renderSize`: an un-composed player would report the full 64px width. A non-
+    /// identity `cropAdjustment` (not `.identity`, unlike a fixture that would pass even
+    /// with the argument dropped, since `ClipExportTransform.make`'s `cropAdjustment`
+    /// parameter defaults to `.identity`) plus `getTransformRamp` reading back exactly the
     /// transform `ClipExportTransform.make` predicts discriminates the layer instruction
     /// itself: the composition path shares `ClipExportTransform.makeVideoComposition` with
-    /// the exporter, but a future edit that dropped `setTransform` there would leave
-    /// `renderSize` alone (this test's first assertion would still pass) while quietly
-    /// un-cropping and un-rotating both the tile and the exported clip.
+    /// the exporter, but a future edit that dropped `setTransform`, or the `cropAdjustment`
+    /// argument at the call site, would leave `renderSize` alone (this test's first
+    /// assertion would still pass) while quietly un-cropping or un-rotating both the tile
+    /// and the exported clip.
     @MainActor
-    func testVideoCompositionRendersAtTheCropRectsSize() async throws {
+    func testVideoCompositionRendersAtTheCropRectsSizeAndAdjustment() async throws {
         let url = try await TestVideoWriter.writeTestVideo(frameCount: 1, width: 64, height: 64, fps: 30)
         defer { try? FileManager.default.removeItem(at: url) }
         let asset = AVURLAsset(url: url)
         let halfWidth = NormalizedRect(minX: 0, maxX: 0.5, minY: 0, maxY: 1)
-        let item = ClipListItem(window: TrickWindow(startTime: 0, endTime: 1.0 / 30), cropRect: halfWidth)
+        let adjustment = CropAdjustment(scale: 1.4, rotationRadians: .pi / 6, offset: CGSize(width: 2, height: -3))
+        let item = ClipListItem(
+            window: TrickWindow(startTime: 0, endTime: 1.0 / 30), cropRect: halfWidth,
+            cropAdjustment: adjustment)
         let viewModel = makeViewModel(items: [item], asset: asset, duration: 1.0 / 30)
         let target = viewModel.items[1]
 
-        let composition = try XCTUnwrap(await viewModel.videoComposition(
-            cropRect: target.cropRect, cropAdjustment: target.cropAdjustment))
+        let loadedComposition = await viewModel.videoComposition(
+            cropRect: target.cropRect, cropAdjustment: target.cropAdjustment)
+        let composition = try XCTUnwrap(loadedComposition)
 
         XCTAssertEqual(composition.renderSize, CGSize(width: 32, height: 64))
 
@@ -305,8 +313,9 @@ final class ClipListTests: XCTestCase {
         let preferredTransform = try await track.load(.preferredTransform)
         let expected = try XCTUnwrap(ClipExportTransform.make(
             cropRect: halfWidth, naturalSize: naturalSize, preferredTransform: preferredTransform,
-            cropAdjustment: .identity))
-        let instruction = try XCTUnwrap(composition.instructions.first)
+            cropAdjustment: adjustment))
+        let instruction = try XCTUnwrap(
+            composition.instructions.first as? AVMutableVideoCompositionInstruction)
         let layerInstruction = try XCTUnwrap(instruction.layerInstructions.first)
         var start = CGAffineTransform.identity
         var end = CGAffineTransform.identity

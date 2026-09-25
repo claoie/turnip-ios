@@ -223,6 +223,13 @@ private struct ClipCardView: View {
     /// firing on first appearance) joins it instead of racing a duplicate build. A call
     /// for a DIFFERENT target still cancels and replaces it — see `startPlayback()`.
     @State private var buildingGeometry: ClipCardPlaybackGeometry?
+    /// Identifies which build attempt currently owns `buildingGeometry`'s slot.
+    /// `buildingGeometry` alone can't tell two attempts FOR THE SAME TARGET apart —
+    /// value equality would let a cancelled attempt that resumes after a later one has
+    /// already re-claimed the identical target (scroll off mid-load, then back on before
+    /// it unwinds) clear the live attempt's claim instead of its own. Each attempt mints
+    /// its own token and only ever clears the slot if this still matches it.
+    @State private var buildToken: UUID?
     @State private var playbackTask: Task<Void, Never>?
 
     var body: some View {
@@ -370,13 +377,16 @@ private struct ClipCardView: View {
         // rebuild the winner's target needs.
         playbackTask?.cancel()
         buildingGeometry = target
+        let token = UUID()
+        buildToken = token
         playbackTask = Task { @MainActor in
             let composition = await viewModel.videoComposition(
                 cropRect: target.cropRect, cropAdjustment: target.cropAdjustment)
             guard !Task.isCancelled, !suspended else {
-                // Only clear the slot if it's still this call's: a newer call may already
-                // have claimed it for a different target while this one was suspended-out.
-                if buildingGeometry == target { buildingGeometry = nil }
+                // Only clear the slot if it's still THIS attempt's: comparing `target`
+                // alone can't tell this cancelled attempt apart from a later one already
+                // building the identical target (see `buildToken`'s doc comment).
+                if buildToken == token { buildingGeometry = nil; buildToken = nil }
                 return
             }
             let templateItem = AVPlayerItem(sdrAsset: viewModel.sourceAsset)
@@ -389,7 +399,7 @@ private struct ClipCardView: View {
             looper = AVPlayerLooper(player: queuePlayer, templateItem: templateItem, timeRange: timeRange)
             player = queuePlayer
             playerGeometry = target
-            buildingGeometry = nil
+            if buildToken == token { buildingGeometry = nil; buildToken = nil }
             player?.play()
         }
     }
@@ -402,6 +412,7 @@ private struct ClipCardView: View {
         playbackTask?.cancel()
         playbackTask = nil
         buildingGeometry = nil
+        buildToken = nil
         player?.pause()
         looper?.disableLooping()
         looper = nil
