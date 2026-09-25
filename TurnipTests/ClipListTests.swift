@@ -273,6 +273,73 @@ final class ClipListTests: XCTestCase {
         XCTAssertEqual(after.width, 32)
     }
 
+    /// Regression for the clip list's live preview player showing the raw, un-cropped,
+    /// un-adjusted source regardless of the item's crop rect or manual adjustment:
+    /// `videoComposition(cropRect:cropAdjustment:)` — what `ClipCardView.startPlayback()`
+    /// attaches to its `AVPlayerItem` before looping — must render at the crop's own
+    /// size, not the source's, with the crop AND the adjustment actually wired into the
+    /// layer instruction, not just the render size. A half-width crop discriminates
+    /// `renderSize`: an un-composed player would report the full 64px width. A non-
+    /// identity `cropAdjustment` (not `.identity`, unlike a fixture that would pass even
+    /// with the argument dropped, since `ClipExportTransform.make`'s `cropAdjustment`
+    /// parameter defaults to `.identity`) plus `getTransformRamp` reading back exactly the
+    /// transform `ClipExportTransform.make` predicts discriminates the layer instruction
+    /// itself: the composition path shares `ClipExportTransform.makeVideoComposition` with
+    /// the exporter, but a future edit that dropped `setTransform`, or the `cropAdjustment`
+    /// argument at the call site, would leave `renderSize` alone (this test's first
+    /// assertion would still pass) while quietly un-cropping or un-rotating both the tile
+    /// and the exported clip.
+    @MainActor
+    func testVideoCompositionRendersAtTheCropRectsSizeAndAdjustment() async throws {
+        let url = try await TestVideoWriter.writeTestVideo(frameCount: 1, width: 64, height: 64, fps: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let asset = AVURLAsset(url: url)
+        let halfWidth = NormalizedRect(minX: 0, maxX: 0.5, minY: 0, maxY: 1)
+        let adjustment = CropAdjustment(scale: 1.4, rotationRadians: .pi / 6, offset: CGSize(width: 2, height: -3))
+        let item = ClipListItem(
+            window: TrickWindow(startTime: 0, endTime: 1.0 / 30), cropRect: halfWidth,
+            cropAdjustment: adjustment)
+        let viewModel = makeViewModel(items: [item], asset: asset, duration: 1.0 / 30)
+        let target = viewModel.items[1]
+
+        let loadedComposition = await viewModel.videoComposition(
+            cropRect: target.cropRect, cropAdjustment: target.cropAdjustment)
+        let composition = try XCTUnwrap(loadedComposition)
+
+        XCTAssertEqual(composition.renderSize, CGSize(width: 32, height: 64))
+
+        let track = try await asset.loadTracks(withMediaType: .video)[0]
+        let naturalSize = try await track.load(.naturalSize)
+        let preferredTransform = try await track.load(.preferredTransform)
+        let expected = try XCTUnwrap(ClipExportTransform.make(
+            cropRect: halfWidth, naturalSize: naturalSize, preferredTransform: preferredTransform,
+            cropAdjustment: adjustment))
+        let instruction = try XCTUnwrap(
+            composition.instructions.first as? AVMutableVideoCompositionInstruction)
+        let layerInstruction = try XCTUnwrap(instruction.layerInstructions.first)
+        var start = CGAffineTransform.identity
+        var end = CGAffineTransform.identity
+        var ramp = CMTimeRange(start: .zero, duration: .zero)
+        XCTAssertTrue(layerInstruction.getTransformRamp(for: .zero, start: &start, end: &end, timeRange: &ramp))
+        XCTAssertEqual(start, expected.layerTransform)
+        XCTAssertEqual(end, expected.layerTransform)
+    }
+
+    /// `dummyAsset()` resolves to nothing, so the track load `videoComposition(cropRect:
+    /// cropAdjustment:)` depends on fails — this must return `nil` rather than throw or
+    /// hang, so `startPlayback()`'s caller can fall back to an uncomposed player.
+    @MainActor
+    func testVideoCompositionIsNilWhenTheTrackCannotBeLoaded() async {
+        let item = makeItem()
+        let viewModel = makeViewModel(items: [item])
+        let target = viewModel.items[1]
+
+        let composition = await viewModel.videoComposition(
+            cropRect: target.cropRect, cropAdjustment: target.cropAdjustment)
+
+        XCTAssertNil(composition)
+    }
+
     // MARK: - clipCardPlaybackNeedsRebuild
     //
     // Covers the rebuild-decision logic in isolation, not the surrounding `ClipCardView`
@@ -281,21 +348,51 @@ final class ClipListTests: XCTestCase {
     // `AVPlayerLooper`'s `CMTimeRange` across the XCUITest process boundary to assert
     // which range is actually looping.
 
+    private func makePlaybackGeometry(
+        window: TrickWindow? = nil,
+        cropRect: NormalizedRect? = nil,
+        cropAdjustment: CropAdjustment = .identity
+    ) -> ClipCardPlaybackGeometry {
+        ClipCardPlaybackGeometry(
+            window: window ?? self.window, cropRect: cropRect ?? fullFrame,
+            cropAdjustment: cropAdjustment)
+    }
+
     func testPlaybackNeedsRebuildWhenTheBuiltWindowDiffersFromTarget() {
-        let builtFor = TrickWindow(startTime: 0, endTime: 2)
-        let target = TrickWindow(startTime: 1, endTime: 3)
+        let builtFor = makePlaybackGeometry(window: TrickWindow(startTime: 0, endTime: 2))
+        let target = makePlaybackGeometry(window: TrickWindow(startTime: 1, endTime: 3))
 
         XCTAssertTrue(clipCardPlaybackNeedsRebuild(builtFor: builtFor, target: target))
     }
 
-    func testPlaybackDoesNotNeedRebuildWhenTheBuiltWindowMatchesTarget() {
-        let window = TrickWindow(startTime: 0, endTime: 2)
+    /// The regression this fix addresses: a crop-area or rotation edit alone (same
+    /// window) needs a new `videoComposition`, not just a resumed player — before this
+    /// fix, the rebuild gate only compared the window, so an edit with no trim change
+    /// left the live tile playing the pre-edit framing indefinitely.
+    func testPlaybackNeedsRebuildWhenOnlyTheCropAdjustmentDiffersFromTarget() {
+        let builtFor = makePlaybackGeometry()
+        let target = makePlaybackGeometry(
+            cropAdjustment: CropAdjustment(scale: 1.5, rotationRadians: 0, offset: .zero))
 
-        XCTAssertFalse(clipCardPlaybackNeedsRebuild(builtFor: window, target: window))
+        XCTAssertTrue(clipCardPlaybackNeedsRebuild(builtFor: builtFor, target: target))
+    }
+
+    func testPlaybackNeedsRebuildWhenOnlyTheCropRectDiffersFromTarget() {
+        let builtFor = makePlaybackGeometry()
+        let target = makePlaybackGeometry(
+            cropRect: NormalizedRect(minX: 0.1, maxX: 0.9, minY: 0.1, maxY: 0.9))
+
+        XCTAssertTrue(clipCardPlaybackNeedsRebuild(builtFor: builtFor, target: target))
+    }
+
+    func testPlaybackDoesNotNeedRebuildWhenTheBuiltGeometryMatchesTarget() {
+        let geometry = makePlaybackGeometry()
+
+        XCTAssertFalse(clipCardPlaybackNeedsRebuild(builtFor: geometry, target: geometry))
     }
 
     func testPlaybackDoesNotNeedRebuildWhenNothingHasBeenBuiltYet() {
-        let target = TrickWindow(startTime: 0, endTime: 2)
+        let target = makePlaybackGeometry()
 
         XCTAssertFalse(clipCardPlaybackNeedsRebuild(builtFor: nil, target: target))
     }

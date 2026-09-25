@@ -225,7 +225,9 @@ default empty state, so it never reads as "your library is empty."
   user to trim.
 - Every tile autoplay-loops its window inline continuously (accessibility
   permitting), layered over its poster thumbnail so there's no blank flash
-  while the loop starts. A derived clip's tile also draws a thin, read-only
+  while the loop starts — cropped and rotated to match the clip's manual
+  adjustment, the same framing the poster and the exported clip use, not the
+  raw source frame. A derived clip's tile also draws a thin, read-only
   timeline over its bottom edge: it spans the whole source video with the
   clip's window drawn as a highlighted segment, so a glance at the grid shows
   roughly which part of the video each clip is from. It isn't draggable —

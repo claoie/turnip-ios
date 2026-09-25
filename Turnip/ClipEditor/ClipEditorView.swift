@@ -124,9 +124,13 @@ struct ClipEditorView: View {
                 y: overlay.cropRect.midY / overlay.videoSize.height)
             let liveScale = viewModel.cropAdjustment.scale * gestureScale
             let liveRotation = Angle(radians: viewModel.cropAdjustment.rotationRadians) + gestureRotation
+            // `cropAdjustment.offset` is displayed-pixel space (`applyCropOffset`'s
+            // contract) while `gestureOffset` is the in-flight drag's own screen points —
+            // `* scale` converts the committed offset into the same screen-point space
+            // this view renders in before the two are summed.
             let liveOffset = CGSize(
-                width: viewModel.cropAdjustment.offset.width + gestureOffset.width,
-                height: viewModel.cropAdjustment.offset.height + gestureOffset.height)
+                width: viewModel.cropAdjustment.offset.width * scale + gestureOffset.width,
+                height: viewModel.cropAdjustment.offset.height * scale + gestureOffset.height)
             ZStack {
                 BareVideoPlayerView(player: viewModel.player)
                     .scaleEffect(liveScale, anchor: anchor)
@@ -143,7 +147,7 @@ struct ClipEditorView: View {
                     .allowsHitTesting(false)
             }
             .contentShape(Rectangle())
-            .gesture(cropGesture)
+            .gesture(cropGesture(previewScale: scale))
         }
         .aspectRatio(overlay.videoSize, contentMode: .fit)
         .clipped()
@@ -155,10 +159,12 @@ struct ClipEditorView: View {
     /// The pinch (zoom), two-finger rotate, and one-finger drag gestures, composed so
     /// all three can run at once. Each commits its cumulative delta into the view model
     /// on end; `@GestureState` supplies the live in-flight delta for rendering.
-    private var cropGesture: some Gesture {
+    /// `previewScale` (on-screen points per displayed pixel) only matters to the drag —
+    /// scale and rotation are unit-agnostic.
+    private func cropGesture(previewScale: CGFloat) -> some Gesture {
         SimultaneousGesture(
             SimultaneousGesture(magnificationGesture, rotationGesture),
-            dragGesture)
+            dragGesture(previewScale: previewScale))
     }
 
     private var magnificationGesture: some Gesture {
@@ -173,10 +179,10 @@ struct ClipEditorView: View {
             .onEnded { value in viewModel.applyCropRotation(value.radians) }
     }
 
-    private var dragGesture: some Gesture {
+    private func dragGesture(previewScale: CGFloat) -> some Gesture {
         DragGesture()
             .updating($gestureOffset) { value, state, _ in state = value.translation }
-            .onEnded { value in viewModel.applyCropOffset(value.translation) }
+            .onEnded { value in viewModel.applyCropOffset(value.translation, previewScale: previewScale) }
     }
 
     /// Stands in for the default player chrome this editor doesn't show: play/pause and

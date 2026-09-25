@@ -159,12 +159,18 @@ final class ClipEditorViewModel: ObservableObject {
         cropAdjustment.rotationRadians += deltaRadians
     }
 
-    /// Applies a drag's cumulative translation since the gesture started, in the
-    /// preview's displayed-pixel space (the view converts from its own screen points).
-    func applyCropOffset(_ delta: CGSize) {
-        guard delta.width.isFinite, delta.height.isFinite else { return }
-        cropAdjustment.offset.width += delta.width
-        cropAdjustment.offset.height += delta.height
+    /// Applies a drag's cumulative translation since the gesture started. `screenPoints`
+    /// is the raw gesture translation in the preview's on-screen point space;
+    /// `previewScale` is the preview's on-screen points per displayed pixel
+    /// (`proxy.size.width / overlay.videoSize.width` in `ClipEditorView.fullFramePreview`).
+    /// Dividing by it converts into the displayed-pixel space `ClipExportTransform.make`
+    /// and `ClipThumbnailLoader` both expect `cropAdjustment.offset` to already be in.
+    func applyCropOffset(_ screenPoints: CGSize, previewScale: CGFloat) {
+        guard screenPoints.width.isFinite, screenPoints.height.isFinite,
+              previewScale.isFinite, previewScale > 0
+        else { return }
+        cropAdjustment.offset.width += screenPoints.width / previewScale
+        cropAdjustment.offset.height += screenPoints.height / previewScale
     }
 
     /// The "Reset crop area" action: discards the manual adjustment and returns to the

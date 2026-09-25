@@ -165,6 +165,16 @@ final class ClipListViewModel: ObservableObject {
     /// then hides itself rather than guessing a scale.
     private var durationTask: Task<TimeInterval?, Never>?
 
+    /// The video track and its geometry, loaded once per asset and shared by every
+    /// card's live preview composition (`videoComposition(cropRect:cropAdjustment:)`).
+    private struct TrackGeometry {
+        let track: AVAssetTrack
+        let naturalSize: CGSize
+        let preferredTransform: CGAffineTransform
+        let frameRate: Float
+    }
+    private var trackGeometryTask: Task<TrackGeometry?, Never>?
+
     /// Prepends the original-video item to `items`: the invariant that
     /// `items[0]` always stands for the source video, enforced in one place rather
     /// than left to every call site to remember. `duration` seeds its full-video
@@ -302,7 +312,7 @@ final class ClipListViewModel: ObservableObject {
 
     /// Loads the asset's duration once per asset; concurrent callers share the single
     /// in-flight task. `@MainActor`-serialized, so the check-then-set is race-free
-    /// (same pattern as `trackGeometry` above).
+    /// (same pattern as `trackGeometry()` below).
     func assetDuration() async -> TimeInterval? {
         if durationTask == nil {
             durationTask = Task { [asset] in
@@ -313,6 +323,56 @@ final class ClipListViewModel: ObservableObject {
         }
         guard let durationTask else { return nil }
         return await durationTask.value
+    }
+
+    /// Loads the source video track's natural size, preferred transform, and nominal
+    /// frame rate once per asset; concurrent callers share the single in-flight task,
+    /// same as `assetDuration()`. `nil` when the asset has no video track or its
+    /// geometry can't be read.
+    private func trackGeometry() async -> TrackGeometry? {
+        if trackGeometryTask == nil {
+            trackGeometryTask = Task { [asset] in
+                guard let track = try? await asset.loadTracks(withMediaType: .video).first
+                else { return nil }
+                guard let naturalSize = try? await track.load(.naturalSize),
+                      let preferredTransform = try? await track.load(.preferredTransform),
+                      let frameRate = try? await track.load(.nominalFrameRate)
+                else { return nil }
+                return TrackGeometry(
+                    track: track, naturalSize: naturalSize,
+                    preferredTransform: preferredTransform, frameRate: frameRate)
+            }
+        }
+        guard let trackGeometryTask else { return nil }
+        return await trackGeometryTask.value
+    }
+
+    /// The live preview composition for one crop rect and crop adjustment, applied to the
+    /// full (untrimmed) source track — `AVPlayerLooper`'s own `timeRange` already bounds
+    /// what actually loops, this only shapes the frame. Built from the same
+    /// `ClipExportTransform.make` the exported clip and the card's poster thumbnail both
+    /// use, so the live-playing tile, the poster underneath it, and the saved clip always
+    /// agree on the framing. `nil` when the track geometry can't be loaded or the crop
+    /// rect is degenerate — the caller falls back to an uncomposed player rather than
+    /// showing nothing.
+    ///
+    /// Takes the crop rect/adjustment directly rather than a `ClipListItem`: the caller
+    /// (`ClipCardView.startPlayback()`) already has to read its target crop geometry off
+    /// a `@State` mirror rather than the (possibly stale-`self`) item, and threading a
+    /// whole `ClipListItem` through here would tempt a caller into rereading `item`
+    /// itself for these two fields instead of passing the mirror it already resolved.
+    func videoComposition(
+        cropRect: NormalizedRect, cropAdjustment: CropAdjustment
+    ) async -> AVVideoComposition? {
+        guard let geometry = await trackGeometry(),
+              let duration = try? await asset.load(.duration)
+        else { return nil }
+        guard let transform = ClipExportTransform.make(
+            cropRect: cropRect, naturalSize: geometry.naturalSize,
+            preferredTransform: geometry.preferredTransform, cropAdjustment: cropAdjustment)
+        else { return nil }
+        return transform.makeVideoComposition(
+            for: geometry.track, duration: duration, frameRate: geometry.frameRate)
     }
 
     /// The card thumbnail, loading lazily. Idempotent and safe to call from every card's
