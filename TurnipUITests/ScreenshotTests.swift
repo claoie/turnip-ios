@@ -44,9 +44,11 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
     }
 
-    /// The filter button's neighbor in the same top-trailing overlay, in the one Home state
-    /// this harness can script without real Photos access: denied. There, `GalleryFilterButton`
-    /// is deliberately dimmed and `.disabled` rather than hidden (`HomeView.swift`) — a Favorites
+    /// The filter button's neighbor in the same top-trailing overlay, in the denied-access Home
+    /// state (a populated grid is what's actually unscriptable without real Photos access — see
+    /// `testGalleryFilterMenuOpen` below for another state that sidesteps that the same way).
+    /// Here `GalleryFilterButton` is deliberately dimmed and `.disabled` rather than hidden
+    /// (`HomeView.swift`) — a Favorites
     /// tap that silently changed nothing while access is denied would be worse than an
     /// unavailable control. A real synthesized touch is the only way to prove `.disabled`
     /// actually blocks the menu rather than just looking dimmed: `isEnabled` alone doesn't show

@@ -123,10 +123,12 @@ stay correct against the filtered set. "Edited" is not offered: PhotoKit has
 no fetch-level predicate for it, only a per-asset resource scan that would
 make every filter change scale with library size instead of staying
 fetch-level. Dimmed and disabled without library access (denied or not yet
-determined) rather than left tappable with no effect. A filter matching no
-videos shows its own empty state ("No matches", the filter's name, a Clear
-Filter button) instead of the library's default empty state, so it never
-reads as "your library is empty."
+determined) rather than left tappable with no effect. An active (non-All
+Items) filter switches the button's glyph to its filled variant and carries
+the same state as the control's `accessibilityValue`, so it's never only a
+visual signal. A filter matching no videos shows its own empty state ("No
+matches", the filter's name, a Clear Filter button) instead of the library's
+default empty state, so it never reads as "your library is empty."
 
 ### 1a. Settings
 

@@ -205,6 +205,10 @@ struct GalleryFilterButton: View {
         .opacity(viewModel.authorization.canReadLibrary ? 1 : 0.4)
         .disabled(!viewModel.authorization.canReadLibrary)
         .accessibilityLabel("Filter")
+        // The filled-vs-outline glyph above is a purely visual signal; this carries the same
+        // state into the accessibility tree, the same convention TrimSliderView's handles use
+        // for a control whose state must never depend only on its shape.
+        .accessibilityValue(viewModel.filter.label)
         .accessibilityIdentifier("gallery-filter-button")
     }
 
