@@ -76,10 +76,10 @@ final class ClipCardPlaybackTests: XCTestCase {
         let recorder = LoopRecorder()
         let playback = makePlayback(recorder)
         playback.start(window: window, isSuspended: false)
-        playback.setSuspended(true, window: window)
+        playback.setSuspended(true)
 
         recorder.isAutoplayEnabled = false
-        playback.setSuspended(false, window: window)
+        playback.setSuspended(false)
 
         XCTAssertEqual(recorder.loops.count, 1)
         XCTAssertEqual(recorder.loops[0].playCount, 1)
@@ -152,7 +152,7 @@ final class ClipCardPlaybackTests: XCTestCase {
         let playback = makePlayback(recorder)
         playback.start(window: window, isSuspended: false)
 
-        playback.setSuspended(true, window: window)
+        playback.setSuspended(true)
 
         XCTAssertEqual(recorder.loops[0].pauseCount, 1)
         XCTAssertEqual(recorder.loops[0].stopCount, 0)
@@ -163,9 +163,9 @@ final class ClipCardPlaybackTests: XCTestCase {
         let recorder = LoopRecorder()
         let playback = makePlayback(recorder)
         playback.start(window: window, isSuspended: false)
-        playback.setSuspended(true, window: window)
+        playback.setSuspended(true)
 
-        playback.setSuspended(false, window: window)
+        playback.setSuspended(false)
 
         XCTAssertEqual(recorder.loops.count, 1)
         XCTAssertEqual(recorder.loops[0].playCount, 2)
@@ -191,13 +191,15 @@ final class ClipCardPlaybackTests: XCTestCase {
         let recorder = LoopRecorder()
         let playback = makePlayback(recorder)
         playback.start(window: window, isSuspended: false)
-        playback.setSuspended(true, window: window)
+        playback.setSuspended(true)
 
         playback.windowChanged(to: editedWindow)
         XCTAssertEqual(recorder.loops[0].stopCount, 1)
         XCTAssertNil(playback.loop)
 
-        playback.setSuspended(false, window: editedWindow)
+        // No window argument: the rebuild can only come from what `windowChanged` stored,
+        // so the assertion below can't pass on a value this test just handed in.
+        playback.setSuspended(false)
 
         XCTAssertEqual(recorder.loops.count, 2)
         XCTAssertEqual(recorder.loops[1].window, editedWindow)

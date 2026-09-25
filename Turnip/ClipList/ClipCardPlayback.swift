@@ -57,11 +57,12 @@ final class AVPlayerLoop: ClipLooping {
 /// A reference type outside the view rather than `@State` on it, for two reasons. The
 /// system video-autoplay read and the loop construction become injectable, which is what
 /// makes the accessibility fallback and the window-change rebuild assertable at all. And
-/// the suspension flag reads live: SwiftUI can invoke an `.onChange(of:)` action closure
-/// with a `self` captured from an earlier render than the one that produced the new
-/// value, so the same flag stored on the view reads stale from inside that closure —
+/// the suspension flag and the window read live: SwiftUI can invoke an `.onChange(of:)`
+/// action closure with a `self` captured from an earlier render than the one that produced
+/// the new value, so the same state read off the view is stale from inside that closure —
 /// observed as every tile bailing out of resume with suspension still set right after the
-/// editor reported it clear.
+/// editor reported it clear, and as a resume after an editor commit rebuilding over the
+/// pre-edit range.
 @MainActor
 final class ClipCardPlayback: ObservableObject {
     /// Builds a loop over `window` of `asset`.
@@ -75,6 +76,7 @@ final class ClipCardPlayback: ObservableObject {
     private let isAutoplayEnabled: @MainActor () -> Bool
     private let makeLoop: MakeLoop
     private var isSuspended = false
+    private var window: TrickWindow?
 
     init(
         asset: AVAsset,
@@ -86,11 +88,12 @@ final class ClipCardPlayback: ObservableObject {
         self.makeLoop = makeLoop
     }
 
-    /// Adopts the tile's current suspension state and starts its loop. Safe to call
-    /// repeatedly — an already-built loop is just resumed.
+    /// Adopts the tile's current window and suspension state, then starts its loop. Safe
+    /// to call repeatedly — an already-built loop is just resumed.
     func start(window: TrickWindow, isSuspended: Bool) {
+        self.window = window
         self.isSuspended = isSuspended
-        resume(window: window)
+        resume()
     }
 
     /// Releases the tile's decoder entirely rather than just pausing, so a tile scrolled
@@ -102,12 +105,12 @@ final class ClipCardPlayback: ObservableObject {
 
     /// Pauses while the editor covers the grid, and resumes when it closes. A pause keeps
     /// the loop mounted: the tile is still on screen and comes straight back.
-    func setSuspended(_ suspended: Bool, window: TrickWindow) {
+    func setSuspended(_ suspended: Bool) {
         isSuspended = suspended
         if suspended {
             loop?.pause()
         } else {
-            resume(window: window)
+            resume()
         }
     }
 
@@ -115,16 +118,17 @@ final class ClipCardPlayback: ObservableObject {
     /// commit that changes the window reuses this same tile — and, without the rebuild,
     /// its loop would keep playing the pre-edit range forever.
     func windowChanged(to window: TrickWindow) {
+        self.window = window
         teardown()
-        resume(window: window)
+        resume()
     }
 
     /// The single gate on playback: the system's video-autoplay setting being off rules
     /// out auto-playing loops entirely (`docs/ACCESSIBILITY.md`'s Clip List checklist —
     /// the tile shows its static poster instead), and a covered grid shouldn't be
     /// decoding behind the editor.
-    private func resume(window: TrickWindow) {
-        guard isAutoplayEnabled(), !isSuspended else { return }
+    private func resume() {
+        guard let window, isAutoplayEnabled(), !isSuspended else { return }
         if loop == nil {
             loop = makeLoop(asset, window)
         }

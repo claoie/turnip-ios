@@ -232,7 +232,7 @@ private struct ClipCardView: View {
         .onAppear { playback.start(window: item.window, isSuspended: isSuspended) }
         .onDisappear { playback.teardown() }
         .onChange(of: isSuspended) { newValue in
-            playback.setSuspended(newValue, window: item.window)
+            playback.setSuspended(newValue)
         }
         // Takes the window from the change itself rather than from `item`: the action
         // closure can run against a `self` captured before the commit that changed it.
