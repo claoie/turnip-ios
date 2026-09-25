@@ -45,7 +45,13 @@ screen's PR rather than retrofitting later.
   shadow that assumes dark footage.
 - Stable `accessibilityIdentifier`s: `video-grid`, `video-tile-<localIdentifier>`,
   `limited-access-banner`, `select-more-videos`, `resolution-banner`,
-  `cancel-video-resolution`, `photos-access-denied`, `open-settings`, `settings-button`.
+  `cancel-video-resolution`, `photos-access-denied`, `open-settings`, `settings-button`,
+  `gallery-filter-button` (`accessibilityLabel` "Filter", `accessibilityValue` the active
+  filter's name — the filled-vs-outline glyph that marks an active filter is otherwise purely
+  visual; its `Menu` rows carry no identifiers of their own, since XCUITest reaches a system
+  menu's items by label/text, not identifier, the same as `CameraCaptureView`'s existing format
+  menu — disabled, not hidden, without library access, so VoiceOver announces it as unavailable
+  rather than omitting it), `clear-gallery-filter`.
 
 ### Processing (#17)
 

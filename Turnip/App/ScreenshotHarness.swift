@@ -1,15 +1,18 @@
 #if DEBUG
 import AVFoundation
 import CoreVideo
+import Photos
 import SwiftUI
 
 // MARK: - Home
 
 /// Home's Photos-denied empty state (`-screenshotHome`).
 ///
-/// The only Home state scriptable without the Photos library: the gallery grid needs
-/// real `PHAsset`s, which have no public initializer, and launching the real `HomeView`
-/// would raise the system permission prompt in the simulator. The denied state is pure
+/// A populated grid is what's actually unscriptable without the Photos library -- it
+/// needs real `PHAsset`s, which have no public initializer. This state and
+/// `ScreenshotGalleryFilterHarness` below both sidestep that by never rendering a grid;
+/// launching the real `HomeView` and letting it fetch would raise the system permission
+/// prompt in the simulator. The denied state here is pure
 /// SwiftUI and deterministic.
 struct ScreenshotHomeHarness: View {
     // Isolated suite, like `ScreenshotSettingsHarness` — a tap here must never read or
@@ -17,22 +20,63 @@ struct ScreenshotHomeHarness: View {
     private static let store = TurnipSettingsStore(
         defaults: UserDefaults(suiteName: "ScreenshotHomeHarness") ?? .standard)
     @State private var showSettings = false
+    // Real `VideoLibraryViewModel` — not a hand-built stand-in — so `GalleryFilterButton`'s
+    // `.disabled` wiring below is the same code path production uses. Forced to `.denied`
+    // rather than reading the CI simulator's actual (un-prompted) PHPhotoLibrary status: this
+    // view never calls `start()`, so nothing here ever raises the real permission prompt, but
+    // the *value* of an un-prompted status is a property of the simulator image, not of this
+    // harness, and this harness needs to be deterministic.
+    @StateObject private var viewModel = VideoLibraryViewModel(authorization: .denied(restricted: false))
 
     var body: some View {
         NavigationStack {
             // Same composition as `HomeView`'s denied branch: the wordmark header as content
-            // under Home's empty, transparent bar, with the same `HomeSettingsButton` overlay
+            // under Home's empty, transparent bar, with the same top-trailing overlay
             // `HomeView.body` attaches at the root, outside the bar's hit-testing band. Wired
-            // to a real sheet present, not a no-op action, so a UI test can `.tap()` the
-            // button and assert the sheet actually opened — the behavior the button exists
-            // for, not just its presence in the hit-testing tree.
+            // to a real sheet present, not a no-op action, so a UI test can `.tap()` a button
+            // and assert the sheet actually opened — the behavior the button exists for, not
+            // just its presence in the hit-testing tree.
             VStack(spacing: 0) {
                 HomeHeader()
                 PhotosAccessDeniedView(restricted: false)
             }
             .modifier(HomeNavigationBar())
-            .overlay(alignment: .topTrailing) { HomeSettingsButton(action: { showSettings = true }) }
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 0) {
+                    GalleryFilterButton(viewModel: viewModel)
+                    HomeSettingsButton(action: { showSettings = true })
+                }
+            }
             .sheet(isPresented: $showSettings) { SettingsView(settings: Self.store) }
+        }
+    }
+}
+
+/// Gallery filter menu, open (`-screenshotGalleryFilter`): the actual feature the button in
+/// `ScreenshotHomeHarness` above only proves is disabled without access. Forced to `.authorized`
+/// so the button is enabled -- and, same as that harness, `reload()`/`start()` are never called,
+/// so this never touches the real `PHPhotoLibrary` or depends on the CI simulator's library
+/// contents. The menu's rows only read `viewModel.filter` and `viewModel.albums` (empty here,
+/// which just hides the Album submenu), not `videos`/`hasLoaded`, so the backdrop behind the
+/// open menu is the same not-yet-loaded spinner state `HomeView` shows before its first fetch
+/// completes -- deterministic, and not claiming a populated grid this harness never fetched.
+struct ScreenshotGalleryFilterHarness: View {
+    @StateObject private var viewModel = VideoLibraryViewModel(authorization: .authorized)
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                HomeHeader()
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .modifier(HomeNavigationBar())
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 0) {
+                    GalleryFilterButton(viewModel: viewModel)
+                    HomeSettingsButton(action: {})
+                }
+            }
         }
     }
 }

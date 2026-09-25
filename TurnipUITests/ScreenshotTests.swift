@@ -12,9 +12,10 @@ final class ScreenshotTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// Home's Photos-denied empty state: the only Home state scriptable without the
-    /// Photos library (the grid needs real PHAssets, which have no public
-    /// initializer, and the real HomeView would raise the system permission prompt).
+    /// Home's Photos-denied empty state, one of the Home states scriptable without the
+    /// Photos library -- a populated grid isn't, since it needs real PHAssets, which have
+    /// no public initializer, and the real HomeView fetching would raise the system
+    /// permission prompt (see testGalleryFilterMenuOpen below for another such state).
     func testHomeAccessDenied() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotHome"]
@@ -41,6 +42,43 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(button.waitForExistence(timeout: 15))
         button.tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
+    }
+
+    /// The filter button's neighbor in the same top-trailing overlay, in the denied-access Home
+    /// state (a populated grid is what's actually unscriptable without real Photos access — see
+    /// `testGalleryFilterMenuOpen` below for another state that sidesteps that the same way).
+    /// Here `GalleryFilterButton` is deliberately dimmed and `.disabled` rather than hidden
+    /// (`HomeView.swift`) — a Favorites
+    /// tap that silently changed nothing while access is denied would be worse than an
+    /// unavailable control. A real synthesized touch is the only way to prove `.disabled`
+    /// actually blocks the menu rather than just looking dimmed: `isEnabled` alone doesn't show
+    /// whether a `Menu` still opens under a real tap, the same reason
+    /// `testHomeSettingsButtonOpensSettings` above taps rather than trusting presence.
+    func testGalleryFilterButtonIsDisabledWithoutPhotosAccess() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotHome"]
+        app.launch()
+        let button = app.buttons["gallery-filter-button"]
+        XCTAssertTrue(button.waitForExistence(timeout: 15))
+        XCTAssertFalse(button.isEnabled)
+        button.tap()
+        XCTAssertFalse(app.buttons["All Items"].waitForExistence(timeout: 2))
+    }
+
+    /// The actual filter feature, open (`-screenshotGalleryFilter`, CONTRIBUTING.md's
+    /// screenshots-on-UI-change ask) — the button being present-but-disabled above doesn't show
+    /// what the feature itself looks like. "All Items" carries a checkmark as the default
+    /// selection; asserting on it (not just the button) proves the menu's real content rendered.
+    func testGalleryFilterMenuOpen() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotGalleryFilter"]
+        app.launch()
+        let button = app.buttons["gallery-filter-button"]
+        XCTAssertTrue(button.waitForExistence(timeout: 15))
+        button.tap()
+        XCTAssertTrue(app.buttons["All Items"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["Favorites"].exists)
+        addScreenshot(named: "gallery-filter-menu")
     }
 
     /// Clip list triage: three detected windows, one trashed, thumbnails as

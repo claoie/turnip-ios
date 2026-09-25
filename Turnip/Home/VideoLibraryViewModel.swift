@@ -51,6 +51,16 @@ final class VideoLibraryViewModel: ObservableObject {
     static let loadMoreThreshold = 18
 
     @Published private(set) var authorization: PhotoLibraryAuthorization
+    /// The active gallery filter. Read by `reload()` to build the fetch, and by
+    /// `GalleryFilterButton` to show which row is checked.
+    @Published private(set) var filter: GalleryFilter = .all
+    /// User albums (regular + shared, not smart albums — `.smartAlbum` is a separate
+    /// `PHAssetCollectionType` and never appears here), for the filter menu's Album submenu.
+    /// Re-fetched on every `reload()` (an album *list* fetch, cheap relative to a video fetch)
+    /// rather than once and cached, so an album created or deleted in Photos is never stuck
+    /// stale for the rest of the session — there's no library change observer wired to it
+    /// separately (`observeLibraryChanges()` only watches `fetchResult`).
+    @Published private(set) var albums: [PHAssetCollection] = []
     /// Newest first. The loaded prefix of `fetchResult`, grown a page at a time as the user scrolls
     /// (`tileAppeared(at:)`). `PHAsset` objects are lightweight faults; the expensive part
     /// (thumbnails) is loaded lazily per visible tile and prefetched around it by `thumbnails`.
@@ -84,10 +94,21 @@ final class VideoLibraryViewModel: ObservableObject {
     private var changeForwarder: PhotoLibraryChangeForwarder?
     private var resolveTask: Task<Void, Never>?
 
-    init(library: PHPhotoLibrary = .shared(), resolver: PhotoVideoResolver = PhotoVideoResolver()) {
+    /// `authorization` overrides the real `PHPhotoLibrary` read when non-nil — the screenshot
+    /// harness's denied-state view needs a `GalleryFilterButton` wired to a real
+    /// `VideoLibraryViewModel` (so `.disabled` is exercised by the same code path production
+    /// uses, not a hand-duplicated stand-in), but reading the CI simulator's actual, un-prompted
+    /// authorization status would make that harness state non-deterministic across simulator
+    /// versions. Same seam shape as `library`/`resolver` above.
+    init(
+        library: PHPhotoLibrary = .shared(),
+        resolver: PhotoVideoResolver = PhotoVideoResolver(),
+        authorization: PhotoLibraryAuthorization? = nil
+    ) {
         self.library = library
         self.resolver = resolver
-        authorization = PhotoLibraryAuthorization(PHPhotoLibrary.authorizationStatus(for: .readWrite))
+        self.authorization =
+            authorization ?? PhotoLibraryAuthorization(PHPhotoLibrary.authorizationStatus(for: .readWrite))
     }
 
     deinit {
@@ -121,10 +142,45 @@ final class VideoLibraryViewModel: ObservableObject {
         }
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let result = PHAsset.fetchAssets(with: .video, options: options)
+        options.predicate = filter.predicate
+        let result: PHFetchResult<PHAsset>
+        if case .album(let collection) = filter {
+            result = PHAsset.fetchAssets(in: collection, options: options)
+        } else {
+            result = PHAsset.fetchAssets(with: options)
+        }
         fetchResult = result
         replaceVideos(with: Self.prefix(of: result, count: Self.pageSize))
         observeLibraryChanges()
+        loadAlbums()
+    }
+
+    /// Applies a new gallery filter and reloads the grid against it. A no-op if `filter` is
+    /// already the requested value — reselecting the current row shouldn't drop the loaded
+    /// prefix and thumbnail cache for nothing.
+    func selectFilter(_ filter: GalleryFilter) {
+        guard filter != self.filter else { return }
+        self.filter = filter
+        reload()
+    }
+
+    /// User albums for the filter menu's Album submenu. Not gated on `authorization.canReadLibrary`
+    /// beyond `reload()`'s own guard — `PHAssetCollection.fetchAssetCollections` only ever
+    /// returns what this app can already see, `.limited` included, the same way the video fetch
+    /// itself is silently scoped.
+    private func loadAlbums() {
+        let result = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
+        var collections: [PHAssetCollection] = []
+        result.enumerateObjects { collection, _, _ in collections.append(collection) }
+        // Sorted here, in Swift, rather than via a PHFetchOptions.sortDescriptors NSSortDescriptor
+        // keyed on "localizedTitle" -- whether PhotoKit actually supports sorting a
+        // PHAssetCollection fetch on that key is unverified, and nothing exercises this line in
+        // CI (the screenshot harness never calls reload()/loadAlbums(), and the unit tests only
+        // cover GalleryFilter's pure predicate) -- so a silently-ignored descriptor could ship
+        // unnoticed. localizedStandardCompare is the same comparison Finder/Files use for names.
+        albums = collections.sorted {
+            ($0.localizedTitle ?? "").localizedStandardCompare($1.localizedTitle ?? "") == .orderedAscending
+        }
     }
 
     /// Limited-access affordance: iOS's own picker for extending the granted subset. Presented
