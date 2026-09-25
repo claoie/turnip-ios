@@ -182,6 +182,58 @@ final class TrickWindowDetectorTests: XCTestCase {
         XCTAssertEqual(atMinimumGranularity.minimumQuietSamples, 1)
     }
 
+    /// `displacementThreshold` is a per-sample-pair *positional* delta, not a velocity, so
+    /// above the shipped default rate it has to scale down the same way the sample-count
+    /// thresholds above do: unscaled, doubling the sample rate halves the real ground an
+    /// athlete covers between consecutive samples for identical motion, silently raising
+    /// the effective speed a trick needs to clear the bar.
+    func testDisplacementThresholdMatchesTheShippedRateAtTheDefaultSampleRate() {
+        XCTAssertEqual(TrickWindowDetector(sampleRate: 10).displacementThreshold, 0.05, accuracy: 0.0001)
+    }
+
+    func testDisplacementThresholdScalesDownAsTheSampleRateRises() {
+        XCTAssertEqual(TrickWindowDetector(sampleRate: 20).displacementThreshold, 0.025, accuracy: 0.0001)
+        XCTAssertEqual(TrickWindowDetector(sampleRate: 30).displacementThreshold, Float(1) / 60, accuracy: 0.0001)
+    }
+
+    /// Below the default rate, `displacementThreshold` stays at the base 0.05 rather than
+    /// also scaling up: real trick footage doesn't reliably produce the larger per-sample
+    /// displacement a naive symmetric scale-up demands (0.5 at `sampleRate == 1` — half the
+    /// normalized frame between two consecutive samples), so scaling up would reintroduce
+    /// "nothing detected" at the low end of the granularity range this fix exists to close
+    /// at the high end.
+    func testDisplacementThresholdStaysAtTheBaseValueBelowTheDefaultSampleRate() {
+        XCTAssertEqual(TrickWindowDetector(sampleRate: 1).displacementThreshold, 0.05, accuracy: 0.0001)
+        XCTAssertEqual(TrickWindowDetector(sampleRate: 5).displacementThreshold, 0.05, accuracy: 0.0001)
+    }
+
+    func testExplicitDisplacementThresholdOverridesTheRateDerivation() {
+        let overridden = TrickWindowDetector(displacementThreshold: 0.05, sampleRate: 30)
+
+        XCTAssertEqual(overridden.displacementThreshold, 0.05, accuracy: 0.0001)
+    }
+
+    /// At 20 samples/sec, per-sample displacement of 0.03 is real motion (roughly the
+    /// same athlete speed `moving(_:)`'s 0.2 represents at the shipped 10 samples/sec
+    /// default) but sits below the *unscaled* 0.05 threshold — an unscaled detector would
+    /// find zero windows in this exact signal. `.count` alone wouldn't discriminate a
+    /// detector that returns no windows at all from one that merges wrongly, so this also
+    /// pins the window's bounds.
+    func testHighSampleRateStillDetectsMotionBelowTheUnscaledThreshold() {
+        let highRate = TrickWindowDetector(sampleRate: 20)
+        let displacements: [Float?] = Array(repeating: 0.03, count: 8)
+        let samples = displacements.enumerated().map { index, displacement in
+            MotionSample(
+                startTime: Double(index) / 20, endTime: Double(index + 1) / 20,
+                displacement: displacement)
+        }
+
+        let windows = highRate.detectWindows(in: samples)
+
+        XCTAssertEqual(windows.count, 1)
+        assertWindow(windows.first, startsAt: 0, endsAt: 0.4 + highRate.trailingBufferSeconds)
+    }
+
     // MARK: - Window bounds
 
     func testExpandsEachWindowByItsOwnLeadingAndTrailingBuffer() {

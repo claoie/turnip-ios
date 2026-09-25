@@ -113,7 +113,15 @@ Pose detection gives us, per processed frame, 17 keypoints — each `{x, y, conf
 **Step 4 (motion signal):** collapse 17 points per frame into one anchor via **hip midpoint** = average of `left_hip` and `right_hip`. Frame-to-frame displacement is `sqrt((hip_x[t] − hip_x[t−1])² + (hip_y[t] − hip_y[t−1])²)`. Smooth with a 3-sample moving average to kill per-frame confidence jitter.
 
 **Step 5 (peak detection):** given the 1D `motion[t]` time-series, identify sustained peaks:
-- Threshold at ≈ 0.05 normalized units per sample
+- Threshold at ≈ 0.05 normalized units per sample at the default 10 samples/sec rate (roughly —
+  the achieved rate is quantized to the source fps' nearest whole-frame stride, so it can differ
+  slightly from the configured one) — `motion[t]` is a per-sample-pair *positional* delta, not a
+  velocity, so above the default rate this threshold scales down as Settings' granularity rises:
+  unscaled, a higher sample rate would silently raise the effective speed a trick needs to clear
+  the bar, since the same real motion covers less ground between denser samples. Below the
+  default rate the threshold stays fixed rather than also scaling up, unlike the sample counts
+  below — real trick footage doesn't reliably clear the larger per-sample displacement a
+  symmetric scale-up would demand
 - Require ≥ 3 consecutive samples above threshold (≥ 300 ms of sustained motion — filters out one-frame anomalies)
 - Require ≥ 10 samples of quiet between peaks (≥ 1 s — prevents splitting one trick into two)
 - Merge peaks within the minimum gap; expand each window by a 1 s leading buffer and a 3 s trailing buffer — the motion signal reads quiet as soon as the athlete's translation slows on landing, which is consistently earlier than the trick visually reads as complete, so the trailing edge needs more room than the leading edge
