@@ -77,6 +77,8 @@ final class ClipCardPlayback: ObservableObject {
     private let makeLoop: MakeLoop
     private var isSuspended = false
     private var window: TrickWindow?
+    /// The window `loop` is actually built to play, or `nil` while there is no loop.
+    private var loopWindow: TrickWindow?
 
     init(
         asset: AVAsset,
@@ -101,6 +103,7 @@ final class ClipCardPlayback: ObservableObject {
     func teardown() {
         loop?.stop()
         loop = nil
+        loopWindow = nil
     }
 
     /// Pauses while the editor covers the grid, and resumes when it closes. A pause keeps
@@ -127,11 +130,27 @@ final class ClipCardPlayback: ObservableObject {
     /// out auto-playing loops entirely (`docs/ACCESSIBILITY.md`'s Clip List checklist —
     /// the tile shows its static poster instead), and a covered grid shouldn't be
     /// decoding behind the editor.
+    ///
+    /// Rebuilds a loop whose range no longer matches `window` rather than assuming the
+    /// caller that moved the window also tore the loop down, so a window that arrives by
+    /// any other path still can't leave the pre-edit range looping indefinitely.
     private func resume() {
         guard let window, isAutoplayEnabled(), !isSuspended else { return }
+        if clipCardPlaybackNeedsRebuild(builtFor: loopWindow, target: window) {
+            teardown()
+        }
         if loop == nil {
             loop = makeLoop(asset, window)
+            loopWindow = window
         }
         loop?.play()
     }
+}
+
+/// Whether a mounted loop has to be replaced to play `target`: `builtFor` is `nil` when
+/// there is no loop yet, which is nothing to rebuild. A plain value comparison, so the
+/// rule holds where a loop can't be constructed at all.
+func clipCardPlaybackNeedsRebuild(builtFor: TrickWindow?, target: TrickWindow) -> Bool {
+    guard let builtFor else { return false }
+    return builtFor != target
 }

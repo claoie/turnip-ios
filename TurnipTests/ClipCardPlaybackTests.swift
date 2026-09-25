@@ -121,6 +121,23 @@ final class ClipCardPlaybackTests: XCTestCase {
         XCTAssertEqual(recorder.loops[0].playCount, 2)
     }
 
+    /// The window can also arrive through `start` — `.task(id: item)` re-fires on an
+    /// editor commit — with the pre-edit loop still mounted and nothing having torn it
+    /// down. Asserts the *new* loop's range, so reusing the stale one fails.
+    func testStartWithAChangedWindowRebuildsOverTheNewRange() {
+        let recorder = LoopRecorder()
+        let playback = makePlayback(recorder)
+        playback.start(window: window, isSuspended: false)
+
+        playback.start(window: editedWindow, isSuspended: false)
+
+        XCTAssertEqual(recorder.loops.count, 2)
+        XCTAssertEqual(recorder.loops[0].stopCount, 1)
+        XCTAssertEqual(recorder.loops[1].window, editedWindow)
+        XCTAssertEqual(recorder.loops[1].playCount, 1)
+        XCTAssertIdentical(playback.loop as? FakeLoop, recorder.loops[1])
+    }
+
     func testTeardownReleasesTheLoop() {
         let recorder = LoopRecorder()
         let playback = makePlayback(recorder)

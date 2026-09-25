@@ -324,16 +324,6 @@ private struct ClipCardView: View {
     }
 }
 
-/// Whether `ClipCardView.startPlayback()` should tear down and rebuild its live player:
-/// `builtFor` is `nil` before any player exists, which is never a mismatch since there's
-/// nothing yet to rebuild. Pulled out of `startPlayback()` as a plain value comparison —
-/// no `AVFoundation`/SwiftUI dependency — so the rebuild decision itself is unit-testable
-/// without a simulator, even though driving the player it gates is not.
-func clipCardPlaybackNeedsRebuild(builtFor: TrickWindow?, target: TrickWindow) -> Bool {
-    guard let builtFor else { return false }
-    return builtFor != target
-}
-
 #Preview {
     NavigationStack {
         ClipListView(
