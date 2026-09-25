@@ -35,6 +35,11 @@ struct RootTabView: View {
             CameraCaptureView(onFinished: handleRecorded, onCancel: { selectedTab = .home })
                 .tag(MainTab.camera)
             HomeView(viewModel: viewModel)
+                // The Camera/Home swipe belongs to Home's root alone. A screen pushed
+                // inside Home (`viewModel.path` non-empty) owns its own horizontal
+                // gestures — Processing browses videos with one — and the pager's
+                // recognizer would otherwise take every one of them first.
+                .background(PageSwipeLock(swipeEnabled: viewModel.path.isEmpty))
                 .tag(MainTab.home)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))

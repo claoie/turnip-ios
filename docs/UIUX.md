@@ -204,18 +204,22 @@ default empty state, so it never reads as "your library is empty."
 - A swipe here navigates the grid rather than reaching Camera: right browses
   to the previous video in Home's grid order, left to the next, replacing the
   screen in place (not stacking a new one, so the back chevron still returns
-  to Home in one step) — disabled while an analysis is running. The video and
-  its controls follow the finger for the whole drag and spring back if it
-  falls short of landing; at either end of the grid it gives only a little,
-  since there is no video that way. The back chevron itself stays put — it
-  belongs to the flow's shared navigation stack, not this screen's own
-  content, the same as every other pushed screen — and for that same reason
-  its own tap target is a second carve-out from the drag, alongside the
-  scrub bar's own track (see its own section below), which claims a
-  horizontal drag for scrubbing instead. Elsewhere on the page a drag
-  browses regardless of where it starts, rather than reaching Home's own
-  swipe-right-for-Camera (§1) or the system's edge-swipe-to-pop, which is why
-  this screen draws its own back chevron rather than the navigation stack's.
+  to Home in one step) — disabled while an analysis is running. The whole
+  page — video, back chevron and bottom controls — follows the finger, and
+  the neighbor's page slides in alongside it showing that video's poster
+  frame, the way the Camera page arrives over Home; once it has landed, its
+  player takes over from the poster in place. A drag that falls short springs
+  back, a quick flick commits even when short, and at either end of the grid
+  the page gives only a little, since there is no video that way. Where the
+  drag starts makes no difference — the leading edge, the top band, the
+  bottom strip, the chevron itself — with one carve-out: the scrub bar's own
+  track (see its section below), which claims a horizontal drag for
+  scrubbing. Two things make that hold. This screen draws no navigation bar
+  and its own back chevron, because the stack's bar would sit over the page,
+  neither moving with it nor passing a drag to it, and the system back button
+  is what the edge-swipe-to-pop rides on. And the Camera/Home pager (§1) is
+  switched off while any screen is pushed over Home, because its swipe would
+  otherwise take every horizontal drag before this screen saw it.
 
 ### 3. Clip List (triage)
 

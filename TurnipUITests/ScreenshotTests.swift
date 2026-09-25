@@ -226,6 +226,44 @@ final class ScreenshotTests: XCTestCase {
         addScreenshot(named: "processing-idle")
     }
 
+    /// A swipe on Processing browses to the neighboring video — the whole page follows the
+    /// finger and the neighbor lands — rather than paging the app's Camera/Home container
+    /// or doing nothing. Driven with real synthesized drags against the harness's page
+    /// `TabView`, because that pager's UIKit recognizer is exactly what no gesture priority
+    /// in SwiftUI can beat, and only a real touch exercises it. The harness's stand-in
+    /// videos carry solid red/green/blue posters, so the screen's center color says which
+    /// one is showing; the stand-in Camera page is gray, so a swipe that reached the pager
+    /// reads as neither.
+    func testProcessingSwipeBrowsesNeighborsInsteadOfPaging() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-screenshotProcessingBrowse"]
+        app.launch()
+        XCTAssertTrue(app.buttons["Start analysis"].waitForExistence(timeout: 15))
+        XCTAssertTrue(waitForCenterColor(.green), "did not start on the middle (green) stand-in video")
+
+        // Left, from the middle of the screen: the next (blue) video.
+        drag(app, fromX: 0.7, toX: 0.05, y: 0.5)
+        XCTAssertTrue(waitForCenterColor(.blue), "left swipe did not land on the next video")
+        XCTAssertTrue(waitUntilHittable(app.buttons["Start analysis"]), "the landed screen's controls never arrived")
+
+        // Right, starting at the leading edge where the navigation stack's edge-pop would
+        // otherwise claim it: back to green.
+        drag(app, fromX: 0.01, toX: 0.7, y: 0.5)
+        XCTAssertTrue(waitForCenterColor(.green), "right swipe from the leading edge did not land on the previous")
+
+        // Right, from the top band under the status bar: the previous (red) video.
+        drag(app, fromX: 0.5, toX: 0.98, y: 0.09)
+        XCTAssertTrue(waitForCenterColor(.red), "right swipe from the top band did not land on the previous video")
+
+        // Right again at the newest end of the grid: nothing that way, and in particular
+        // not the Camera page.
+        drag(app, fromX: 0.3, toX: 0.95, y: 0.5)
+        sleep(1)
+        XCTAssertTrue(waitForCenterColor(.red), "right swipe at the end of the grid left the video")
+        XCTAssertTrue(waitUntilHittable(app.buttons["Start analysis"]), "the screen's controls did not settle")
+        addScreenshot(named: "processing-browse")
+    }
+
     /// Pose diagnostic before a run: the video length and the "Run diagnostic"
     /// button. No inference runs until the button is tapped, so the initial state
     /// needs neither the model nor a real video file.
@@ -246,6 +284,64 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.segmentedControls["settings-analysis-mode"].waitForExistence(timeout: 15))
         addScreenshot(named: "settings")
+    }
+
+    private func drag(_ app: XCUIApplication, fromX: CGFloat, toX: CGFloat, y: CGFloat) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: fromX, dy: y))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: toX, dy: y))
+        start.press(
+            forDuration: 0.05, thenDragTo: end, withVelocity: XCUIGestureVelocity(900),
+            thenHoldForDuration: 0.05)
+    }
+
+    /// The neighbor's poster is on screen a beat before the screen that owns it replaces the
+    /// one that slid away, so a color check alone can pass while the landed controls are
+    /// still a frame or two out.
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if element.exists && element.isHittable { return true }
+            Thread.sleep(forTimeInterval: 0.2)
+        } while Date() < deadline
+        return false
+    }
+
+    private enum Primary {
+        case red, green, blue
+    }
+
+    private struct Pixel {
+        let red: UInt8
+        let green: UInt8
+        let blue: UInt8
+    }
+
+    /// Polls the screen's center pixel until its dominant channel is `primary` — the slide
+    /// and the landing take a moment, and a fixed sleep is either wasted or too short on a
+    /// loaded runner.
+    private func waitForCenterColor(_ primary: Primary, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let pixel = centerPixel() {
+                let (red, green, blue) = (Int(pixel.red), Int(pixel.green), Int(pixel.blue))
+                let dominant: Primary? = red > green + 60 && red > blue + 60 ? .red
+                    : green > red + 60 && green > blue + 60 ? .green
+                    : blue > red + 60 && blue > green + 60 ? .blue
+                    : nil
+                if dominant == primary { return true }
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        } while Date() < deadline
+        return false
+    }
+
+    private func centerPixel() -> Pixel? {
+        guard let image = XCUIScreen.main.screenshot().image.cgImage,
+              let data = image.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data)
+        else { return nil }
+        let offset = (image.height / 2) * image.bytesPerRow + (image.width / 2) * (image.bitsPerPixel / 8)
+        return Pixel(red: bytes[offset], green: bytes[offset + 1], blue: bytes[offset + 2])
     }
 
     private func addScreenshot(named name: String) {

@@ -98,3 +98,54 @@ final class BrowseSwipeTests: XCTestCase {
         XCTAssertNil(BrowseSwipe.commit(translation: -300, hasPrevious: false, hasNext: false))
     }
 }
+
+// MARK: - A flick commits a short drag
+
+extension BrowseSwipeTests {
+    /// A quick flick lifts well short of `commitDistance`, but its projected end reaches far
+    /// past the page — the pager feel, where a fast short swipe turns the page.
+    func testAFlickShortOfTheCommitDistanceBrowsesWhenItsProjectedEndReachesFarEnough() {
+        XCTAssertEqual(
+            BrowseSwipe.commit(
+                translation: 30, predictedTranslation: BrowseSwipe.flickDistance,
+                hasPrevious: true, hasNext: true),
+            .previous)
+        XCTAssertEqual(
+            BrowseSwipe.commit(
+                translation: -30, predictedTranslation: -BrowseSwipe.flickDistance,
+                hasPrevious: true, hasNext: true),
+            .next)
+    }
+
+    func testASlowShortDragSpringsBackEvenWithItsProjectedEndKnown() {
+        XCTAssertNil(
+            BrowseSwipe.commit(
+                translation: 30, predictedTranslation: BrowseSwipe.flickDistance - 1,
+                hasPrevious: true, hasNext: true))
+    }
+
+    /// A finger that reverses before lifting projects the other way; that is not a flick
+    /// toward the neighbor the drag uncovered.
+    func testAFlickProjectedAgainstTheDragDirectionSpringsBack() {
+        XCTAssertNil(
+            BrowseSwipe.commit(
+                translation: 30, predictedTranslation: -BrowseSwipe.flickDistance,
+                hasPrevious: true, hasNext: true))
+    }
+
+    func testAFlickOffTheEndOfTheGridCommitsToNothing() {
+        XCTAssertNil(
+            BrowseSwipe.commit(
+                translation: 30, predictedTranslation: BrowseSwipe.flickDistance,
+                hasPrevious: false, hasNext: true))
+    }
+
+    /// The projection never overrides a drag that already travelled far enough.
+    func testADragPastTheCommitDistanceBrowsesWhateverItsProjectedEnd() {
+        XCTAssertEqual(
+            BrowseSwipe.commit(
+                translation: BrowseSwipe.commitDistance, predictedTranslation: 0,
+                hasPrevious: true, hasNext: true),
+            .previous)
+    }
+}

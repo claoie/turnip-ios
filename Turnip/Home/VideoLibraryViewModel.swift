@@ -339,40 +339,53 @@ final class VideoLibraryViewModel: ObservableObject {
     /// Resolves `asset` and swaps it in for the current top of `path`, rather than pushing a new
     /// entry — Processing's swipe-to-browse between adjacent videos, so the back chevron still
     /// returns to Home in one step instead of walking back through every video swiped past.
-    func browse(to asset: PHAsset) {
+    /// Returns whether a resolution started; `false` means one was already in flight.
+    @discardableResult
+    func browse(to asset: PHAsset) -> Bool {
         resolveAndInsert(asset, detectedClips: nil, replacingTop: true)
     }
 
-    /// Whether a neighbor exists at `offset` from `assetIdentifier` — `-1` for the one before it
-    /// in the grid (`videos` is newest-first, so that's the chronologically newer video), `+1`
-    /// for the one after (older). Bounded by the real library size (`fetchResult`), not just the
-    /// loaded prefix, so this doesn't undercount before the grid has scrolled that far. Read-only
-    /// — never grows `videos` — so it's safe to call from a view body; `browseToNeighbor(of:offset:)`
-    /// is the mutating counterpart for when the swipe actually lands.
-    func hasNeighbor(of assetIdentifier: String, offset: Int) -> Bool {
+    /// The loaded asset with this identifier, or nil once it has left the library (or never
+    /// entered the grid — a take the camera just saved reaches `path` before the library change
+    /// that lists it lands).
+    func asset(withIdentifier identifier: String) -> PHAsset? {
+        videos.first { $0.localIdentifier == identifier }
+    }
+
+    /// The neighbor at `offset` from `assetIdentifier` — `-1` for the one before it in the grid
+    /// (`videos` is newest-first, so that's the chronologically newer video), `+1` for the one
+    /// after (older) — or nil at that end of the grid. Read straight from the fetch result when
+    /// it sits past the loaded prefix, so this reaches the whole library without growing
+    /// `videos`: a pure read, safe to call from a view body. `browseToNeighbor(of:offset:)` is
+    /// the mutating counterpart for when the swipe actually lands.
+    func neighbor(of assetIdentifier: String, offset: Int) -> PHAsset? {
         guard let currentIndex = videos.firstIndex(where: { $0.localIdentifier == assetIdentifier })
-        else { return false }
+        else { return nil }
         let total = fetchResult?.count ?? videos.count
-        return Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: total) != nil
+        guard let index = Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: total)
+        else { return nil }
+        return index < videos.count ? videos[index] : fetchResult?.object(at: index)
     }
 
     /// Resolves the neighbor at `offset` from `assetIdentifier` and browses to it, growing the
     /// loaded prefix first if it sits past what's currently materialized. Call only in response
     /// to user action (the swipe gesture), never from a view body: growing the prefix publishes
-    /// into `videos`, which SwiftUI disallows from within a view update.
-    func browseToNeighbor(of assetIdentifier: String, offset: Int) {
+    /// into `videos`, which SwiftUI disallows from within a view update. Returns whether a
+    /// resolution started, so the swipe that asked can tell a landing in progress from a no-op.
+    @discardableResult
+    func browseToNeighbor(of assetIdentifier: String, offset: Int) -> Bool {
         guard let currentIndex = videos.firstIndex(where: { $0.localIdentifier == assetIdentifier })
-        else { return }
+        else { return false }
         let candidate = currentIndex + offset
         if candidate >= videos.count {
             growPrefix(toAtLeast: candidate + 1)
         }
         guard let index = Self.neighborIndex(currentIndex: currentIndex, offset: offset, count: videos.count)
-        else { return }
-        browse(to: videos[index])
+        else { return false }
+        return browse(to: videos[index])
     }
 
-    /// The index arithmetic behind `hasNeighbor(of:offset:)` and `browseToNeighbor(of:offset:)`,
+    /// The index arithmetic behind `neighbor(of:offset:)` and `browseToNeighbor(of:offset:)`,
     /// split out as the reachable, testable seam — `videos` itself only comes from a live
     /// `PHFetchResult`.
     static func neighborIndex(currentIndex: Int, offset: Int, count: Int) -> Int? {
@@ -385,10 +398,12 @@ final class VideoLibraryViewModel: ObservableObject {
         resolveTask?.cancel()
     }
 
+    /// Returns `false` without doing anything while another resolution is in flight.
+    @discardableResult
     private func resolveAndInsert(
         _ asset: PHAsset, detectedClips: [ProcessedClip]?, replacingTop: Bool
-    ) {
-        guard resolution == nil else { return }
+    ) -> Bool {
+        guard resolution == nil else { return false }
         errorMessage = nil
         resolution = Resolution(assetIdentifier: asset.localIdentifier, downloadProgress: nil)
 
@@ -437,6 +452,7 @@ final class VideoLibraryViewModel: ObservableObject {
                 errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
+        return true
     }
 }
 

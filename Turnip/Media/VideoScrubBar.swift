@@ -14,7 +14,7 @@ struct VideoScrubBar: View {
     @State private var isScrubbing = false
     @State private var timeObserver: Any?
 
-    private static let trackHeight: CGFloat = 3
+    fileprivate static let trackHeight: CGFloat = 3
 
     var body: some View {
         PlaybackControlsPill {
@@ -89,5 +89,26 @@ struct VideoScrubBar: View {
             player.removeTimeObserver(timeObserver)
         }
         timeObserver = nil
+    }
+}
+
+extension VideoScrubBar {
+    /// The bar's resting look with no player behind it — playing, nothing scrubbed, unmuted,
+    /// exactly as a freshly arrived video's real bar first draws. For a page that stands in
+    /// for a screen not yet there (Processing's neighbor pages mid-swipe), so the real bar
+    /// replaces it in place with no visible change. Inert by construction: the buttons do
+    /// nothing, and the caller is expected to keep it out of hit-testing.
+    struct Placeholder: View {
+        var body: some View {
+            PlaybackControlsPill {
+                HStack(spacing: 12) {
+                    PlayPauseButton(isPlaying: true) {}
+                    Capsule()
+                        .fill(.white.opacity(0.3))
+                        .frame(height: VideoScrubBar.trackHeight)
+                    MuteButton(isMuted: false) {}
+                }
+            }
+        }
     }
 }

@@ -53,8 +53,10 @@ struct HomeView: View {
                             runner: ProcessingPipeline(sampleRate: settings.analysisGranularity),
                             autostart: false,
                             popToRoot: popToRoot,
-                            previousVideo: browseAction(for: video, offset: -1),
-                            nextVideo: browseAction(for: video, offset: 1),
+                            initialPoster: viewModel.thumbnails.cachedPoster(for: video.assetIdentifier),
+                            poster: viewModel.asset(withIdentifier: video.assetIdentifier).map(posterLoader),
+                            previous: browseNeighbor(of: video, offset: -1),
+                            next: browseNeighbor(of: video, offset: 1),
                             // Renders this screen's browse-in-flight overlay from the same
                             // `Resolution` state `ResolutionBanner` already shows on the grid.
                             // Almost always the swipe this screen just triggered; showing it for
@@ -89,14 +91,20 @@ struct HomeView: View {
         viewModel.path = []
     }
 
-    /// The closure Processing's swipe gesture calls for `offset` (`-1` previous, `+1` next) —
-    /// nil when `viewModel.hasNeighbor` says there's nothing there, which is what makes the
-    /// swipe a no-op at that end of the grid instead of wrapping around. `hasNeighbor` is a
-    /// pure read, safe to call here in the view body; the actual browse — which can grow
-    /// `viewModel.videos`, a published mutation — happens only once the closure fires.
-    private func browseAction(for video: SelectedVideo, offset: Int) -> (() -> Void)? {
-        guard viewModel.hasNeighbor(of: video.assetIdentifier, offset: offset) else { return nil }
-        return { viewModel.browseToNeighbor(of: video.assetIdentifier, offset: offset) }
+    /// The video Processing's swipe reaches at `offset` (`-1` previous, `+1` next) — nil when
+    /// `viewModel.neighbor` says there's nothing there, which is what makes the swipe give
+    /// only a little at that end of the grid instead of wrapping around. `neighbor` is a pure
+    /// read, safe to call here in the view body; the actual browse — which can grow
+    /// `viewModel.videos`, a published mutation — happens only once the swipe lands.
+    private func browseNeighbor(of video: SelectedVideo, offset: Int) -> BrowseNeighbor? {
+        guard let asset = viewModel.neighbor(of: video.assetIdentifier, offset: offset) else { return nil }
+        return BrowseNeighbor(
+            poster: posterLoader(for: asset),
+            browse: { viewModel.browseToNeighbor(of: video.assetIdentifier, offset: offset) })
+    }
+
+    private func posterLoader(for asset: PHAsset) -> PosterLoader {
+        { pixelSize in await viewModel.thumbnails.poster(for: asset, pixelSize: pixelSize) }
     }
 
     private func clipList(

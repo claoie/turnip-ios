@@ -16,6 +16,11 @@ enum BrowseSwipe {
     /// How far a drag must travel before letting go browses rather than springing back.
     static let commitDistance: CGFloat = 60
 
+    /// How far a drag's projected end must reach for a quick flick that lifts short of
+    /// `commitDistance` to browse anyway — the pager feel, where a fast short swipe turns
+    /// the page and only a slow, short one is a change of mind.
+    static let flickDistance: CGFloat = 200
+
     /// The fraction of the finger's travel the page follows when there is no neighbor that
     /// way — enough that the drag is visibly seen, short enough that it doesn't promise a
     /// video that isn't there.
@@ -30,12 +35,25 @@ enum BrowseSwipe {
     }
 
     /// The neighbor a drag of `translation` lands on once the finger lifts — nil when it fell
-    /// short of `commitDistance`, or when there is no video that way.
-    static func commit(translation: CGFloat, hasPrevious: Bool, hasNext: Bool) -> Direction? {
-        guard abs(translation) >= commitDistance,
-              let direction = direction(of: translation),
+    /// short of `commitDistance` without a flick carrying `predictedTranslation` (where the
+    /// drag would have ended had it kept its speed) past `flickDistance` the same way, or when
+    /// there is no video that way.
+    static func commit(
+        translation: CGFloat,
+        predictedTranslation: CGFloat? = nil,
+        hasPrevious: Bool,
+        hasNext: Bool
+    ) -> Direction? {
+        guard let direction = direction(of: translation),
               isAvailable(direction, hasPrevious: hasPrevious, hasNext: hasNext)
         else { return nil }
+        if abs(translation) >= commitDistance {
+            return direction
+        }
+        let predicted = predictedTranslation ?? translation
+        guard self.direction(of: predicted) == direction, abs(predicted) >= flickDistance else {
+            return nil
+        }
         return direction
     }
 

@@ -392,6 +392,72 @@ private struct ScreenshotProcessingRunner: ProcessingRunning {
     }
 }
 
+// MARK: - Processing swipe-to-browse
+
+/// Processing inside the same page container the app runs it in (`-screenshotProcessingBrowse`):
+/// a stand-in Camera page, then a `NavigationStack` with a Processing screen pushed over a
+/// stand-in Home, wired to three stand-in videos with solid-color posters and the same
+/// `PageSwipeLock` `RootTabView` applies. The UI test swipes and reads the screen's center
+/// color to tell which video landed — and whether the swipe reached the pager instead. The
+/// `/dev/null` assets never decode a frame, so the poster under each player is what shows.
+struct ScreenshotProcessingBrowseHarness: View {
+    static let colors: [UIColor] = [.systemRed, .systemGreen, .systemBlue]
+    @State private var selectedTab = MainTab.home
+    @State private var path: [Int] = [1]
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            Color.gray
+                .ignoresSafeArea()
+                .accessibilityIdentifier("camera-stand-in")
+                .tag(MainTab.camera)
+            NavigationStack(path: $path) {
+                Text("Home stand-in")
+                    .navigationDestination(for: Int.self) { index in
+                        ProcessingView(
+                            video: Self.video(index),
+                            autostart: false,
+                            poster: Self.poster(index),
+                            previous: neighbor(index - 1),
+                            next: neighbor(index + 1),
+                            destination: { _, _ in EmptyView() })
+                        .id(index)
+                    }
+            }
+            .background(PageSwipeLock(swipeEnabled: path.isEmpty))
+            .tag(MainTab.home)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .ignoresSafeArea()
+    }
+
+    private func neighbor(_ index: Int) -> BrowseNeighbor? {
+        guard Self.colors.indices.contains(index) else { return nil }
+        return BrowseNeighbor(poster: Self.poster(index)) {
+            path[path.count - 1] = index
+            return true
+        }
+    }
+
+    private static func video(_ index: Int) -> SelectedVideo {
+        SelectedVideo(
+            assetIdentifier: "stand-in-\(index)",
+            asset: AVURLAsset(url: URL(fileURLWithPath: "/dev/null")),
+            duration: 60)
+    }
+
+    /// A portrait solid-color poster; the size only matters for its aspect ratio.
+    private static func poster(_ index: Int) -> PosterLoader {
+        { _ in
+            let size = CGSize(width: 90, height: 160)
+            return UIGraphicsImageRenderer(size: size).image { context in
+                colors[index].setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+            }
+        }
+    }
+}
+
 // MARK: - Settings
 
 /// Settings sheet (`-screenshotSettings`): the four preferences at their defaults, backed by

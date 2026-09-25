@@ -27,18 +27,24 @@ struct ProcessingView<Destination: View>: View {
     /// Pops the flow's navigation stack back to Home. Threaded into the success
     /// destination so its back button returns to the start of the flow.
     let popToRoot: () -> Void
-    /// Browses to the previous/next video in Home's grid order, swiping right/left over the
-    /// screen respectively — nil at either end of the grid, where the swipe is a no-op instead
-    /// of wrapping around. Both are nil in previews and the screenshot harness, which have no
-    /// grid to browse. The gesture itself, not this nilness, is what disables the swipe while
-    /// a run is in flight (`isAnalyzing`), since a swipe mid-run must not abandon it.
-    let previousVideo: (() -> Void)?
-    let nextVideo: (() -> Void)?
-    /// A browsed-to neighbor's resolution state — non-nil blocks the screen with the same
-    /// determinate progress `ResolutionBanner` already renders on the grid (`Home`), so the
-    /// swipe that triggered it doesn't just look ignored, and a second swipe here is a
-    /// deliberate no-op rather than a silently dropped one (`VideoLibraryViewModel`'s own
-    /// `resolution == nil` guard drops it either way; this only makes that visible).
+    /// This video's own poster frame, drawn under the player until it has decoded a frame of
+    /// its own — so a screen that a swipe just slid into place shows the same picture the
+    /// sliding page did, with no black between. Nil in previews and the screenshot harness,
+    /// and for a video the library can't give a poster for; the player alone then fills in.
+    let poster: PosterLoader?
+    /// The videos before and after this one in Home's grid order, reached by swiping right and
+    /// left respectively — nil at either end of the grid, where the swipe gives a little and
+    /// springs back instead of wrapping around. Both are nil in previews and the screenshot
+    /// harness, which have no grid to browse. Neither nilness disables the swipe while a run
+    /// is in flight; the gesture itself does (`isAnalyzing`), since a swipe mid-run must not
+    /// abandon it.
+    let previous: BrowseNeighbor?
+    let next: BrowseNeighbor?
+    /// A browsed-to neighbor's resolution state — non-nil means the swipe has landed on a
+    /// video that is still being fetched. Blocks the screen after a moment with the same
+    /// determinate progress `ResolutionBanner` already renders on the grid (`Home`), so a slow
+    /// iCloud fetch doesn't look like a swipe that went nowhere, while a local video resolves
+    /// and replaces the screen before the overlay ever shows.
     let browsingNeighbor: VideoLibraryViewModel.Resolution?
     /// Cancels a browse in progress. Nil (never shown) in previews and the screenshot harness.
     let cancelBrowsing: (() -> Void)?
@@ -58,22 +64,43 @@ struct ProcessingView<Destination: View>: View {
     @State private var pendingSeekTime: TimeInterval?
     @State private var isSeeking = false
     /// How far the page has been dragged from its resting position by a swipe-to-browse in
-    /// progress, and where an already-committed one has parked it while the neighbor
-    /// resolves. Reset by the drag's own end, or — when a committed browse is cancelled
-    /// rather than landing — by `browsingNeighbor` clearing with this screen still up.
+    /// progress, and where a committed one has parked it while the neighbor resolves. Reset
+    /// by the drag's own end, or — when a committed browse is cancelled rather than landing —
+    /// by `browsingNeighbor` clearing with this screen still up.
     @State private var dragTranslation: CGFloat = 0
-    /// The window's width, measured by `swipeBackdrop`: how far a committed swipe carries the
-    /// page so it leaves the screen entirely instead of parking partway across it.
-    @State private var pageWidth: CGFloat = 0
+    /// The neighbor a finished swipe committed to. Set from the moment the page starts its
+    /// slide off screen until the browse lands (this screen is replaced) or falls through
+    /// (the page springs back); further drags are ignored meanwhile, so an impatient second
+    /// swipe can't drag the departed video back onto the screen.
+    @State private var committedDirection: BrowseSwipe.Direction?
+    /// The window's size, measured by `swipeBackdrop`: how far a committed swipe carries the
+    /// page so it leaves the screen entirely, where the neighbor pages sit while they wait
+    /// offstage, and the size posters are requested at.
+    @State private var pageSize: CGSize = .zero
+    /// Starts as `initialPoster` — a poster already in hand is on screen from the first
+    /// frame, since `loadPosters()` can only deliver one a frame or more later.
+    @State private var posterImage: UIImage?
+    @State private var neighborPosters: [BrowseSwipe.Direction: UIImage] = [:]
+    /// Whether `browsingOverlay` is up. Lags `browsingNeighbor` by `browsingOverlayDelay`, so a
+    /// local video's near-instant resolve never flashes it over the page that just slid in.
+    @State private var showsBrowsingProgress = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.displayScale) private var displayScale
+
+    /// How long a committed swipe takes to carry the page the rest of the way off screen.
+    /// Computed, since a generic type can't hold a stored static.
+    private static var slideDuration: TimeInterval { 0.25 }
+    private static var browsingOverlayDelay: TimeInterval { 0.4 }
 
     init(
         video: SelectedVideo,
         runner: any ProcessingRunning = ProcessingPipeline(),
         autostart: Bool = true,
         popToRoot: @escaping () -> Void = {},
-        previousVideo: (() -> Void)? = nil,
-        nextVideo: (() -> Void)? = nil,
+        initialPoster: UIImage? = nil,
+        poster: PosterLoader? = nil,
+        previous: BrowseNeighbor? = nil,
+        next: BrowseNeighbor? = nil,
         browsingNeighbor: VideoLibraryViewModel.Resolution? = nil,
         cancelBrowsing: (() -> Void)? = nil,
         destination: @escaping (ProcessingResult, @escaping () -> Void) -> Destination
@@ -81,8 +108,10 @@ struct ProcessingView<Destination: View>: View {
         self.video = video
         self.autostart = autostart
         self.popToRoot = popToRoot
-        self.previousVideo = previousVideo
-        self.nextVideo = nextVideo
+        self.poster = poster
+        _posterImage = State(initialValue: initialPoster)
+        self.previous = previous
+        self.next = next
         self.browsingNeighbor = browsingNeighbor
         self.cancelBrowsing = cancelBrowsing
         self.destination = destination
@@ -90,75 +119,46 @@ struct ProcessingView<Destination: View>: View {
     }
 
     var body: some View {
-        Group {
-            switch viewModel.state {
-            case .idle, .processing:
-                videoStage
-            case .empty:
-                // `StatusStateView` sizes to its own content otherwise, the same as every
-                // other consumer of this view (`HomeView`'s empty grid and denied states apply
-                // the same frame externally). None of these three branches carry a
-                // `.safeAreaInset` the way `videoStage` does, so extending each into the safe
-                // area can't move what that inset is measured from.
-                emptyState
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
-            case .failed(let message):
-                errorState(message: message)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
-            case .succeeded:
-                // Covered by the pushed destination; only visible when navigating back here.
-                Text("Analysis complete.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
+        // A three-page strip with this video's page in the middle: the neighbors wait one
+        // window-width to either side and move with the same drag, so the one being swiped
+        // toward enters as this one leaves, the way the Camera page arrives over Home.
+        ZStack {
+            if previous != nil {
+                neighborPage(.previous)
             }
+            if next != nil {
+                neighborPage(.next)
+            }
+            page
+                .offset(x: dragTranslation)
         }
-        .offset(x: dragTranslation)
-        // The page itself is draggable edge to edge, whatever each branch happens to draw —
+        // The strip is draggable edge to edge, whatever each branch happens to draw —
         // `videoStage`'s player is a `UIViewRepresentable`, and the status states leave
         // transparent space around their text. The backdrop behind covers the rest of the
         // window, which is what a `contentShape` bounded by this view's own frame cannot.
         .contentShape(Rectangle())
         .background(swipeBackdrop)
-        // One attachment, covering every branch above plus the safe-area-inset content
+        // One attachment, covering every page of the strip plus the safe-area-inset content
         // `videoStage` adds below its own video area, and — through the backdrop — the strips
         // outside the safe area as well. See the gesture's own doc comment for why a single
         // high-priority attachment this high in the tree is safe rather than swallowing
         // `VideoScrubBar`'s own drag.
         .highPriorityGesture(videoSwipeGesture)
-        // A neighbor resolving from a swipe blocks the whole screen, not just the video area —
-        // `browsingOverlay` carries its own separate attachment of the same gesture, since
-        // `.overlay` content sits alongside this view rather than inside it. Outside
-        // `.offset` too: it belongs to the video arriving, not the page leaving.
+        // Outside the strip: it belongs to the video arriving, not the page leaving.
         .overlay {
-            if let browsingNeighbor {
+            if showsBrowsingProgress, let browsingNeighbor {
                 browsingOverlay(browsingNeighbor)
             }
         }
-        // Always hidden, not just while analyzing: SwiftUI's interactive edge-swipe-to-pop
-        // rides on the system back button, and a swipe that starts at the leading edge has to
-        // browse to the previous video like any other. The chevron below is the way back,
-        // matching the rest of the pushed flow (`ClipListView`).
+        // No navigation bar at all, rather than a transparent one: the bar is the navigation
+        // stack's own view, laid over this screen's content, so a drag that starts in its
+        // band never reaches this screen's gesture — and it can't slide with the page. The
+        // back chevron is drawn by `page` instead, inside the strip, so it follows the finger
+        // with everything else. The back button stays hidden as well: SwiftUI's interactive
+        // edge-swipe-to-pop rides on it, and a swipe that starts at the leading edge has to
+        // browse to the previous video like any other.
+        .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
-        // Hides the bar's own translucent background, the same as `ClipListView`'s custom
-        // chevron: otherwise its blur would opaque out `swipeBackdrop`'s black beneath it.
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            if isAnalyzing {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        viewModel.cancel()
-                        dismiss()
-                    }
-                }
-            } else {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    BackChevronButton(accessibilityLabel: "Back to Home") { dismiss() }
-                }
-            }
-        }
         .navigationDestination(isPresented: $viewModel.isShowingClips) {
             if let result = viewModel.result {
                 destination(result, popToRoot)
@@ -183,18 +183,83 @@ struct ProcessingView<Destination: View>: View {
                 viewModel.start(video: video)
             }
         }
+        // Posters are sized to the window, so they wait for `swipeBackdrop`'s first measurement.
+        .task(id: pageSize) {
+            await loadPosters()
+        }
+        .task(id: browsingNeighbor != nil) {
+            guard browsingNeighbor != nil else {
+                showsBrowsingProgress = false
+                return
+            }
+            try? await Task.sleep(for: .seconds(Self.browsingOverlayDelay))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.15)) { showsBrowsingProgress = true }
+        }
         .onChange(of: currentProgress?.timestamp) { newValue in
             guard let newValue, let player else { return }
             requestSeek(to: newValue, on: player)
         }
         .onChange(of: browsingNeighbor == nil) { settled in
             // A browse that lands replaces this screen outright, so the only way back here
-            // with the page still parked off-screen is a cancelled one.
-            guard settled, dragTranslation != 0 else { return }
-            withAnimation(.easeOut(duration: 0.2)) { dragTranslation = 0 }
+            // with the page still parked off screen is a cancelled or failed one.
+            guard settled, committedDirection != nil else { return }
+            springBack()
         }
         .onDisappear {
             viewModel.cancel()
+        }
+    }
+
+    /// This video's page: the state-dependent content plus the screen's own top-leading
+    /// control, laid out against the safe area — each branch of the content pushes into the
+    /// status-bar strip on its own, so the control is a sibling in a stack rather than an
+    /// overlay on the branch, or it would sit under the status bar too.
+    private var page: some View {
+        ZStack(alignment: .topLeading) {
+            switch viewModel.state {
+            case .idle, .processing:
+                videoStage
+            case .empty:
+                // `StatusStateView` sizes to its own content otherwise, the same as every
+                // other consumer of this view (`HomeView`'s empty grid and denied states apply
+                // the same frame externally). None of these three branches carry a
+                // `.safeAreaInset` the way `videoStage` does, so extending each into the safe
+                // area can't move what that inset is measured from.
+                emptyState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+            case .failed(let message):
+                errorState(message: message)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+            case .succeeded:
+                // Covered by the pushed destination; only visible when navigating back here.
+                Text("Analysis complete.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+            }
+            topLeadingControl
+        }
+    }
+
+    /// Back to Home, or — while a run is in flight — cancel it, which also leaves. The same
+    /// scrim-circle button the Camera page floats over its preview, since with no navigation
+    /// bar this screen's chrome sits over its media the same way.
+    @ViewBuilder
+    private var topLeadingControl: some View {
+        if isAnalyzing {
+            ScrimIconButton(systemImage: "xmark", accessibilityLabel: "Cancel") {
+                viewModel.cancel()
+                dismiss()
+            }
+            .padding()
+        } else {
+            ScrimIconButton(systemImage: "chevron.backward", accessibilityLabel: "Back to Home") {
+                dismiss()
+            }
+            .padding()
         }
     }
 
@@ -232,90 +297,156 @@ struct ProcessingView<Destination: View>: View {
     }
 
     /// Back/Cancel track the *processing* state rather than `viewModel.isRunning`: idle is
-    /// this screen's resting state now (analysis starts manually), so it keeps the default
-    /// back chevron to Home. `isRunning` still counts idle as running — the pipeline's
-    /// tests lean on that — so it can't drive this.
+    /// this screen's resting state now (analysis starts manually), so it keeps the back
+    /// chevron to Home. `isRunning` still counts idle as running — the pipeline's tests
+    /// lean on that — so it can't drive this.
     private var isAnalyzing: Bool {
         if case .processing = viewModel.state { return true }
         return false
     }
 
     /// Whether a swipe can browse right now: not while a run is in flight (a swipe must not
-    /// abandon it), and not while a previously-committed browse is still resolving.
+    /// abandon it), and not from the moment one swipe commits until its browse lands or
+    /// falls through.
     private var canBrowse: Bool {
-        !isAnalyzing && browsingNeighbor == nil
+        !isAnalyzing && browsingNeighbor == nil && committedDirection == nil
     }
 
-    /// A right drag browses to the previous video, a left drag to the next, the video and its
-    /// controls following the finger the whole way and springing back if the drag falls short —
-    /// `BrowseSwipe` owns that arithmetic, including the shortened travel at either end of the
-    /// grid, where there is no neighbor and the drag can only ever spring back. The back chevron
-    /// stays fixed: it's hosted by the navigation bar the shared `NavigationStack` owns, outside
-    /// this view's own content, so no offset applied here reaches it — unlike `RootTabView`'s
-    /// Camera/Home swipe, which pages between two fully separate hosted views and carries each
-    /// one's own chrome along with it.
+    // MARK: - Swipe to browse
+
+    /// A right drag uncovers the previous video, a left drag the next: the whole strip
+    /// follows the finger, springs back if the drag falls short, and at either end of the
+    /// grid gives only a little, since there is no neighbor to uncover — `BrowseSwipe` owns
+    /// that arithmetic, including the flick that commits a short drag.
     ///
-    /// `body` attaches this once, as high in the tree as the screen's content goes, rather than
-    /// separately on every sub-region: this view sits inside the app's own page-style `TabView`
-    /// (`RootTabView`), whose horizontal swipe would otherwise win the recognition race
-    /// anywhere this gesture doesn't reach and switch tabs to Camera instead of browsing videos
-    /// here — `swipeBackdrop` gives the gesture a full-window black surface behind the content,
-    /// ignoring the safe area, and the navigation bar's own background is hidden the same way
-    /// `ClipListView`'s is. `.highPriorityGesture` on an ancestor beats a plain
-    /// `.gesture` anywhere in its subtree, but when a descendant *also* uses
+    /// `body` attaches this once, as high in the tree as the screen's content goes, rather
+    /// than separately on every sub-region. `.highPriorityGesture` on an ancestor beats a
+    /// plain `.gesture` anywhere in its subtree, but when a descendant *also* uses
     /// `.highPriorityGesture`, SwiftUI resolves that tie in the descendant's favor — which is
     /// what lets `VideoScrubBar`'s own track keep winning locally for scrubbing, without this
-    /// attachment needing to carve that view out.
+    /// attachment needing to carve that view out. What this priority cannot do is beat the
+    /// page `TabView` this screen sits inside (`RootTabView`): its pager is a UIKit scroll
+    /// view that takes a horizontal drag before SwiftUI's gesture system sees it, so
+    /// `PageSwipeLock` switches the pager off while any screen is pushed over Home.
     private var videoSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 20)
             .onChanged { value in
                 guard canBrowse else { return }
                 dragTranslation = BrowseSwipe.pageOffset(
                     translation: value.translation.width,
-                    hasPrevious: previousVideo != nil, hasNext: nextVideo != nil)
+                    hasPrevious: previous != nil, hasNext: next != nil)
             }
             .onEnded { value in
-                // Every path that doesn't browse springs the page back, including a drag that
-                // started while browsing was still allowed and ended after it stopped being.
-                guard canBrowse,
-                      let direction = BrowseSwipe.commit(
-                        translation: value.translation.width,
-                        hasPrevious: previousVideo != nil, hasNext: nextVideo != nil)
+                // A drag that was never allowed to move the strip has nothing to undo; one
+                // that started while browsing was allowed and ended after it stopped being
+                // (the run started, say) springs back like a drag that fell short.
+                guard canBrowse else { return }
+                guard let direction = BrowseSwipe.commit(
+                    translation: value.translation.width,
+                    predictedTranslation: value.predictedEndTranslation.width,
+                    hasPrevious: previous != nil, hasNext: next != nil)
                 else {
-                    withAnimation(.easeOut(duration: 0.2)) { dragTranslation = 0 }
+                    springBack()
                     return
                 }
-                // Carried the rest of the way off screen rather than snapped back: the video
-                // being left is gone, and the neighbor's `browsingOverlay` takes the screen
-                // from here.
-                withAnimation(.easeOut(duration: 0.2)) {
-                    dragTranslation = direction == .previous ? pageWidth : -pageWidth
-                }
-                browse(direction == .previous ? previousVideo : nextVideo)
+                commit(direction)
             }
+    }
+
+    /// Carries the strip the rest of the way, so the neighbor's page sits where this one was,
+    /// then browses. The browse waits for the slide to finish: a local video resolves faster
+    /// than the page moves, and landing mid-slide would cut the motion short. Stops the idle
+    /// player first — nothing would call `pause()` on it once this screen's identity changes
+    /// underneath it, the same reason `idleControls`' "Start analysis" button pauses first.
+    private func commit(_ direction: BrowseSwipe.Direction) {
+        committedDirection = direction
+        player?.pause()
+        withAnimation(.easeOut(duration: Self.slideDuration)) {
+            dragTranslation = direction == .previous ? pageSize.width : -pageSize.width
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.slideDuration))
+            guard committedDirection == direction else { return }
+            let neighbor = direction == .previous ? previous : next
+            if neighbor?.browse() != true {
+                springBack()
+            }
+        }
+    }
+
+    private func springBack() {
+        committedDirection = nil
+        withAnimation(.easeOut(duration: 0.2)) { dragTranslation = 0 }
     }
 
     /// The full-window surface the swipe is measured and hit-tested against. A `.background`
     /// rather than an `.ignoresSafeArea()` on the screen's own content: that would also move
     /// what `videoStage`'s `.safeAreaInset` insets from, dropping the scrub bar and the
     /// "Start analysis" button under the home indicator. Black, so it reads as the same
-    /// backdrop `videoStage` already draws — and as the empty space a dragged page uncovers.
+    /// backdrop `videoStage` already draws.
     private var swipeBackdrop: some View {
         GeometryReader { proxy in
             Color.black
-                .onAppear { pageWidth = proxy.size.width }
-                .onChange(of: proxy.size.width) { pageWidth = $0 }
+                .onAppear { pageSize = proxy.size }
+                .onChange(of: proxy.size) { pageSize = $0 }
         }
         .ignoresSafeArea()
     }
 
-    /// Stops the idle player before handing off to a neighbor — nothing would call
-    /// `pause()` on it once this screen's identity changes underneath it, the same reason
-    /// `idleControls`' "Start analysis" button pauses first.
-    private func browse(_ navigate: (() -> Void)?) {
-        guard let navigate else { return }
-        player?.pause()
-        navigate()
+    /// The page for the video one swipe away in `direction`, laid out like `page` in its idle
+    /// state: the poster aspect-fit into the full window exactly as `BareVideoPlayerView` fits
+    /// the video itself, under the same chevron and resting controls the arriving screen will
+    /// draw — so what slides in is the screen about to land, and landing changes nothing but
+    /// the poster giving way to the player. Inert: nothing here can be tapped, and nothing
+    /// here is an accessibility element — the stand-in controls are replaced wholesale by an
+    /// empty representation rather than merely hidden, since the real controls arrive with
+    /// the real screen and a second "Start analysis" a screen-width offstage would still be
+    /// found by anything walking the element tree.
+    private func neighborPage(_ direction: BrowseSwipe.Direction) -> some View {
+        ZStack(alignment: .topLeading) {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let image = neighborPosters[direction] {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .ignoresSafeArea()
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 12) {
+                    VideoScrubBar.Placeholder()
+                        .padding(.horizontal)
+                    PrimaryActionBar("Start analysis") {}
+                }
+            }
+            ScrimIconButton(systemImage: "chevron.backward", accessibilityLabel: "Back to Home") {}
+                .padding()
+        }
+        .allowsHitTesting(false)
+        .accessibilityRepresentation { EmptyView() }
+        .offset(x: dragTranslation + (direction == .previous ? -pageSize.width : pageSize.width))
+    }
+
+    /// Requests this video's poster and both neighbors' at the window's pixel size, once the
+    /// window has been measured. Each loads independently; a neighbor whose poster hasn't
+    /// arrived by the time a swipe starts simply slides in black until it does.
+    private func loadPosters() async {
+        guard pageSize != .zero else { return }
+        let pixelSize = ThumbnailLoader.pixelSize(for: pageSize, scale: displayScale)
+        async let own = poster?(pixelSize)
+        async let previousPoster = previous?.poster(pixelSize)
+        async let nextPoster = next?.poster(pixelSize)
+        if posterImage == nil, let image = await own {
+            posterImage = image
+        }
+        if let image = await previousPoster {
+            neighborPosters[.previous] = image
+        }
+        if let image = await nextPoster {
+            neighborPosters[.next] = image
+        }
     }
 
     /// Mirrors `ResolutionBanner`'s two-state rendering of the same `Resolution` type — an
@@ -345,14 +476,10 @@ struct ProcessingView<Destination: View>: View {
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.55).ignoresSafeArea())
-        .allowsHitTesting(true)
-        // `.overlay` content sits alongside `body`'s `Group`, not inside it, so `body`'s own
-        // gesture attachment doesn't reach here — without this, a swipe on this overlay would
-        // have no recognizer of its own and fall through to the page `TabView` beneath it. The
-        // gesture's own `browsingNeighbor == nil` guard is what keeps it a no-op while this
-        // overlay is up.
-        .highPriorityGesture(videoSwipeGesture)
+        .transition(.opacity)
     }
+
+    // MARK: - Video stage
 
     /// The video stage: the picked video fills the screen with no native playback
     /// chrome (`BareVideoPlayerView`) — Photos-app look, black background, no title, no
@@ -363,6 +490,15 @@ struct ProcessingView<Destination: View>: View {
     private var videoStage: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            // Under the player, which is transparent until it has decoded a frame: the same
+            // letterbox fit, so the first decoded frame lands exactly over it.
+            if let posterImage {
+                Image(uiImage: posterImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+            }
             if let player {
                 BareVideoPlayerView(player: player)
                     .ignoresSafeArea()
