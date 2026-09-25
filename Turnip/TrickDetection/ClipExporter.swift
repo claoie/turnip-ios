@@ -128,7 +128,9 @@ struct ClipExportTransform {
     /// actually loops, this only shapes the frame). `frameRate` falls back to 30 when the
     /// track doesn't report one, rather than a 1 fps timescale, to keep the render clock
     /// sane.
-    func makeVideoComposition(for track: AVAssetTrack, duration: CMTime, frameRate: Float) -> AVMutableVideoComposition {
+    func makeVideoComposition(
+        for track: AVAssetTrack, duration: CMTime, frameRate: Float
+    ) -> AVMutableVideoComposition {
         let videoComposition = AVMutableVideoComposition()
         videoComposition.renderSize = renderSize
         let timescale = frameRate > 0 ? Int32(frameRate.rounded()) : 30

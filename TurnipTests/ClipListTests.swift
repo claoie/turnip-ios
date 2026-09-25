@@ -274,11 +274,17 @@ final class ClipListTests: XCTestCase {
     }
 
     /// Regression for the clip list's live preview player showing the raw, un-cropped
-    /// source regardless of the item's crop rect or adjustment (issue 168's rotation/
-    /// crop-area clause): `videoComposition(for:)` — what `ClipCardView.startPlayback()`
-    /// attaches to its `AVPlayerItem` before looping — must render at the crop's own
-    /// size, not the source's. A half-width crop discriminates: an un-composed or
-    /// wrongly-composed player would report the full 64px render width.
+    /// source regardless of the item's crop rect or adjustment: `videoComposition(cropRect:
+    /// cropAdjustment:)` — what `ClipCardView.startPlayback()` attaches to its
+    /// `AVPlayerItem` before looping — must render at the crop's own size, not the
+    /// source's, with the crop actually wired into the layer instruction, not just the
+    /// render size. A half-width crop discriminates `renderSize`: an un-composed player
+    /// would report the full 64px width. `getTransformRamp` reading back exactly the
+    /// transform `ClipExportTransform.make` predicts discriminates the layer instruction
+    /// itself: the composition path shares `ClipExportTransform.makeVideoComposition` with
+    /// the exporter, but a future edit that dropped `setTransform` there would leave
+    /// `renderSize` alone (this test's first assertion would still pass) while quietly
+    /// un-cropping and un-rotating both the tile and the exported clip.
     @MainActor
     func testVideoCompositionRendersAtTheCropRectsSize() async throws {
         let url = try await TestVideoWriter.writeTestVideo(frameCount: 1, width: 64, height: 64, fps: 30)
@@ -289,21 +295,38 @@ final class ClipListTests: XCTestCase {
         let viewModel = makeViewModel(items: [item], asset: asset, duration: 1.0 / 30)
         let target = viewModel.items[1]
 
-        let composition = try XCTUnwrap(await viewModel.videoComposition(for: target))
+        let composition = try XCTUnwrap(await viewModel.videoComposition(
+            cropRect: target.cropRect, cropAdjustment: target.cropAdjustment))
 
         XCTAssertEqual(composition.renderSize, CGSize(width: 32, height: 64))
+
+        let track = try await asset.loadTracks(withMediaType: .video)[0]
+        let naturalSize = try await track.load(.naturalSize)
+        let preferredTransform = try await track.load(.preferredTransform)
+        let expected = try XCTUnwrap(ClipExportTransform.make(
+            cropRect: halfWidth, naturalSize: naturalSize, preferredTransform: preferredTransform,
+            cropAdjustment: .identity))
+        let instruction = try XCTUnwrap(composition.instructions.first)
+        let layerInstruction = try XCTUnwrap(instruction.layerInstructions.first)
+        var start = CGAffineTransform.identity
+        var end = CGAffineTransform.identity
+        var ramp = CMTimeRange(start: .zero, duration: .zero)
+        XCTAssertTrue(layerInstruction.getTransformRamp(for: .zero, start: &start, end: &end, timeRange: &ramp))
+        XCTAssertEqual(start, expected.layerTransform)
+        XCTAssertEqual(end, expected.layerTransform)
     }
 
-    /// `dummyAsset()` resolves to nothing, so the track load `videoComposition(for:)`
-    /// depends on fails — this must return `nil` rather than throw or hang, so
-    /// `startPlayback()`'s caller can fall back to an uncomposed player.
+    /// `dummyAsset()` resolves to nothing, so the track load `videoComposition(cropRect:
+    /// cropAdjustment:)` depends on fails — this must return `nil` rather than throw or
+    /// hang, so `startPlayback()`'s caller can fall back to an uncomposed player.
     @MainActor
     func testVideoCompositionIsNilWhenTheTrackCannotBeLoaded() async {
         let item = makeItem()
         let viewModel = makeViewModel(items: [item])
         let target = viewModel.items[1]
 
-        let composition = await viewModel.videoComposition(for: target)
+        let composition = await viewModel.videoComposition(
+            cropRect: target.cropRect, cropAdjustment: target.cropAdjustment)
 
         XCTAssertNil(composition)
     }
