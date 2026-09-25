@@ -164,9 +164,7 @@ final class ClipEditorViewModel: ObservableObject {
     /// `previewScale` is the preview's on-screen points per displayed pixel
     /// (`proxy.size.width / overlay.videoSize.width` in `ClipEditorView.fullFramePreview`).
     /// Dividing by it converts into the displayed-pixel space `ClipExportTransform.make`
-    /// and `ClipThumbnailLoader` both expect `cropAdjustment.offset` to already be in —
-    /// leaving the raw screen-point delta unconverted made a pan barely register against a
-    /// source video whose resolution is many times the preview's on-screen point size.
+    /// and `ClipThumbnailLoader` both expect `cropAdjustment.offset` to already be in.
     func applyCropOffset(_ screenPoints: CGSize, previewScale: CGFloat) {
         guard screenPoints.width.isFinite, screenPoints.height.isFinite,
               previewScale.isFinite, previewScale > 0

@@ -207,12 +207,19 @@ private struct ClipCardView: View {
     /// `isSuspended` above. `startPlayback()` reads this instead of `item.window`
     /// directly, so it stays correct even from a call site whose `self` is stale.
     @State private var playbackWindow: TrickWindow?
-    /// The window the live `player`/`looper` are actually built to loop, or `nil` before
-    /// the first build. `startPlayback()` compares this against `playbackWindow` and
-    /// rebuilds on a mismatch, rather than trusting that whoever called it already tore
-    /// the player down — so a stale player left by any calling order self-corrects on the
-    /// next call instead of looping the wrong range indefinitely.
-    @State private var playerWindow: TrickWindow?
+    /// The window/cropRect/cropAdjustment the live `player`/`looper` are actually built
+    /// to show, or `nil` before the first build. `startPlayback()` compares this against
+    /// the card's current target and rebuilds on a mismatch, rather than trusting that
+    /// whoever called it already tore the player down — so a stale player left by any
+    /// calling order self-corrects on the next call instead of looping the wrong range,
+    /// or the pre-edit framing, indefinitely.
+    @State private var playerGeometry: ClipCardPlaybackGeometry?
+    /// The geometry a `videoComposition(for:)` load is currently in flight for, so a
+    /// second `startPlayback()` call that lands before the first one's player exists
+    /// (e.g. `.task(id:)` and `.onAppear` both firing on first appearance) joins it
+    /// instead of racing a duplicate build.
+    @State private var buildingGeometry: ClipCardPlaybackGeometry?
+    @State private var playbackTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -310,41 +317,67 @@ private struct ClipCardView: View {
     /// video-autoplay setting is off (`docs/ACCESSIBILITY.md`'s Clip List checklist rules
     /// out auto-playing loops in that case, so the tile just shows its static poster) or
     /// the editor is currently covering the grid. Safe to call repeatedly — an existing
-    /// player matching `playbackWindow` is just resumed; one that doesn't match is torn
-    /// down and rebuilt first.
+    /// player matching the target geometry is just resumed; one that doesn't match (a new
+    /// window, or a crop/rotation edit alone) is torn down and rebuilt.
+    ///
+    /// The rebuilt player's `AVPlayerItem` carries the same `ClipExportTransform`-derived
+    /// `videoComposition` the poster thumbnail and the exported clip use, loaded
+    /// asynchronously (`ClipListViewModel.videoComposition(for:)`) and attached to the
+    /// template item *before* `AVPlayerLooper` is constructed from it — the looper reads
+    /// the template's properties at construction, so patching `videoComposition` onto an
+    /// already-looping item would not apply. Player creation is deferred behind this
+    /// load rather than happening synchronously and patched in later; the poster stays up
+    /// for the (usually cache-hit, near-instant) wait, which is exactly the fallback it
+    /// already exists for.
     private func startPlayback() {
         guard UIAccessibility.isVideoAutoplayEnabled, !suspended else { return }
         // Falls back to `item.window` rather than a hard `guard let`: every call site sets
         // `playbackWindow` before calling in, but a fallback to the same read this method
         // used to do unconditionally is a strictly smaller regression than showing no
         // video at all if some future call site doesn't.
-        let target = playbackWindow ?? item.window
-        if clipCardPlaybackNeedsRebuild(builtFor: playerWindow, target: target) {
+        let targetWindow = playbackWindow ?? item.window
+        let target = ClipCardPlaybackGeometry(
+            window: targetWindow, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment)
+        if clipCardPlaybackNeedsRebuild(builtFor: playerGeometry, target: target) {
             teardownPlayback()
         }
-        if player == nil {
+        if player != nil {
+            player?.play()
+            return
+        }
+        guard buildingGeometry != target else { return }
+        buildingGeometry = target
+        playbackTask = Task {
+            let composition = await viewModel.videoComposition(for: item)
+            guard !Task.isCancelled else { return }
             let templateItem = AVPlayerItem(sdrAsset: viewModel.sourceAsset)
+            templateItem.videoComposition = composition
             let queuePlayer = AVQueuePlayer()
             queuePlayer.isMuted = true
             let timeRange = CMTimeRange(
-                start: CMTime(seconds: target.startTime, preferredTimescale: 600),
-                end: CMTime(seconds: target.endTime, preferredTimescale: 600))
+                start: CMTime(seconds: target.window.startTime, preferredTimescale: 600),
+                end: CMTime(seconds: target.window.endTime, preferredTimescale: 600))
             looper = AVPlayerLooper(player: queuePlayer, templateItem: templateItem, timeRange: timeRange)
             player = queuePlayer
-            playerWindow = target
+            playerGeometry = target
+            buildingGeometry = nil
+            player?.play()
         }
-        player?.play()
     }
 
     /// Releases the tile's decoder entirely rather than just pausing — called on
     /// `onDisappear`, so a tile scrolled far off-screen doesn't keep holding a decode
-    /// pipeline open behind ones that are actually visible.
+    /// pipeline open behind ones that are actually visible. Also cancels a build still in
+    /// flight, so a card that disappears mid-load never assigns a player after the fact.
     private func teardownPlayback() {
+        playbackTask?.cancel()
+        playbackTask = nil
+        buildingGeometry = nil
         player?.pause()
         looper?.disableLooping()
         looper = nil
         player = nil
-        playerWindow = nil
+        playerGeometry = nil
     }
 
     /// The diameter every top-corner icon circle renders at.
@@ -385,12 +418,25 @@ private struct ClipCardView: View {
     }
 }
 
+/// Everything `ClipCardView`'s live player needs to loop the right range with the right
+/// framing: a window change alone needs a rebuild (a different `AVPlayerLooper` time
+/// range), and so does a crop-rect or crop-adjustment change alone (a different
+/// `videoComposition`, built fresh in `startPlayback()`) — trimming never touches
+/// `cropAdjustment` and an editor commit can change any subset of the three.
+struct ClipCardPlaybackGeometry: Equatable {
+    let window: TrickWindow
+    let cropRect: NormalizedRect
+    let cropAdjustment: CropAdjustment
+}
+
 /// Whether `ClipCardView.startPlayback()` should tear down and rebuild its live player:
 /// `builtFor` is `nil` before any player exists, which is never a mismatch since there's
 /// nothing yet to rebuild. Pulled out of `startPlayback()` as a plain value comparison —
 /// no `AVFoundation`/SwiftUI dependency — so the rebuild decision itself is unit-testable
 /// without a simulator, even though driving the player it gates is not.
-func clipCardPlaybackNeedsRebuild(builtFor: TrickWindow?, target: TrickWindow) -> Bool {
+func clipCardPlaybackNeedsRebuild(
+    builtFor: ClipCardPlaybackGeometry?, target: ClipCardPlaybackGeometry
+) -> Bool {
     guard let builtFor else { return false }
     return builtFor != target
 }

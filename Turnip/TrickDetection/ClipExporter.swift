@@ -120,6 +120,27 @@ struct ClipExportTransform {
 
         return ClipExportTransform(renderSize: renderSize, layerTransform: layerTransform)
     }
+
+    /// Builds an `AVMutableVideoComposition` applying this transform to `track`, covering
+    /// `duration` from the start with a single instruction — shared by `ClipExporter`
+    /// (over a trimmed composition track) and the clip list's live preview player (over
+    /// the untrimmed source track; `AVPlayerLooper`'s own `timeRange` bounds what
+    /// actually loops, this only shapes the frame). `frameRate` falls back to 30 when the
+    /// track doesn't report one, rather than a 1 fps timescale, to keep the render clock
+    /// sane.
+    func makeVideoComposition(for track: AVAssetTrack, duration: CMTime, frameRate: Float) -> AVMutableVideoComposition {
+        let videoComposition = AVMutableVideoComposition()
+        videoComposition.renderSize = renderSize
+        let timescale = frameRate > 0 ? Int32(frameRate.rounded()) : 30
+        videoComposition.frameDuration = CMTime(value: 1, timescale: timescale)
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
+        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+        layerInstruction.setTransform(layerTransform, at: .zero)
+        instruction.layerInstructions = [layerInstruction]
+        videoComposition.instructions = [instruction]
+        return videoComposition
+    }
 }
 
 private extension CGFloat {
@@ -340,23 +361,12 @@ actor ClipExporter {
         in composition: AVMutableComposition,
         transform: ClipExportTransform
     ) async throws -> AVMutableVideoComposition {
-        let videoComposition = AVMutableVideoComposition()
-        videoComposition.renderSize = transform.renderSize
         let frameRate = try await videoTrack.load(.nominalFrameRate)
-        // nominalFrameRate is 0 on assets that don't report one; fall back to 30 rather
-        // than a 1 fps timescale so the render clock stays sane.
-        let timescale = frameRate > 0 ? Int32(frameRate.rounded()) : 30
-        videoComposition.frameDuration = CMTime(value: 1, timescale: timescale)
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: composition.duration)
         guard let compositionTrack = composition.tracks(withMediaType: .video).first else {
             throw ClipExportError.exportFailed(reason: "composition lost its video track")
         }
-        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionTrack)
-        layerInstruction.setTransform(transform.layerTransform, at: .zero)
-        instruction.layerInstructions = [layerInstruction]
-        videoComposition.instructions = [instruction]
-        return videoComposition
+        return transform.makeVideoComposition(
+            for: compositionTrack, duration: composition.duration, frameRate: frameRate)
     }
 
     /// Runs the session to a terminal state, reporting progress along the way.
