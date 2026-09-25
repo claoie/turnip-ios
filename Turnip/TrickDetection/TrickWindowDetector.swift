@@ -14,9 +14,12 @@ struct TrickWindow: Hashable, Sendable {
 ///
 /// `minimumSustainedSamples`/`minimumQuietSamples` default to the design doc's durations (300 ms
 /// / 1 s) rounded to samples at `sampleRate` — the signal is one sample per kept frame pair, so
-/// at the shipped default of 10 samples/sec that is 3 and 10 samples. Passing an explicit
-/// `minimumSustainedSamples`/`minimumQuietSamples` overrides the derivation, for a caller
-/// (tests) that wants exact sample counts regardless of rate.
+/// at the shipped default of 10 samples/sec that is 3 and 10 samples. `displacementThreshold`
+/// defaults to a rate-scaled value for the same reason: all three defaults derive from
+/// `sampleRate` so the detector stays calibrated the same way at every Settings granularity, not
+/// just the shipped default. Passing any of `displacementThreshold`/`minimumSustainedSamples`/
+/// `minimumQuietSamples` explicitly overrides its derivation, for a caller (tests) that wants an
+/// exact value regardless of rate.
 struct TrickWindowDetector: Sendable {
     /// Normalized units per sample.
     let displacementThreshold: Float
@@ -35,9 +38,12 @@ struct TrickWindowDetector: Sendable {
 
     private static let sustainedSeconds = 0.3
     private static let quietSeconds = 1.0
+    /// `displacementThreshold`'s calibrated value at `VideoFrameSampler.targetSamplesPerSecond`
+    /// — see `scaledDisplacementThreshold` below for why it doesn't stay fixed across rates.
+    private static let displacementThresholdAtBaseRate: Float = 0.05
 
     init(
-        displacementThreshold: Float = 0.05,
+        displacementThreshold: Float? = nil,
         minimumSustainedSamples: Int? = nil,
         minimumQuietSamples: Int? = nil,
         sampleRate: Int = VideoFrameSampler.targetSamplesPerSecond,
@@ -45,12 +51,27 @@ struct TrickWindowDetector: Sendable {
         trailingBufferSeconds: TimeInterval = 3
     ) {
         self.displacementThreshold = displacementThreshold
+            ?? Self.scaledDisplacementThreshold(sampleRate: sampleRate)
         self.minimumSustainedSamples = minimumSustainedSamples
             ?? Self.sampleCount(seconds: Self.sustainedSeconds, sampleRate: sampleRate)
         self.minimumQuietSamples = minimumQuietSamples
             ?? Self.sampleCount(seconds: Self.quietSeconds, sampleRate: sampleRate)
         self.leadingBufferSeconds = leadingBufferSeconds
         self.trailingBufferSeconds = trailingBufferSeconds
+    }
+
+    /// `MotionSample.displacement` is a raw positional delta between two *consecutive*
+    /// samples, not a velocity — so the same real motion covers proportionally less distance
+    /// as `sampleRate` rises, since denser samples land closer together in time. Scaling
+    /// `displacementThresholdAtBaseRate` by the baseline rate over the actual one keeps the
+    /// effective velocity threshold constant, so raising Settings' analysis granularity
+    /// samples motion more finely instead of silently raising the bar a trick's motion has to
+    /// clear to register as moving at all — left uncorrected, this is what made high-
+    /// granularity runs find no tricks even in footage with obvious motion.
+    private static func scaledDisplacementThreshold(sampleRate: Int) -> Float {
+        guard sampleRate > 0 else { return displacementThresholdAtBaseRate }
+        return displacementThresholdAtBaseRate
+            * Float(VideoFrameSampler.targetSamplesPerSecond) / Float(sampleRate)
     }
 
     /// Rounds a duration to whole samples at `sampleRate`, floored at 1 — a zero-sample
