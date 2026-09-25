@@ -16,6 +16,8 @@ Stdlib only (unittest), so it runs on a stock runner:
 """
 
 import ast
+import contextlib
+import io
 import os
 import struct
 import tempfile
@@ -181,6 +183,10 @@ class MainDispatchTest(unittest.TestCase):
     reaches and acts on is_stale_head()/the missing-PR case, not just that
     those pieces are individually correct in isolation."""
 
+    # A PR_NUMBER inherited from the caller's environment short-circuits
+    # resolution entirely, so it has to be cleared, not just left unset.
+    CLEARED = ("PR_NUMBER",)
+
     @classmethod
     def setUpClass(cls):
         cls.mod = load_script()
@@ -192,8 +198,11 @@ class MainDispatchTest(unittest.TestCase):
             "SCREENSHOTS_DIR": "/does/not/matter/for/these/paths",
             "HEAD_OWNER": "fork-owner", "HEAD_BRANCH": "feature",
         }
-        self._prior = {k: os.environ.get(k) for k in self._env}
+        self._prior = {k: os.environ.get(k)
+                       for k in tuple(self._env) + self.CLEARED}
         os.environ.update(self._env)
+        for key in self.CLEARED:
+            os.environ.pop(key, None)
         self._prior_resolve_pr_by_head = self.mod.resolve_pr_by_head
         self._prior_resolve_pr_number = self.mod.resolve_pr_number
 
@@ -206,19 +215,32 @@ class MainDispatchTest(unittest.TestCase):
         self.mod.resolve_pr_by_head = self._prior_resolve_pr_by_head
         self.mod.resolve_pr_number = self._prior_resolve_pr_number
 
+    def run_main(self):
+        """Run main(), asserting it exits 0, and return what it printed.
+
+        Every path main() can take for these fixtures returns 0 -- including
+        the no-PNGs path it falls through to when the dispatch under test is
+        removed -- so the exit code alone cannot tell them apart. The printed
+        line is the only signal that distinguishes them.
+        """
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.mod.main(), 0)
+        return out.getvalue()
+
     def test_stale_head_short_circuits_before_the_fork_broken_fallback(self):
         self.mod.resolve_pr_by_head = (
             lambda *a, **k: {"number": 42, "head": {"sha": "def456"}})
         self.mod.resolve_pr_number = lambda *a, **k: self.fail(
             "resolve_pr_number should never run on a stale head")
-        self.assertEqual(self.mod.main(), 0)
+        self.assertIn("skipping stale comment", self.run_main())
 
     def test_missing_open_pr_skips_rather_than_the_fork_broken_fallback(self):
         self.mod.resolve_pr_by_head = lambda *a, **k: None
         self.mod.resolve_pr_number = lambda *a, **k: self.fail(
             "resolve_pr_number is the known-broken-for-forks fallback; "
             "a missing open PR must not reach it")
-        self.assertEqual(self.mod.main(), 0)
+        self.assertIn("No open PR for fork-owner:feature", self.run_main())
 
 
 if __name__ == "__main__":
