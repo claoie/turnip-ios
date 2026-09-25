@@ -182,10 +182,11 @@ final class TrickWindowDetectorTests: XCTestCase {
         XCTAssertEqual(atMinimumGranularity.minimumQuietSamples, 1)
     }
 
-    /// `displacementThreshold` is a per-sample-pair *positional* delta, not a velocity, so it
-    /// has to scale the same way the sample-count thresholds above do: unscaled, doubling the
-    /// sample rate halves the real ground an athlete covers between consecutive samples for
-    /// identical motion, silently raising the effective speed a trick needs to clear the bar.
+    /// `displacementThreshold` is a per-sample-pair *positional* delta, not a velocity, so
+    /// above the shipped default rate it has to scale down the same way the sample-count
+    /// thresholds above do: unscaled, doubling the sample rate halves the real ground an
+    /// athlete covers between consecutive samples for identical motion, silently raising
+    /// the effective speed a trick needs to clear the bar.
     func testDisplacementThresholdMatchesTheShippedRateAtTheDefaultSampleRate() {
         XCTAssertEqual(TrickWindowDetector(sampleRate: 10).displacementThreshold, 0.05, accuracy: 0.0001)
     }
@@ -193,6 +194,17 @@ final class TrickWindowDetectorTests: XCTestCase {
     func testDisplacementThresholdScalesDownAsTheSampleRateRises() {
         XCTAssertEqual(TrickWindowDetector(sampleRate: 20).displacementThreshold, 0.025, accuracy: 0.0001)
         XCTAssertEqual(TrickWindowDetector(sampleRate: 30).displacementThreshold, Float(1) / 60, accuracy: 0.0001)
+    }
+
+    /// Below the default rate, `displacementThreshold` stays at the base 0.05 rather than
+    /// also scaling up: real trick footage doesn't reliably produce the larger per-sample
+    /// displacement a naive symmetric scale-up demands (0.5 at `sampleRate == 1` — half the
+    /// normalized frame between two consecutive samples), so scaling up would reintroduce
+    /// "nothing detected" at the low end of the granularity range this fix exists to close
+    /// at the high end.
+    func testDisplacementThresholdStaysAtTheBaseValueBelowTheDefaultSampleRate() {
+        XCTAssertEqual(TrickWindowDetector(sampleRate: 1).displacementThreshold, 0.05, accuracy: 0.0001)
+        XCTAssertEqual(TrickWindowDetector(sampleRate: 5).displacementThreshold, 0.05, accuracy: 0.0001)
     }
 
     func testExplicitDisplacementThresholdOverridesTheRateDerivation() {
