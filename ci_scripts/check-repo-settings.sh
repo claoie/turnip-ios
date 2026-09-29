@@ -3,18 +3,19 @@ set -eu
 
 # Usage: ci_scripts/check-repo-settings.sh [owner/repo]
 #
-# Reports whether the two repository settings this project's own documents
-# describe are actually in force: the status check CONTRIBUTING.md requires
-# before merge, and the private reporting route SECURITY.md offers as an
-# alternative to email. Neither is a file, so neither appears in a diff and no
-# review can catch one being absent. Writes a markdown report to stdout.
+# Reports whether the repository settings this project relies on are actually
+# in force: the status check CONTRIBUTING.md requires before merge, the private
+# reporting route SECURITY.md offers as an alternative to email, and the secret
+# scanning and push protection that stand between a credential and a public
+# commit. None of them is a file, so none appears in a diff and no review can
+# catch one being absent. Writes a markdown report to stdout.
 #
 # The repository defaults to $GH_REPO, then to whatever `gh` resolves for the
 # working directory.
 #
-# Exit codes: 0 both settings match the documents, 1 at least one does not, 2
-# the check itself could not run. A caller must distinguish 1 from 2; exit 1 is
-# a result, not a failure.
+# Exit codes: 0 every setting is as it should be, 1 at least one is not, 2 the
+# check itself could not run. A caller must distinguish 1 from 2; exit 1 is a
+# result, not a failure.
 
 required_check=build-and-test
 
@@ -40,6 +41,12 @@ trap 'rm -rf "$workdir"' EXIT
 api() { # url outfile
   gh api "$1" >"$2" 2>"$workdir/err" ||
     fail "could not read $1: $(tr '\n' ' ' <"$workdir/err")"
+}
+
+# For an endpoint whose 4xx is itself the answer. gh exits non-zero on any of
+# them, so the status line carries the meaning the exit code cannot.
+http_status() { # url
+  gh api --include "$1" 2>/dev/null | awk 'NR == 1 { print $2; exit }'
 }
 
 api "repos/$repo" "$workdir/repo.json"
@@ -68,10 +75,34 @@ private_reporting=$(jq -r '
 [ -n "$private_reporting" ] ||
   fail "private-vulnerability-reporting returned no enabled flag"
 
+# repos/$repo carries both scanning settings, but only for a caller with admin
+# access: every other token receives the same payload with security_and_analysis
+# omitted, which reads exactly like the feature being off. The alerts endpoint
+# separates those two — 404 when secret scanning is disabled, 403 when the
+# caller may not ask — so an absent object becomes a question with an answer
+# rather than an assumption.
+secret_scanning=$(jq -r '
+  .security_and_analysis.secret_scanning.status // ""
+' "$workdir/repo.json")
+push_protection=$(jq -r '
+  .security_and_analysis.secret_scanning_push_protection.status // ""
+' "$workdir/repo.json")
+
+if [ -z "$secret_scanning" ]; then
+  alerts_status=$(http_status "repos/$repo/secret-scanning/alerts")
+  case "$alerts_status" in
+    200) secret_scanning=enabled ;;
+    404) secret_scanning=disabled ;;
+    403) secret_scanning=unreadable ;;
+    "") fail "no response from repos/$repo/secret-scanning/alerts" ;;
+    *) fail "repos/$repo/secret-scanning/alerts answered HTTP $alerts_status" ;;
+  esac
+fi
+
 drifted=0
 
-echo "Both settings below are promised by a document in this repository and"
-echo "configured outside it, where no diff and no review can see them."
+echo "Every setting below is configured outside this repository, where no diff"
+echo "and no review can see it."
 echo
 
 case " $required_contexts " in
@@ -102,6 +133,52 @@ else
   echo "  prevent. Fix under *Settings, Code security*: enable *Private vulnerability"
   echo "  reporting*."
 fi
+
+case "$secret_scanning" in
+  enabled)
+    echo "- **Secret scanning** — enabled, so a credential that reaches this"
+    echo "  repository is reported rather than sitting in public history unnoticed."
+    ;;
+  disabled)
+    drifted=1
+    echo "- **Secret scanning** — disabled. This repository is public, so a credential"
+    echo "  that lands here is readable by anyone the moment it is pushed and nothing"
+    echo "  raises a hand. The CI scan covers what a pull request proposes; this is"
+    echo "  the half that covers everything else, including a direct push to"
+    echo "  \`$branch\`. Fix under *Settings, Code security*: turn on *Secret scanning*."
+    ;;
+  *)
+    echo "- **Secret scanning** — not readable with this token. \`repos/$repo\` omits"
+    echo "  \`security_and_analysis\` for a caller without admin access, and the alerts"
+    echo "  endpoint refused the question, so this run cannot tell enabled from"
+    echo "  disabled. Re-run with a token that has admin read on the repository."
+    ;;
+esac
+
+case "$push_protection" in
+  enabled)
+    echo "- **Push protection** — enabled, so a push carrying a recognized credential"
+    echo "  is rejected instead of reported after the fact."
+    ;;
+  "")
+    if [ "$secret_scanning" = disabled ]; then
+      echo "- **Push protection** — off, because secret scanning is: nothing can reject"
+      echo "  a push over a credential it is not looking for."
+    else
+      echo "- **Push protection** — not readable with this token, for the reason above:"
+      echo "  only \`security_and_analysis\` reports it, and only an admin caller"
+      echo "  receives that object."
+    fi
+    ;;
+  *)
+    drifted=1
+    echo "- **Push protection** — \`$push_protection\`. Secret scanning reports a"
+    echo "  credential once it is already public, which is after the point where"
+    echo "  rotating it stops being optional; push protection is the half that"
+    echo "  refuses the push. Fix under *Settings, Code security*: enable *Push"
+    echo "  protection* under *Secret scanning*."
+    ;;
+esac
 
 if [ "$drifted" -eq 1 ]; then
   echo
