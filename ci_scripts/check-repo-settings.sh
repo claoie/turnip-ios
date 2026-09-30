@@ -14,8 +14,9 @@ set -eu
 # working directory.
 #
 # Exit codes: 0 every setting is as it should be, 1 at least one is not, 2 the
-# check itself could not run. A caller must distinguish 1 from 2; exit 1 is a
-# result, not a failure.
+# check itself could not run, 3 at least one setting could not be read and so
+# nothing is claimed about it either way. Only exit 2 is a failure; a caller
+# that treats 3 as 0 reports an unanswered question as a clean one.
 
 required_check=build-and-test
 
@@ -41,12 +42,6 @@ trap 'rm -rf "$workdir"' EXIT
 api() { # url outfile
   gh api "$1" >"$2" 2>"$workdir/err" ||
     fail "could not read $1: $(tr '\n' ' ' <"$workdir/err")"
-}
-
-# For an endpoint whose 4xx is itself the answer. gh exits non-zero on any of
-# them, so the status line carries the meaning the exit code cannot.
-http_status() { # url
-  gh api --include "$1" 2>/dev/null | awk 'NR == 1 { print $2; exit }'
 }
 
 api "repos/$repo" "$workdir/repo.json"
@@ -77,10 +72,10 @@ private_reporting=$(jq -r '
 
 # repos/$repo carries both scanning settings, but only for a caller with admin
 # access: every other token receives the same payload with security_and_analysis
-# omitted, which reads exactly like the feature being off. The alerts endpoint
-# separates those two — 404 when secret scanning is disabled, 403 when the
-# caller may not ask — so an absent object becomes a question with an answer
-# rather than an assumption.
+# omitted. Nothing else reports either setting — the secret-scanning alerts
+# endpoint answers 404 to every non-admin caller whatever the setting is,
+# including against repositories that demonstrably have scanning on — so an
+# absent object is reported as unread rather than read as disabled.
 secret_scanning=$(jq -r '
   .security_and_analysis.secret_scanning.status // ""
 ' "$workdir/repo.json")
@@ -88,18 +83,8 @@ push_protection=$(jq -r '
   .security_and_analysis.secret_scanning_push_protection.status // ""
 ' "$workdir/repo.json")
 
-if [ -z "$secret_scanning" ]; then
-  alerts_status=$(http_status "repos/$repo/secret-scanning/alerts")
-  case "$alerts_status" in
-    200) secret_scanning=enabled ;;
-    404) secret_scanning=disabled ;;
-    403) secret_scanning=unreadable ;;
-    "") fail "no response from repos/$repo/secret-scanning/alerts" ;;
-    *) fail "repos/$repo/secret-scanning/alerts answered HTTP $alerts_status" ;;
-  esac
-fi
-
 drifted=0
+unreadable=0
 
 echo "Every setting below is configured outside this repository, where no diff"
 echo "and no review can see it."
@@ -148,9 +133,10 @@ case "$secret_scanning" in
     echo "  \`$branch\`. Fix under *Settings, Code security*: turn on *Secret scanning*."
     ;;
   *)
+    unreadable=1
     echo "- **Secret scanning** — not readable with this token. \`repos/$repo\` omits"
-    echo "  \`security_and_analysis\` for a caller without admin access, and the alerts"
-    echo "  endpoint refused the question, so this run cannot tell enabled from"
+    echo "  \`security_and_analysis\` for a caller without admin access, and no other"
+    echo "  endpoint reports the setting, so this run cannot tell enabled from"
     echo "  disabled. Re-run with a token that has admin read on the repository."
     ;;
 esac
@@ -165,6 +151,7 @@ case "$push_protection" in
       echo "- **Push protection** — off, because secret scanning is: nothing can reject"
       echo "  a push over a credential it is not looking for."
     else
+      unreadable=1
       echo "- **Push protection** — not readable with this token, for the reason above:"
       echo "  only \`security_and_analysis\` reports it, and only an admin caller"
       echo "  receives that object."
@@ -184,6 +171,9 @@ if [ "$drifted" -eq 1 ]; then
   echo
   echo "Every fix above is a repository setting, and changing one needs admin"
   echo "access to this repository."
+  exit 1
 fi
 
-exit "$drifted"
+[ "$unreadable" -eq 0 ] || exit 3
+
+exit 0

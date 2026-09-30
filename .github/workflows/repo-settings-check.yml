@@ -8,10 +8,6 @@ on:
 permissions:
   contents: read
   issues: write
-  # The secret-scanning alerts endpoint is what separates "the feature is off"
-  # from "this token may not ask"; without this the check can only report that
-  # it does not know.
-  security-events: read
 
 jobs:
   documented-settings:
@@ -35,6 +31,11 @@ jobs:
           case "$status" in
             0) echo "drifted=false" >> "$GITHUB_OUTPUT" ;;
             1) echo "drifted=true" >> "$GITHUB_OUTPUT" ;;
+            # Neither true nor false, so the steps below both stay skipped and
+            # the tracker keeps whatever state it already had: GITHUB_TOKEN
+            # cannot read the scanning settings, and closing the tracker over a
+            # question nobody could answer is the outcome this guards.
+            3) echo "drifted=unknown" >> "$GITHUB_OUTPUT" ;;
             *) exit "$status" ;;
           esac
 
@@ -60,4 +61,4 @@ jobs:
         if: steps.check.outputs.drifted == 'false' && steps.tracker.outputs.number != ''
         env:
           TRACKER: ${{ steps.tracker.outputs.number }}
-        run: gh issue close "$TRACKER" --comment "Both settings match the documents again."
+        run: gh issue close "$TRACKER" --comment "Every setting matches the documents again."

@@ -4,11 +4,10 @@ set -eu
 # Usage: ci_scripts/test-check-repo-settings.sh
 #
 # Exercises ci_scripts/check-repo-settings.sh against a stubbed `gh`. The real
-# endpoints answer differently for an admin caller than for anyone else, and
-# the one distinction that matters — a feature that is off versus a token that
-# may not ask — cannot be produced on demand against a live repository. So the
-# responses are supplied here instead, one case per shape the script has to
-# tell apart.
+# endpoints answer differently for an admin caller than for anyone else, and a
+# live repository cannot be made to answer both ways on demand — nor to have a
+# setting drifted while a test watches. So the responses are supplied here
+# instead, one case per shape the script has to tell apart.
 #
 # Exit codes: 0 every case behaved, 1 at least one did not, 2 the test itself
 # could not run.
@@ -31,25 +30,11 @@ cat >"$work/bin/gh" <<'STUB'
 # sibling .status file naming the HTTP code to answer with.
 [ "${1:-}" = api ] || { echo "gh stub: unexpected invocation: $*" >&2; exit 90; }
 shift
-include=no
-if [ "${1:-}" = --include ]; then
-  include=yes
-  shift
-fi
 key=$(printf '%s' "${1:-}" | tr '/' '_')
 body=$GH_STUB/$key.json
 code=200
 if [ -f "$GH_STUB/$key.status" ]; then
   code=$(cat "$GH_STUB/$key.status")
-fi
-if [ "$code" = none ]; then
-  # gh printing nothing at all: a network failure, not an HTTP answer.
-  exit 1
-fi
-if [ "$include" = yes ]; then
-  echo "HTTP/2.0 $code stubbed"
-  if [ -f "$body" ]; then cat "$body"; fi
-  exit 0
 fi
 if [ "$code" -ge 400 ] || [ ! -f "$body" ]; then
   echo "gh stub: HTTP $code for ${1:-}" >&2
@@ -76,8 +61,21 @@ JSON
   echo '{"enabled":true}' >"$dir/repos_owner_name_private-vulnerability-reporting.json"
   # No security_and_analysis by default: that is what every non-admin caller
   # receives, including the token the weekly workflow runs with.
-  echo '404' >"$dir/repos_owner_name_secret-scanning_alerts.status"
   echo "$dir"
+}
+
+# The payload an admin caller receives, which is the only one that reports
+# either scanning setting. Pass a push-protection status, or nothing to omit
+# the key entirely.
+admin_scanning() { # fixture-dir secret-scanning-status [push-protection-status]
+  if [ -n "${3:-}" ]; then
+    printf '%s\n' '{"default_branch":"main",' \
+      ' "security_and_analysis":{"secret_scanning":{"status":"'"$2"'"},' \
+      '                          "secret_scanning_push_protection":{"status":"'"$3"'"}}}'
+  else
+    printf '%s\n' '{"default_branch":"main",' \
+      ' "security_and_analysis":{"secret_scanning":{"status":"'"$2"'"}}}'
+  fi >"$1/repos_owner_name.json"
 }
 
 expect() { # label fixture-dir expected-exit expected-substring
@@ -106,67 +104,64 @@ expect() { # label fixture-dir expected-exit expected-substring
 }
 
 d=$(new_case)
-cat >"$d/repos_owner_name.json" <<'JSON'
-{"default_branch":"main",
- "security_and_analysis":{"secret_scanning":{"status":"enabled"},
-                          "secret_scanning_push_protection":{"status":"enabled"}}}
-JSON
+admin_scanning "$d" enabled enabled
 expect "an admin caller seeing both features on reports no drift" \
   "$d" 0 "**Push protection** — enabled"
 
 d=$(new_case)
-cat >"$d/repos_owner_name.json" <<'JSON'
-{"default_branch":"main",
- "security_and_analysis":{"secret_scanning":{"status":"enabled"},
-                          "secret_scanning_push_protection":{"status":"disabled"}}}
-JSON
+admin_scanning "$d" enabled disabled
 expect "push protection off is drift even when scanning is on" \
   "$d" 1 "**Push protection** — \`disabled\`"
 
 d=$(new_case)
-echo '200' >"$d/repos_owner_name_secret-scanning_alerts.status"
-echo '[]' >"$d/repos_owner_name_secret-scanning_alerts.json"
-expect "an alerts endpoint that answers means scanning is on" \
-  "$d" 0 "**Secret scanning** — enabled"
-
-d=$(new_case)
-echo '200' >"$d/repos_owner_name_secret-scanning_alerts.status"
-echo '[]' >"$d/repos_owner_name_secret-scanning_alerts.json"
-expect "and push protection is then unknown rather than assumed" \
-  "$d" 0 "**Push protection** — not readable"
-
-d=$(new_case)
-expect "a 404 from the alerts endpoint is scanning being off" \
+admin_scanning "$d" disabled disabled
+expect "an admin caller seeing scanning off is drift" \
   "$d" 1 "**Secret scanning** — disabled"
 
 d=$(new_case)
-expect "and push protection follows it down" \
+admin_scanning "$d" disabled
+expect "and push protection follows it down when the payload omits it" \
   "$d" 1 "**Push protection** — off, because secret scanning is"
 
 d=$(new_case)
-echo '403' >"$d/repos_owner_name_secret-scanning_alerts.status"
-expect "a token that may not ask is reported as unanswered, not as clean" \
-  "$d" 0 "**Secret scanning** — not readable with this token"
+expect "a caller that cannot read the setting is unanswered, not clean" \
+  "$d" 3 "**Secret scanning** — not readable with this token"
 
 d=$(new_case)
-echo '500' >"$d/repos_owner_name_secret-scanning_alerts.status"
-expect "any other status is a check that could not run" \
-  "$d" 2 "answered HTTP 500"
+expect "and push protection with it" \
+  "$d" 3 "**Push protection** — not readable with this token"
+
+# An admin payload that reports scanning and omits push protection: the only
+# shape in which one of the two is readable and the other is not, so it is the
+# only case that can tell whether push protection records itself as unread.
+d=$(new_case)
+admin_scanning "$d" enabled
+expect "a readable scanning setting does not make push protection readable" \
+  "$d" 3 "**Push protection** — not readable with this token"
+
+# Exit 3 says "nothing is claimed"; a real drift alongside it is still a claim,
+# and the tracker has to open for it.
+d=$(new_case)
+echo '{"enabled":false}' >"$d/repos_owner_name_private-vulnerability-reporting.json"
+expect "a drift outranks an unreadable setting in the exit code" \
+  "$d" 1 "**Secret scanning** — not readable with this token"
 
 d=$(new_case)
-echo 'none' >"$d/repos_owner_name_secret-scanning_alerts.status"
-expect "no response at all is a check that could not run" \
-  "$d" 2 "no response from"
-
-d=$(new_case)
+admin_scanning "$d" enabled enabled
 echo '[]' >"$d/repos_owner_name_rules_branches_main.json"
 expect "a branch with no required status check is still drift" \
   "$d" 1 "no rule on \`main\` requires \`build-and-test\`"
 
 d=$(new_case)
+admin_scanning "$d" enabled enabled
 echo '{"enabled":false}' >"$d/repos_owner_name_private-vulnerability-reporting.json"
 expect "private reporting off is still drift" \
   "$d" 1 "**Private vulnerability reporting** — \`SECURITY.md\` offers"
+
+d=$(new_case)
+echo '500' >"$d/repos_owner_name_private-vulnerability-reporting.status"
+expect "an endpoint that will not answer is a check that could not run" \
+  "$d" 2 "could not read repos/owner/name/private-vulnerability-reporting"
 
 if [ "$failures" -eq 0 ]; then
   echo "test-check-repo-settings: all cases behaved."

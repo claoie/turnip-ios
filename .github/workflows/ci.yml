@@ -57,10 +57,13 @@ jobs:
           ci_scripts/install-gitleaks.sh "$HOME/.local"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # Empty on a push to main, which makes the scan read the working tree
-      # instead of a commit range.
+      # A pull request checkout is refs/pull/N/merge, whose first parent is the
+      # base tip that merge was computed against; the event payload's base.sha
+      # is the tip at open time, so re-running after main moves would scan
+      # main's own commits as if this branch had added them. Empty on a push to
+      # main, which makes the scan read the working tree instead.
       - name: Scan for committed credentials
-        run: ci_scripts/scan-secrets.sh "${{ github.event.pull_request.base.sha }}"
+        run: ci_scripts/scan-secrets.sh "${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}"
 
       # Prose in CONTRIBUTING.md names every directory under Turnip/, and
       # nothing ties that sentence to the tree — adding a directory renames
