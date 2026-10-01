@@ -123,27 +123,49 @@ admin_scanning "$d" disabled
 expect "and push protection follows it down when the payload omits it" \
   "$d" 1 "**Push protection** — off, because secret scanning is"
 
+# A setting this token cannot read is named in the body and left out of the
+# verdict. Reading it as drift would open a tracker over a question nobody
+# asked; reading it as clean silently would claim it matches. Exit 0 here is a
+# claim about the settings that were readable, which is also what keeps a route
+# from drifted back to resolved for them.
 d=$(new_case)
-expect "a caller that cannot read the setting is unanswered, not clean" \
-  "$d" 3 "**Secret scanning** — not readable with this token"
+expect "a setting this token cannot read is named, not counted as drift" \
+  "$d" 0 "**Secret scanning** — not readable with this token"
 
 d=$(new_case)
 expect "and push protection with it" \
-  "$d" 3 "**Push protection** — not readable with this token"
+  "$d" 0 "**Push protection** — not readable with this token"
+
+# The scope of that exit 0 has to be stated where the tracker's reader sees it,
+# or a closed tracker reads as every setting having been checked.
+d=$(new_case)
+expect "an exit 0 with an unread setting says what the verdict covers" \
+  "$d" 0 "are outside that verdict"
 
 # An admin payload that reports scanning and omits push protection: the only
 # shape in which one of the two is readable and the other is not, so it is the
-# only case that can tell whether push protection records itself as unread.
+# only case that can tell whether push protection records itself as unread —
+# and the only one that can catch it blaming a token that demonstrably has the
+# access.
 d=$(new_case)
 admin_scanning "$d" enabled
 expect "a readable scanning setting does not make push protection readable" \
-  "$d" 3 "**Push protection** — not readable with this token"
+  "$d" 0 "**Push protection** — not readable. \`repos/owner/name\` reported secret"
 
-# Exit 3 says "nothing is claimed"; a real drift alongside it is still a claim,
-# and the tracker has to open for it.
+# A status that is neither enabled nor disabled came out of the payload, so it
+# is a value to act on rather than a question this token could not ask. The
+# absent-object arm would blame the token and exit without a tracker over a
+# setting the payload proves is not enabled.
+d=$(new_case)
+admin_scanning "$d" enabled_for_new_repos enabled
+expect "an unrecognised scanning status is drift, not an unread setting" \
+  "$d" 1 "**Secret scanning** — \`enabled_for_new_repos\`"
+
+# An unread setting is outside the verdict, which must not take a readable
+# setting's drift out with it.
 d=$(new_case)
 echo '{"enabled":false}' >"$d/repos_owner_name_private-vulnerability-reporting.json"
-expect "a drift outranks an unreadable setting in the exit code" \
+expect "a readable setting's drift still exits 1 alongside an unread one" \
   "$d" 1 "**Secret scanning** — not readable with this token"
 
 d=$(new_case)

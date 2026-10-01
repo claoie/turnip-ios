@@ -13,10 +13,12 @@ set -eu
 # The repository defaults to $GH_REPO, then to whatever `gh` resolves for the
 # working directory.
 #
-# Exit codes: 0 every setting is as it should be, 1 at least one is not, 2 the
-# check itself could not run, 3 at least one setting could not be read and so
-# nothing is claimed about it either way. Only exit 2 is a failure; a caller
-# that treats 3 as 0 reports an unanswered question as a clean one.
+# Exit codes: 0 every setting this caller could read is as it should be, 1 at
+# least one is not, 2 the check itself could not run. The verdict covers the
+# settings that were readable and no others: a setting this token cannot read
+# is reported as unread in the body and left out of the exit code, so a caller
+# never has to choose between reading an unanswered question as clean and
+# having no route from drifted back to resolved.
 
 required_check=build-and-test
 
@@ -132,12 +134,20 @@ case "$secret_scanning" in
     echo "  the half that covers everything else, including a direct push to"
     echo "  \`$branch\`. Fix under *Settings, Code security*: turn on *Secret scanning*."
     ;;
-  *)
+  "")
     unreadable=1
     echo "- **Secret scanning** — not readable with this token. \`repos/$repo\` omits"
     echo "  \`security_and_analysis\` for a caller without admin access, and no other"
     echo "  endpoint reports the setting, so this run cannot tell enabled from"
     echo "  disabled. Re-run with a token that has admin read on the repository."
+    ;;
+  *)
+    drifted=1
+    echo "- **Secret scanning** — \`$secret_scanning\`, which is neither \`enabled\` nor"
+    echo "  \`disabled\`. The payload did carry the setting, so this is a value to act on"
+    echo "  rather than a question this token cannot ask, and nothing here establishes"
+    echo "  that a credential reaching \`$branch\` would be reported. Fix under"
+    echo "  *Settings, Code security*: turn on *Secret scanning*."
     ;;
 esac
 
@@ -150,11 +160,17 @@ case "$push_protection" in
     if [ "$secret_scanning" = disabled ]; then
       echo "- **Push protection** — off, because secret scanning is: nothing can reject"
       echo "  a push over a credential it is not looking for."
-    else
+    elif [ -z "$secret_scanning" ]; then
       unreadable=1
       echo "- **Push protection** — not readable with this token, for the reason above:"
       echo "  only \`security_and_analysis\` reports it, and only an admin caller"
       echo "  receives that object."
+    else
+      unreadable=1
+      echo "- **Push protection** — not readable. \`repos/$repo\` reported secret"
+      echo "  scanning and omitted \`secret_scanning_push_protection\`, so this caller"
+      echo "  has the access the setting needs and the payload still does not carry it."
+      echo "  Nothing else reports it, so this run cannot tell enabled from disabled."
     fi
     ;;
   *)
@@ -174,6 +190,12 @@ if [ "$drifted" -eq 1 ]; then
   exit 1
 fi
 
-[ "$unreadable" -eq 0 ] || exit 3
+if [ "$unreadable" -eq 1 ]; then
+  echo
+  echo "Every setting this token could read is as the documents describe. The ones"
+  echo "above reported as not readable are outside that verdict — this run claims"
+  echo "nothing about them either way, and only a token with admin read on the"
+  echo "repository can settle them."
+fi
 
 exit 0
