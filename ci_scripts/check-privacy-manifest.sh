@@ -112,7 +112,10 @@ tab=$(printf '\t')
 # it as a source file would report every declared category as a use of itself.
 printf '%s\n' "$api_table" | while IFS="$tab" read -r pattern categories; do
   [ -n "$pattern" ] || continue
-  hits=$(grep -rnE -- "$pattern" "$tree" 2>/dev/null |
+  # -I skips binary files: image assets live under Turnip/, and a short
+  # anchored pattern can match compressed bytes, which grep reports as
+  # "Binary file ... matches" — a hit with no call site behind it.
+  hits=$(grep -rnIE -- "$pattern" "$tree" 2>/dev/null |
     grep -v '/PrivacyInfo\.xcprivacy:' || :)
   [ -n "$hits" ] || continue
 
