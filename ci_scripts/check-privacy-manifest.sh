@@ -25,9 +25,10 @@ set -eu
 # Two spellings are deliberately absent, because they collide with APIs that
 # are not required-reason: bare `creationDate` and `modificationDate`
 # (FileAttributeKey) read identically to `PHAsset.creationDate`, which is
-# PhotoKit metadata on user-granted assets. The distinctive URL-resource-key
-# spellings this tree actually uses are matched, so the gap only opens if
-# file-timestamp access is rewritten in the attributesOfItem style.
+# PhotoKit metadata on user-granted assets. Every other spelling on Apple's
+# list is matched, including the `fileModificationDate` accessor an
+# attributesOfItem result carries, so the gap is only a bare FileAttributeKey
+# subscript.
 #
 # Over-declaration is reported but does not fail: Apple rejects undeclared
 # usage, not an unused declaration, so a declaration outliving its call site is
@@ -92,6 +93,7 @@ NSURLCreationDateKey	FileTimestamp
 NSURLContentModificationDateKey	FileTimestamp
 NSFileCreationDate	FileTimestamp
 NSFileModificationDate	FileTimestamp
+(^|[^A-Za-z0-9_])fileModificationDate	FileTimestamp
 volumeAvailableCapacity	DiskSpace
 volumeTotalCapacity	DiskSpace
 systemFreeSize	DiskSpace
