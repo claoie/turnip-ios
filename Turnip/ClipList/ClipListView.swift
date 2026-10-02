@@ -349,6 +349,7 @@ private struct ClipCardView: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(alignment: .topLeading) { savedBadge }
         .overlay(alignment: .topTrailing) { trashButton }
         .overlay(alignment: .bottom) { trimOverlay }
         .opacity(item.isTrashed ? 0.4 : 1)
@@ -382,6 +383,26 @@ private struct ClipCardView: View {
 
     /// The diameter every top-corner icon circle renders at.
     private static let iconButtonDiameter: CGFloat = 28
+
+    /// Marks a clip whose video is already in Photos. Only ever visible after a Done that
+    /// partially failed, which leaves the screen up on a mix of landed and still-missing
+    /// clips: a retried Done re-saves only the unmarked ones, and which those are is
+    /// otherwise invisible to someone looking at the grid.
+    @ViewBuilder
+    private var savedBadge: some View {
+        if item.isSaved {
+            ZStack {
+                Circle().fill(Color.green)
+                Image(systemName: "checkmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: Self.iconButtonDiameter, height: Self.iconButtonDiameter)
+            .padding(6)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Saved to Photos")
+        }
+    }
 
     /// The per-tile trash button: a solid red circle while trashed, the same
     /// semi-transparent grey circle the other tile buttons use otherwise. For the
