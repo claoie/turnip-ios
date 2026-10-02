@@ -57,11 +57,14 @@ and `NSPrivacyAccessedAPICategoryUserDefaults` with approved reason `CA92.1`
 by the app itself). See the audit table below.
 
 Required-reason API audit. `ci_scripts/check-privacy-manifest.sh` enforces it
-on every pull request: it matches the API spellings below against everything
-under `Turnip/` and fails when a hit has no matching `NSPrivacyAccessedAPIType`
-in the manifest. The table and the gate share this scope, so a row whose
-verdict is `No` is a claim CI re-checks rather than a claim a reader must take
-on trust.
+on every pull request: it matches a table of API spellings — which lives in
+the script, since the categories and evidence below are not themselves
+greppable — against everything under `Turnip/`, and fails when a hit has no
+matching `NSPrivacyAccessedAPIType` in the manifest. So a `No` row whose
+category is undeclared is a claim CI re-checks: a call site landing behind it
+fails the build. The other direction is a note rather than a failure — a
+declared category nothing references is reported without failing, because
+Apple rejects undeclared usage, not an unused declaration.
 
 | API category | Used? | Evidence |
 |---|---|---|
