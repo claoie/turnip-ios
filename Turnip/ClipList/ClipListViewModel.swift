@@ -235,6 +235,8 @@ final class ClipListViewModel: ObservableObject {
     /// and crop adjustment the user left the editor with replace the list entry's, so
     /// trim/crop edits commit on back-navigation (docs/UIUX.md § "Clip Detail / Editor").
     /// The item's `isTrashed` carries over unchanged — the editor doesn't own that decision.
+    /// `isSaved` deliberately does not: the clip the user just retrimmed or recropped is not
+    /// the one that landed in Photos, so Done has to export and save it again.
     /// A no-op for unknown ids — the item may have been removed by a re-run of detection,
     /// or deleted from the editor, while it was open.
     func applyEditorResult(_ result: ClipEditorResult, to id: UUID) {
@@ -414,11 +416,17 @@ final class ClipListViewModel: ObservableObject {
         return image
     }
 
-    /// The "Done" action: exports and saves every non-trashed derived clip to
-    /// Photos, then — only once every one of them has succeeded — deletes the
-    /// original video from Photos if its tile was trashed. Returns `true` when the
-    /// screen should pop to Home; `false` when a clip failed, in which case
+    /// The "Done" action: exports and saves every non-trashed derived clip that has not
+    /// already landed in Photos, then — only once every one of them has succeeded —
+    /// deletes the original video from Photos if its tile was trashed. Returns `true`
+    /// when the screen should pop to Home; `false` when a clip failed, in which case
     /// `saveFailureMessage` is set and the screen stays up so Done can be retried.
+    ///
+    /// Each clip is marked `isSaved` the moment its Photos write returns, and the loop
+    /// skips the ones already marked. That is what makes the retry above safe: a clip
+    /// that fails deterministically would otherwise cost the user one extra copy of
+    /// every healthy clip per attempt, and a Photos asset the app wrote is not
+    /// something the app can take back.
     ///
     /// The original is never deleted if any clip failed: deleting the source before
     /// every derived clip has confirmed safely landed in Photos would risk losing
@@ -442,12 +450,13 @@ final class ClipListViewModel: ObservableObject {
         // albums.
         let albumTitle = settingsProvider().albumDestination
         var failures: [String] = []
-        for item in items where !item.isOriginal && !item.isTrashed {
+        for item in items where !item.isOriginal && !item.isTrashed && !item.isSaved {
             do {
                 let spec = ClipSpec(
                     window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment)
                 let fileURL = try await exportClip(spec, asset, directory) { _ in }
                 try await saveToPhotos(fileURL, albumTitle)
+                markSaved(item.id)
             } catch {
                 failures.append(Self.reason(for: error))
             }
@@ -461,6 +470,14 @@ final class ClipListViewModel: ObservableObject {
             try? await deleteOriginalAsset(assetIdentifier)
         }
         return true
+    }
+
+    /// Records that one clip's video is now in Photos. Resolved by id rather than
+    /// written through the loop's own value copy of the item, which no longer refers to
+    /// anything stored once it has been read out of `items`.
+    private func markSaved(_ id: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].isSaved = true
     }
 
     /// The failure message for one clip. Adapters throw `ClipSaveError` to get the
