@@ -42,9 +42,9 @@ struct ProcessingProgress: Sendable {
     /// and "frame 412 of 400" reads as a bug where a bare counter reads as an unknown length.
     var label: String {
         guard let totalFrames, frame <= totalFrames else {
-            return "Analyzing frame \(frame)…"
+            return String(localized: "Analyzing frame \(frame)…")
         }
-        return "Analyzing frame \(frame) of \(totalFrames)"
+        return String(localized: "Analyzing frame \(frame) of \(totalFrames)")
     }
 }
 

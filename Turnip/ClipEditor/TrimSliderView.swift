@@ -68,9 +68,7 @@ struct TrimSliderView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(
-                    "Trim range \(ClipDurationFormatter.string(from: viewModel.window.startTime)) to "
-                        + ClipDurationFormatter.string(from: viewModel.window.endTime))
+                .accessibilityLabel(trimRangeLabel)
             }
         } else {
             ProgressView()
@@ -100,10 +98,12 @@ struct TrimSliderView: View {
                 handle(
                     at: viewModel.window.startTime, in: range, width: width,
                     label: "Trim start",
+                    identifier: "trim-start-handle",
                     trim: { viewModel.trimStart(to: $0) })
                 handle(
                     at: viewModel.window.endTime, in: range, width: width,
                     label: "Trim end",
+                    identifier: "trim-end-handle",
                     trim: { viewModel.trimEnd(to: $0) })
             }
             .frame(height: Self.rowHeight)
@@ -187,11 +187,20 @@ struct TrimSliderView: View {
         return abs(time - window.startTime) <= abs(time - window.endTime) ? .start : .end
     }
 
+    /// The window the two handles currently bracket, read as one element rather than as two
+    /// unlabeled timestamps.
+    private var trimRangeLabel: String {
+        let start = ClipDurationFormatter.string(from: viewModel.window.startTime)
+        let end = ClipDurationFormatter.string(from: viewModel.window.endTime)
+        return String(localized: "Trim range \(start) to \(end)")
+    }
+
     private func handle(
         at time: TimeInterval,
         in range: ClosedRange<TimeInterval>,
         width: CGFloat,
         label: String,
+        identifier: String,
         trim: @escaping (TimeInterval) -> Void
     ) -> some View {
         ZStack {
@@ -199,11 +208,14 @@ struct TrimSliderView: View {
                 .fill(Color.accentColor)
                 .frame(width: 12, height: 48)
         }
-        .frame(width: 32, height: 56)
+        // 44 pt wide around the 12 pt bar, which is the touch-target floor and also the
+        // frame VoiceOver draws its focus ring on; the offset re-centers it on the handle.
+        .frame(width: 44, height: 56)
         .contentShape(Rectangle())
-        .offset(x: position(of: time, in: range, width: width) - 16)
+        .offset(x: position(of: time, in: range, width: width) - 22)
         .accessibilityLabel(label)
-        .accessibilityValue(ClipDurationFormatter.string(from: time))
+        .accessibilityValue(ClipDurationFormatter.accessibilityString(from: time))
+        .accessibilityIdentifier(identifier)
         .accessibilityAdjustableAction { direction in
             // Tenth-second steps for VoiceOver.
             trim(time + (direction == .increment ? 0.1 : -0.1))

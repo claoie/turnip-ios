@@ -338,11 +338,13 @@ struct ProcessingView<Destination: View>: View {
             ScrimIconButton(systemImage: "xmark", accessibilityLabel: "Cancel") {
                 handleBackAction()
             }
+            .accessibilityIdentifier("processing-cancel")
             .padding()
         } else {
             ScrimIconButton(systemImage: "chevron.backward", accessibilityLabel: "Back to Home") {
                 handleBackAction()
             }
+            .accessibilityIdentifier("processing-back")
             .padding()
         }
     }
@@ -611,6 +613,7 @@ struct ProcessingView<Destination: View>: View {
             if let cancelBrowsing {
                 Button("Cancel", role: .cancel, action: cancelBrowsing)
                     .tint(.white)
+                    .accessibilityIdentifier("cancel-browsing")
             }
         }
         .padding(32)
@@ -716,6 +719,7 @@ struct ProcessingView<Destination: View>: View {
                 player?.pause()
                 viewModel.start(video: video)
             }
+            .accessibilityIdentifier("start-analysis")
         }
     }
 
@@ -728,10 +732,14 @@ struct ProcessingView<Destination: View>: View {
                 ProgressView(value: fraction)
                     .tint(.white)
                     .accessibilityLabel("Analysis progress")
+                    .accessibilityValue(progress.label)
+                    .accessibilityIdentifier("analysis-progress")
             } else {
                 ProgressView()
                     .tint(.white)
                     .accessibilityLabel("Analyzing video")
+                    .accessibilityValue(progress.label)
+                    .accessibilityIdentifier("analysis-progress")
             }
             Text(progress.label)
                 .font(.headline)
@@ -757,7 +765,9 @@ struct ProcessingView<Destination: View>: View {
             VStack(spacing: 12) {
                 Button("Retry") { viewModel.retry(video: video) }
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("processing-retry")
                 Button("Back to Home", role: .cancel) { close() }
+                    .accessibilityIdentifier("processing-back-home")
             }
             .padding(.top, 8)
         }

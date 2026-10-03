@@ -1,6 +1,18 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
+import UIKit
+
+/// How far one press of the editor's crop accessibility actions moves the framing. A gesture
+/// supplies a continuous delta; an action has to choose a step. These are coarse enough to
+/// reach a corner in a few presses and fine enough to settle on a framing.
+enum CropAdjustmentStep {
+    static let zoomFactor: CGFloat = 1.25
+    static let rotationRadians = Double.pi / 36
+    /// A twentieth of the video's own width or height, so a press moves the same fraction of
+    /// the picture whatever size the preview is drawn at.
+    static let offsetFraction: CGFloat = 0.05
+}
 
 /// The clip editor's state (`docs/UIUX.md` § "Clip Detail / Editor").
 ///
@@ -61,10 +73,20 @@ final class ClipEditorViewModel: ObservableObject {
     /// (`trimEnd` sets it, `finishTrim` clears it) — a mutation probe showed no test
     /// discriminated this guard while it was unreadable.
     private(set) var isTrimming = false
+    private let mayAutoplayLoops: @MainActor () -> Bool
 
-    init(source: ClipEditorSource, calculator: CropRectCalculator = CropRectCalculator()) {
+    init(
+        source: ClipEditorSource,
+        calculator: CropRectCalculator = CropRectCalculator(),
+        mayAutoplayLoops: @escaping @MainActor () -> Bool = {
+            mayAutoplayVideoLoops(
+                isVideoAutoplayEnabled: UIAccessibility.isVideoAutoplayEnabled,
+                isReduceMotionEnabled: UIAccessibility.isReduceMotionEnabled)
+        }
+    ) {
         self.source = source
         self.calculator = calculator
+        self.mayAutoplayLoops = mayAutoplayLoops
         self.window = source.window
         self.cropRect = source.cropRect
         self.cropAdjustment = source.cropAdjustment
@@ -166,11 +188,19 @@ final class ClipEditorViewModel: ObservableObject {
     /// Dividing by it converts into the displayed-pixel space `ClipExportTransform.make`
     /// and `ClipThumbnailLoader` both expect `cropAdjustment.offset` to already be in.
     func applyCropOffset(_ screenPoints: CGSize, previewScale: CGFloat) {
-        guard screenPoints.width.isFinite, screenPoints.height.isFinite,
-              previewScale.isFinite, previewScale > 0
-        else { return }
-        cropAdjustment.offset.width += screenPoints.width / previewScale
-        cropAdjustment.offset.height += screenPoints.height / previewScale
+        guard previewScale.isFinite, previewScale > 0 else { return }
+        offsetCrop(byDisplayedPixels: CGSize(
+            width: screenPoints.width / previewScale,
+            height: screenPoints.height / previewScale))
+    }
+
+    /// Moves the crop area by a delta already in displayed-pixel space. What the editor's
+    /// VoiceOver actions use: there is no gesture translation to convert, and a step measured
+    /// in on-screen points would move a different amount of video on every device.
+    func offsetCrop(byDisplayedPixels delta: CGSize) {
+        guard delta.width.isFinite, delta.height.isFinite else { return }
+        cropAdjustment.offset.width += delta.width
+        cropAdjustment.offset.height += delta.height
     }
 
     /// The "Reset crop area" action: discards the manual adjustment and returns to the
@@ -332,7 +362,10 @@ final class ClipEditorViewModel: ObservableObject {
     /// (Re)starts the preview loop over the draft window. Clears the trim latch first:
     /// the loop-back guard is only meaningful during an active drag, and re-arming the
     /// loop always starts from a non-dragging state.
-    private func startPreview() {
+    ///
+    /// Internal rather than private, like `isTrimming` above, so the auto-play gate is
+    /// assertable: the only other way in is `prepare()`, which needs a loadable asset.
+    func startPreview() {
         isTrimming = false
         if player.currentItem == nil {
             player.replaceCurrentItem(with: AVPlayerItem(sdrAsset: source.asset))
@@ -346,6 +379,9 @@ final class ClipEditorViewModel: ObservableObject {
             }
         }
         seek(to: window.startTime)
+        // The preview parks on the window's first frame instead of looping when the system
+        // says not to auto-play; Play then starts it on request.
+        guard mayAutoplayLoops() else { return }
         player.play()
         isPlaying = true
     }
