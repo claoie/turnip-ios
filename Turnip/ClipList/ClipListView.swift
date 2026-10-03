@@ -83,6 +83,14 @@ struct ClipListView: View {
                     .accessibilityIdentifier("add-clip")
             }
             .padding()
+            // The grid states its count when VoiceOver enters it, which is how a run's
+            // result reaches a listener: the completion of a run that found clips is
+            // otherwise only the screen change, with the count left to be counted. The
+            // ScrollView must be declared an accessibility container, as on Home — a label
+            // on a non-element container is never announced on entry.
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(gridAccessibilityLabel)
+            .accessibilityIdentifier("clip-grid")
         }
         .disabled(viewModel.isSaving)
         .navigationTitle("Clips")
@@ -135,6 +143,13 @@ struct ClipListView: View {
                     .onAppear { viewModel.announceNoTricksFound() }
             }
         }
+    }
+
+    /// "1 clip" / "N clips", read on entering the grid. Counts detected clips, so the
+    /// original video's own card is not one of them.
+    private var gridAccessibilityLabel: String {
+        ClipListAccessibility.gridLabel(
+            clipCount: viewModel.items.filter { !$0.isOriginal }.count)
     }
 
     /// What Done commits to, read after its "Done" label. The button names the gesture; the

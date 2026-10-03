@@ -91,7 +91,8 @@ control:
   announcement is the only signal a listener gets.
 - The empty result is announced on the Clip List instead, where the zero-tricks notice lives:
   a run that detects nothing still navigates, and an announcement posted into a simultaneous
-  screen change is the one VoiceOver drops.
+  screen change is the one VoiceOver drops. A run that *did* find clips is read off the Clip
+  List grid's own count label for the same reason — see that section below.
 - The progress bar carries the frame counter as its `accessibilityValue`, so the count is
   reachable from the bar itself and not only from the `Text` beside it.
 - Cancel is reachable and labeled throughout the run.
@@ -100,6 +101,11 @@ control:
 
 ### Clip List (#11) — done
 
+- **The grid states its count on entry** ("3 clips" / "1 clip" / "No clips"), the same way
+  Home's does. This is how a run's *result* reaches a listener: a run that found clips announces
+  nothing of its own, because an announcement posted into the simultaneous screen change is the
+  one VoiceOver drops, which leaves the grid's own label to carry the outcome. The `ScrollView`
+  has to be declared an accessibility container for the label to be read at all.
 - **Each clip card is one accessible element**, labeled with its position, its spoken length
   and its trash decision: "Clip 2 of 3, 2.4 seconds, kept". One element rather than four — a
   tile, a trash button, a timeline and a caption, none of which names the clip, is not a usable
@@ -133,7 +139,7 @@ control:
   `UIAccessibility.isVideoAutoplayEnabled` (iOS 13.0+, no availability gate needed on the
   iOS 16 floor). Both switches are read through the shared `mayAutoplayVideoLoops`, which the
   clip editor's preview uses too — a per-screen copy is how one of them ends up ungated.
-- Identifiers: `clip-list-back`, `clip-card-<n>` / `clip-card-original`,
+- Identifiers: `clip-grid`, `clip-list-back`, `clip-card-<n>` / `clip-card-original`,
   `clip-trash-toggle`, `add-clip`, `clips-done`, `no-tricks-notice`. The toggle's identifier
   is one value across both states — the state belongs in the label, which is where the
   screenshot tests read it from.

@@ -498,7 +498,7 @@ final class ProcessingViewModelTests: XCTestCase {
                 "Analyzing frame 1 of 1200",
                 "Analyzing frame 300 of 1200",
                 "Analyzing frame 600 of 1200",
-                "Analyzing frame 900 of 1200",
+                "Analyzing frame 900 of 1200"
             ]
         )
         viewModel.cancel()
@@ -568,7 +568,7 @@ final class ProcessingViewModelTests: XCTestCase {
             [
                 "Analyzing frame 900 of 1200",
                 "Analysis failed. kaput",
-                "Analyzing frame 1 of 1200",
+                "Analyzing frame 1 of 1200"
             ]
         )
         viewModel.cancel()

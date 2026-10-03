@@ -96,14 +96,10 @@ struct TrimSliderView: View {
                     .frame(width: 2, height: 52)
                     .offset(x: position(of: viewModel.playbackTime, in: range, width: width) - 1)
                 handle(
-                    at: viewModel.window.startTime, in: range, width: width,
-                    label: "Trim start",
-                    identifier: "trim-start-handle",
+                    .start, at: viewModel.window.startTime, in: range, width: width,
                     trim: { viewModel.trimStart(to: $0) })
                 handle(
-                    at: viewModel.window.endTime, in: range, width: width,
-                    label: "Trim end",
-                    identifier: "trim-end-handle",
+                    .end, at: viewModel.window.endTime, in: range, width: width,
                     trim: { viewModel.trimEnd(to: $0) })
             }
             .frame(height: Self.rowHeight)
@@ -196,11 +192,10 @@ struct TrimSliderView: View {
     }
 
     private func handle(
+        _ end: TrimHandleEnd,
         at time: TimeInterval,
         in range: ClosedRange<TimeInterval>,
         width: CGFloat,
-        label: String,
-        identifier: String,
         trim: @escaping (TimeInterval) -> Void
     ) -> some View {
         ZStack {
@@ -213,9 +208,9 @@ struct TrimSliderView: View {
         .frame(width: 44, height: 56)
         .contentShape(Rectangle())
         .offset(x: position(of: time, in: range, width: width) - 22)
-        .accessibilityLabel(label)
+        .accessibilityLabel(end.label)
         .accessibilityValue(ClipDurationFormatter.accessibilityString(from: time))
-        .accessibilityIdentifier(identifier)
+        .accessibilityIdentifier(end.accessibilityIdentifier)
         .accessibilityAdjustableAction { direction in
             // Tenth-second steps for VoiceOver.
             trim(time + (direction == .increment ? 0.1 : -0.1))
@@ -237,5 +232,27 @@ struct TrimSliderView: View {
         let span = range.upperBound - range.lowerBound
         guard width > 0 else { return range.lowerBound }
         return range.lowerBound + TimeInterval(x / width) * span
+    }
+}
+
+/// Which end of the trim window a handle moves. Carries the two strings that distinguish the
+/// pair, so they stay beside each other rather than being passed in separately at both call
+/// sites — where a swap would read as a working slider that trims the wrong end.
+private enum TrimHandleEnd {
+    case start
+    case end
+
+    var label: String {
+        switch self {
+        case .start: return String(localized: "Trim start")
+        case .end: return String(localized: "Trim end")
+        }
+    }
+
+    var accessibilityIdentifier: String {
+        switch self {
+        case .start: return "trim-start-handle"
+        case .end: return "trim-end-handle"
+        }
     }
 }
