@@ -272,6 +272,12 @@ default empty state, so it never reads as "your library is empty."
   the grid immediately, with no restore. Trashing the original tile is a
   reversible toggle — tap again to restore it — that marks the source video
   itself for deletion from Photos once Done runs.
+- The top-leading corner carries a marker, not a control: a green checkmark
+  on a clip whose video is already in Photos. It has no action of its own and
+  doesn't take the tap over the corner it covers — tapping there still flies
+  the clip open like anywhere else on the tile. In practice it's only ever on
+  screen after a Done that partially failed, which is the one state where the
+  grid holds a mix of landed and still-missing clips.
 - Tapping a derived clip's tile flies it open, Photos-style, into the full
   Clip Detail / Editor (§4) directly — the single entry point into "view
   large" and "edit," not a separate pencil icon — the same tap-to-expand
@@ -287,6 +293,17 @@ default empty state, so it never reads as "your library is empty."
   confirmed it saved — a clip that fails leaves the original alone and shows
   an alert naming the failure, so Done can be retried without risking the
   user's only copy of a trick that never actually saved.
+- The retry saves only what is still missing: a clip whose video already
+  landed is skipped, so tapping Done again after a partial failure can't put
+  a second copy of a healthy clip in the user's library. Its tile's marker is
+  what says which clips those are. Once the last missing clip lands, that
+  retry deletes the trashed original exactly as a clean first Done would.
+  One residue the skip doesn't cover: editing a clip after a partial failure
+  clears its marker, correctly, since the retrimmed clip isn't the one that
+  landed — so the retry writes the new version and the pre-edit copy stays in
+  Photos. Nothing in the app can take that copy back; the user deletes it in
+  Photos. The app tracks no identifier for an asset it wrote, so it can't
+  offer to.
 - The back chevron pops to Home, not to Processing; the title sits centered
   inline on the same line as the chevron, Photos-app style.
 
