@@ -459,11 +459,8 @@ private struct ClipCardView: View {
                     .foregroundStyle(.white)
             }
             .frame(width: Self.iconButtonDiameter, height: Self.iconButtonDiameter)
-            // Grows the hit and focus regions from the drawn 28 pt circle to the 44 pt floor.
-            // On the label, so it's part of the Button's own hit-testing region — the same
-            // placement `ScrimIconButton` uses — and as an inset rather than a `frame`, which
-            // would re-center the circle in the larger box and push it off the tile's corner.
-            .contentShape([.interaction, .accessibility], Rectangle().inset(by: -8))
+            // From the drawn 28 pt circle out to the 44 pt floor.
+            .touchTarget(insetBy: 8)
         }
         .buttonStyle(.plain)
         .padding(6)

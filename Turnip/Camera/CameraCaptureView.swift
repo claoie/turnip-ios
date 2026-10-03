@@ -124,11 +124,8 @@ struct CameraCaptureView: View {
                                     ? Color.yellow.opacity(0.9)
                                     : Color.black.opacity(0.4))
                         )
-                        // A footnote pill is about 30 pt tall; this brings the region a
-                        // finger and VoiceOver's focus ring get up to the 44 pt floor
-                        // without resizing the pill. On the label, so it is part of the
-                        // Button's own hit-testing region (see `ScrimIconButton`).
-                        .contentShape([.interaction, .accessibility], Rectangle().inset(by: -7))
+                        // A footnote pill is about 30 pt tall.
+                        .touchTarget(insetBy: 7)
                 }
                 .buttonStyle(.plain)
                 // The active lens is otherwise marked only by the yellow fill, which a

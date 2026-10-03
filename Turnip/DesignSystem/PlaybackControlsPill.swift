@@ -52,13 +52,9 @@ struct MuteButton: View {
 }
 
 private extension View {
-    /// Brings a bare glyph up to the 44 pt touch-target and focus-ring floor without changing
-    /// what the pill lays out. Applied to the glyph inside the `Button`, so it is part of that
-    /// button's own hit-testing region — the placement `ScrimIconButton` documents. An inset
-    /// rather than a `frame`: a body-sized glyph is about 20 pt and the pill's padding sits
-    /// outside the buttons, so a frame would stretch the capsule to 64 pt tall instead of
-    /// growing the region a finger has to find.
+    /// A body-sized glyph is about 20 pt, and the pill's padding sits outside its buttons
+    /// rather than around each one, so the glyphs are what need widening.
     func playbackControlTouchTarget() -> some View {
-        contentShape([.interaction, .accessibility], Rectangle().inset(by: -12))
+        touchTarget(insetBy: 12)
     }
 }

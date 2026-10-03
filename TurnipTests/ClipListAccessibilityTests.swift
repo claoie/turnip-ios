@@ -48,6 +48,14 @@ final class ClipListAccessibilityTests: XCTestCase {
             "Clip 1 of 1, 2.4 seconds, kept, thumbnail placeholder")
     }
 
+    /// A run that found clips announces nothing of its own, so this label is where its result
+    /// reaches a listener — including the zero case, which must not read as an empty screen.
+    func testGridLabelCountsTheDetectedClips() {
+        XCTAssertEqual(ClipListAccessibility.gridLabel(clipCount: 3), "3 clips")
+        XCTAssertEqual(ClipListAccessibility.gridLabel(clipCount: 1), "1 clip")
+        XCTAssertEqual(ClipListAccessibility.gridLabel(clipCount: 0), "No clips")
+    }
+
     func testTrashActionNameSaysWhatTheTapWillDo() {
         XCTAssertEqual(
             ClipListAccessibility.trashActionName(isTrashed: false, isOriginal: false),
