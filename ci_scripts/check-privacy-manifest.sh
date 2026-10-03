@@ -34,8 +34,9 @@ set -eu
 # usage, not an unused declaration, so a declaration outliving its call site is
 # a staleness note rather than a release blocker.
 #
-# Exit codes: 0 every referenced category is declared, 1 at least one is not or
-# the manifest does not parse, 2 the check itself could not run.
+# Exit codes: 0 every referenced category is declared, 1 at least one is not,
+# a declaration carries no approved reason, or the manifest does not parse,
+# 2 the check itself could not run.
 
 fail() {
   echo "check-privacy-manifest: $*" >&2
@@ -61,48 +62,84 @@ if ! plutil -lint -- "$manifest" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Read declarations out of plutil's JSON rather than the XML. plutil drops
-# comments, and the manifest's own comment names the categories it covers —
-# grepping the file directly would let that comment satisfy this check.
-if plutil -extract NSPrivacyAccessedAPITypes json -o "$workdir/types.json" -- "$manifest" >/dev/null 2>&1; then
-  grep -o 'NSPrivacyAccessedAPICategory[A-Za-z]*' "$workdir/types.json" |
-    sort -u >"$workdir/declared" || :
-else
-  : >"$workdir/declared"
-fi
-[ -f "$workdir/declared" ] || : >"$workdir/declared"
+# Address each declaration's NSPrivacyAccessedAPIType by key path. Reading the
+# structure rather than the XML is what keeps the manifest's own comment from
+# satisfying this check, and a grep over the extracted JSON would reintroduce
+# that same class one step in: a category name would count from anywhere
+# inside NSPrivacyAccessedAPITypes, including a reason array, a free-text
+# reason string, or a dict carrying no NSPrivacyAccessedAPIType key at all.
+#
+# An entry satisfies its category only once it also carries a reason. Apple
+# requires at least one string in NSPrivacyAccessedAPITypeReasons, so an empty
+# array that counted as a declaration would leave this gate green on a build
+# that is rejected anyway.
+#
+# A missing key path is read from plutil's exit status rather than from empty
+# output: plutil reports "Could not extract value" on stdout, so capturing the
+# output of a failed extraction yields that sentence as the value.
+extract() {
+  if value=$(plutil -extract "$1" raw -o - -- "$manifest" 2>/dev/null); then
+    printf '%s' "$value"
+  fi
+}
+
+: >"$workdir/declared"
+: >"$workdir/reasonless"
+index=0
+while plutil -extract "NSPrivacyAccessedAPITypes.$index" json -o - -- "$manifest" >/dev/null 2>&1; do
+  declared_type=$(extract "NSPrivacyAccessedAPITypes.$index.NSPrivacyAccessedAPIType")
+  first_reason=$(extract "NSPrivacyAccessedAPITypes.$index.NSPrivacyAccessedAPITypeReasons.0")
+  index=$((index + 1))
+  case $declared_type in
+    NSPrivacyAccessedAPICategory*) ;;
+    *) continue ;;
+  esac
+  if [ -n "$first_reason" ]; then
+    echo "$declared_type" >>"$workdir/declared"
+  else
+    echo "$declared_type" >>"$workdir/reasonless"
+  fi
+done
+sort -u "$workdir/declared" -o "$workdir/declared"
 
 # One row per required-reason API spelling this tree could contain:
 #
-#   <ERE matched against Turnip/><TAB><space-separated categories that satisfy it>
+#   <ERE matched against Turnip/><TAB><categories that satisfy it><TAB><sample>
 #
 # A row is satisfied when ANY of its categories is declared. The getattrlist
 # family appears under both the file-timestamp and the disk-space reason tables,
 # and the manifest is where the developer records which one applies. POSIX
 # spellings are anchored on a non-identifier character so a Swift method whose
 # name merely ends in the same letters does not match.
+#
+# The third field is a call site the row's pattern is meant to match, and it is
+# this gate's only unused column. test-check-privacy-manifest.sh reads the table
+# back and drives one case per row from it, so a row whose pattern and sample
+# disagree — the typo this gate fails open on — is what fails, and a row added
+# without a sample fails for want of one. Keeping the sample beside the pattern
+# is what makes that coverage automatic instead of a claim.
 api_table=$(cat <<'TABLE'
-UserDefaults	UserDefaults
-NSUserDefaults	UserDefaults
-activeInputModes	ActiveKeyboards
-systemUptime	SystemBootTime
-mach_absolute_time	SystemBootTime
-creationDateKey	FileTimestamp
-contentModificationDateKey	FileTimestamp
-NSURLCreationDateKey	FileTimestamp
-NSURLContentModificationDateKey	FileTimestamp
-NSFileCreationDate	FileTimestamp
-NSFileModificationDate	FileTimestamp
-(^|[^A-Za-z0-9_])fileModificationDate	FileTimestamp
-volumeAvailableCapacity	DiskSpace
-volumeTotalCapacity	DiskSpace
-systemFreeSize	DiskSpace
-systemSize	DiskSpace
-NSURLVolume(Available|Total)Capacity	DiskSpace
-NSFileSystem(Free)?Size	DiskSpace
-(^|[^A-Za-z0-9_])(f|l)?stat(at)?\(	FileTimestamp
-(^|[^A-Za-z0-9_])f?stat(v)?fs\(	DiskSpace
-(^|[^A-Za-z0-9_])(f?get)?attrlist(at|bulk)?\(	FileTimestamp DiskSpace
+UserDefaults	UserDefaults	let store = UserDefaults.standard
+NSUserDefaults	UserDefaults	let store = NSUserDefaults.standardUserDefaults()
+activeInputModes	ActiveKeyboards	let modes = UITextInputMode.activeInputModes
+systemUptime	SystemBootTime	let t = ProcessInfo.processInfo.systemUptime
+mach_absolute_time	SystemBootTime	let t = mach_absolute_time()
+creationDateKey	FileTimestamp	let v = try url.resourceValues(forKeys: [.creationDateKey])
+contentModificationDateKey	FileTimestamp	let v = try url.resourceValues(forKeys: [.contentModificationDateKey])
+NSURLCreationDateKey	FileTimestamp	let k = NSURLCreationDateKey
+NSURLContentModificationDateKey	FileTimestamp	let k = NSURLContentModificationDateKey
+NSFileCreationDate	FileTimestamp	let d = attrs[NSFileCreationDate]
+NSFileModificationDate	FileTimestamp	let d = attrs[NSFileModificationDate]
+(^|[^A-Za-z0-9_])fileModificationDate	FileTimestamp	let d = (attrs as NSDictionary).fileModificationDate()
+volumeAvailableCapacity	DiskSpace	let v = try url.resourceValues(forKeys: [.volumeAvailableCapacityKey])
+volumeTotalCapacity	DiskSpace	let v = try url.resourceValues(forKeys: [.volumeTotalCapacityKey])
+systemFreeSize	DiskSpace	let n = attrs[.systemFreeSize]
+systemSize	DiskSpace	let n = attrs[.systemSize]
+NSURLVolume(Available|Total)Capacity	DiskSpace	let k = NSURLVolumeAvailableCapacityKey
+NSFileSystem(Free)?Size	DiskSpace	let n = attrs[NSFileSystemFreeSize]
+(^|[^A-Za-z0-9_])(f|l)?stat(at)?\(	FileTimestamp	let rc = stat(path, &info)
+(^|[^A-Za-z0-9_])f?stat(v)?fs\(	DiskSpace	let rc = statfs(path, &info)
+(^|[^A-Za-z0-9_])(f?get)?attrlist(at|bulk)?\(	FileTimestamp DiskSpace	let rc = getattrlist(path, &list, &buf, size, 0)
 TABLE
 )
 
@@ -112,7 +149,7 @@ tab=$(printf '\t')
 
 # The manifest's own explanatory comment names the APIs it covers, so scanning
 # it as a source file would report every declared category as a use of itself.
-printf '%s\n' "$api_table" | while IFS="$tab" read -r pattern categories; do
+printf '%s\n' "$api_table" | while IFS="$tab" read -r pattern categories sample; do
   [ -n "$pattern" ] || continue
   # -I skips binary files: image assets live under Turnip/, and a short
   # anchored pattern can match compressed bytes, which grep reports as
@@ -139,10 +176,20 @@ printf '%s\n' "$api_table" | while IFS="$tab" read -r pattern categories; do
   fi
 done
 
-if [ -s "$workdir/violations" ]; then
-  echo "Turnip/Resources/PrivacyInfo.xcprivacy does not declare every required-reason API referenced under Turnip/." >&2
+if [ -s "$workdir/reasonless" ] || [ -s "$workdir/violations" ]; then
+  echo "Turnip/Resources/PrivacyInfo.xcprivacy does not satisfy every required-reason API referenced under Turnip/." >&2
   echo "An upload of this build is rejected with ITMS-91053 (Missing API declaration)." >&2
-  sed 's/^/  /' "$workdir/violations" >&2
+  if [ -s "$workdir/reasonless" ]; then
+    sort -u "$workdir/reasonless" -o "$workdir/reasonless"
+    while read -r category; do
+      echo "  Declared with no approved reason code: $category" >&2
+      echo "    NSPrivacyAccessedAPITypeReasons must carry at least one approved reason," >&2
+      echo "    so this entry declares nothing and its category stays undeclared." >&2
+    done <"$workdir/reasonless"
+  fi
+  if [ -s "$workdir/violations" ]; then
+    sed 's/^/  /' "$workdir/violations" >&2
+  fi
   echo "  Add each category to the manifest and update the audit table in docs/PRIVACY.md." >&2
   exit 1
 fi
