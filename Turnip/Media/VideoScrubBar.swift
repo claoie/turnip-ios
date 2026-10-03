@@ -49,9 +49,8 @@ struct VideoScrubBar: View {
                 Capsule().fill(.white.opacity(0.3))
                 Capsule().fill(.white).frame(width: width * fraction)
             }
-            // Widens the drag target, and the frame VoiceOver draws its focus ring on, past
-            // the 3 pt visual track to the 44 pt floor.
-            .contentShape([.interaction, .accessibility], Rectangle().inset(by: -21))
+            // Past the 3 pt visual track to the 44 pt floor.
+            .touchTarget(insetBy: 21)
             // Without an adjustable action the track is a pure drag surface: a listener can
             // hear where playback stands but has no way to move it.
             .accessibilityElement()
