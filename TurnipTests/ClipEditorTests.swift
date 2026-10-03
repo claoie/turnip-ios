@@ -363,8 +363,10 @@ final class ClipEditorTests: XCTestCase {
         let viewModel = makeViewModel()
 
         viewModel.offsetCrop(byDisplayedPixels: CGSize(width: 10, height: 4))
-        viewModel.offsetCrop(byDisplayedPixels: CGSize(width: .nan, height: 1))
-        viewModel.offsetCrop(byDisplayedPixels: CGSize(width: 1, height: .infinity))
+        // `CGFloat.nan` spelled out: `CGSize.init` is overloaded on CGFloat, Double and Int,
+        // and a bare `.nan` gives the compiler no way to choose between them.
+        viewModel.offsetCrop(byDisplayedPixels: CGSize(width: CGFloat.nan, height: 1))
+        viewModel.offsetCrop(byDisplayedPixels: CGSize(width: 1, height: CGFloat.infinity))
 
         XCTAssertEqual(viewModel.cropAdjustment.offset, CGSize(width: 10, height: 4))
     }
