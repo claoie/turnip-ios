@@ -25,6 +25,17 @@ final class ProcessingProgressTests: XCTestCase {
         )
     }
 
+    /// Four-digit counts must render bare. Localizing the sentence is required, but handing the
+    /// counts to the localization machinery as integers formats them for the device locale, and
+    /// every other case here is under 1000 and so cannot tell the two apart.
+    func testLabelDoesNotGroupThousands() {
+        let label = ProcessingProgress(frame: 1200, totalFrames: 9600).label
+
+        XCTAssertEqual(label, "Analyzing frame 1200 of 9600")
+        XCTAssertFalse(label.contains(","), "a locale separator reached a count: \(label)")
+        XCTAssertFalse(label.contains("."), "a locale separator reached a count: \(label)")
+    }
+
     func testLabelDropsTheTotalWhenItIsUnknown() {
         XCTAssertEqual(ProcessingProgress(frame: 400, totalFrames: nil).label, "Analyzing frame 400…")
     }
