@@ -7,9 +7,15 @@ set -eu
 # API it covers goes unmatched, its category goes unreported, and the gate
 # still prints that every referenced category is declared — so the build stays
 # green on the exact violation the gate exists to stop, and the next
-# observation is an ITMS-91053 rejection at upload. Nothing else re-derives
-# that table, which is why every row gets a fixture that fails when the row is
-# wrong.
+# observation is an ITMS-91053 rejection at upload.
+#
+# The per-row cases are read out of the gate's own table rather than written
+# here, so the set of rows covered cannot drift from the set of rows that
+# exist. Each row supplies a sample call site in its third field; the case
+# writes that sample into a tree declaring nothing and requires the gate to
+# name that row's pattern and every category the row maps to. A pattern that
+# no longer matches its own sample fails, and a row carrying no sample fails
+# for want of one.
 #
 # Each case builds a throwaway tree with its own manifest and sources and runs
 # the gate against it with an explicit root, so no case can see the repo's real
@@ -24,6 +30,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 passed=0
 failed=0
+tab=$(printf '\t')
 
 write_manifest() {
   out=$1/Turnip/Resources/PrivacyInfo.xcprivacy
@@ -38,6 +45,21 @@ write_manifest() {
       "$category" >>"$out"
   done
   printf '%s\n' '  </array>' '</dict>' '</plist>' >>"$out"
+}
+
+# The entries of NSPrivacyAccessedAPITypes read from stdin, for the cases whose
+# subject is the shape of a declaration rather than which category it names.
+write_raw_manifest() {
+  out=$1/Turnip/Resources/PrivacyInfo.xcprivacy
+  {
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+      '<plist version="1.0">' '<dict>' \
+      '  <key>NSPrivacyTracking</key>' '  <false/>' \
+      '  <key>NSPrivacyAccessedAPITypes</key>' '  <array>'
+    cat
+    printf '%s\n' '  </array>' '</dict>' '</plist>'
+  } >"$out"
 }
 
 new_root() {
@@ -91,10 +113,55 @@ check() {
   fi
 }
 
+fail_case() {
+  failed=$((failed + 1))
+  echo "  FAIL $1 — $2"
+}
+
 satisfied='every required-reason API referenced under Turnip/ is declared'
 stale='declared, but nothing under Turnip/ references it'
 
+# The gate's table, read back from the gate. An extraction that silently
+# yielded nothing would run no per-row case and still report zero failures, so
+# an empty read is a could-not-run rather than a pass.
+rows=$tmp/api_table
+sed -n "/^api_table=\$(cat <<'TABLE'\$/,/^TABLE\$/p" "$gate" |
+  sed '1d;$d' >"$rows"
+if [ ! -s "$rows" ]; then
+  echo "could not read the api_table heredoc out of $gate" >&2
+  exit 2
+fi
+
 echo "test-check-privacy-manifest:"
+echo "  $(wc -l <"$rows" | tr -d ' ') pattern rows read from check-privacy-manifest.sh"
+
+# One case per pattern row, driven by the row's own sample call site, with the
+# row's categories undeclared. The assertion names the row's pattern, so a
+# pattern that stops matching its sample fails even when a different row's
+# pattern happens to match the same line.
+while IFS="$tab" read -r pattern categories sample; do
+  [ -n "$pattern" ] || continue
+  if [ -z "${categories:-}" ]; then
+    fail_case "row '$pattern'" "no categories in the row's second field"
+    continue
+  fi
+  if [ -z "${sample:-}" ]; then
+    fail_case "row '$pattern'" "no sample call site in the row's third field"
+    continue
+  fi
+  root=$(new_root)
+  write_src "$root" "$sample"
+  set -- "row '$pattern' undeclared" 1 "$root" \
+    "+Undeclared required-reason API matching: $pattern" \
+    '+Turnip/Sources/Thing.swift'
+  # Split through a command substitution rather than an unquoted expansion:
+  # zsh does not field-split the latter, which silently collapses the one row
+  # that maps to two categories into a single unmatchable name.
+  for category in $(printf '%s\n' "$categories"); do
+    set -- "$@" "+declare NSPrivacyAccessedAPICategory$category"
+  done
+  check "$@"
+done <"$rows"
 
 # A tree that calls nothing and declares nothing is the gate's quiet case: no
 # violation and no staleness note, so a later note means something changed.
@@ -102,56 +169,13 @@ root=$(new_root)
 check 'no required-reason API in use, nothing declared' 0 "$root" \
   "+$satisfied" -'Undeclared' "-$stale"
 
-# One case per pattern row, each with its category undeclared, so a misspelled
-# row cannot stay green.
-root=$(new_root)
-write_src "$root" 'init(defaults: UserDefaults = .standard)'
-check 'UserDefaults undeclared' 1 "$root" \
-  '+Undeclared required-reason API matching: UserDefaults' \
-  '+declare NSPrivacyAccessedAPICategoryUserDefaults' \
-  '+Turnip/Sources/Thing.swift'
-
-root=$(new_root)
-write_src "$root" 'let modes = UITextInputMode.activeInputModes'
-check 'activeInputModes undeclared' 1 "$root" \
-  '+declare NSPrivacyAccessedAPICategoryActiveKeyboards'
-
-root=$(new_root)
-write_src "$root" 'let now = ProcessInfo.processInfo.systemUptime'
-check 'systemUptime undeclared' 1 "$root" \
-  '+declare NSPrivacyAccessedAPICategorySystemBootTime'
-
-root=$(new_root)
-write_src "$root" 'let t = try url.resourceValues(forKeys: [.creationDateKey])'
-check 'creationDateKey undeclared' 1 "$root" \
-  '+declare NSPrivacyAccessedAPICategoryFileTimestamp'
-
-# The accessor an attributesOfItem result carries. An unmatched spelling here
-# is worse than a plain miss: the category is in use, so the staleness note
-# below starts arguing for the removal of a declaration Apple requires.
-root=$(new_root)
-write_src "$root" 'let t = (attrs as NSDictionary).fileModificationDate()'
-check 'fileModificationDate accessor undeclared' 1 "$root" \
-  '+declare NSPrivacyAccessedAPICategoryFileTimestamp'
-
+# The positive half of the per-row cases: the same call site, with its category
+# declared and carrying a reason, is neither a violation nor stale.
 root=$(new_root)
 write_manifest "$root" FileTimestamp
-write_src "$root" 'let t = (attrs as NSDictionary).fileModificationDate()'
-check 'fileModificationDate accessor declared is not reported stale' 0 "$root" \
-  "+$satisfied" "-$stale"
-
-root=$(new_root)
-write_src "$root" 'let free = try url.resourceValues(forKeys: [.volumeAvailableCapacityKey])'
-check 'volumeAvailableCapacityKey undeclared' 1 "$root" \
-  '+declare NSPrivacyAccessedAPICategoryDiskSpace'
-
-# The getattrlist family sits under both reason tables, so the gate names both
-# and the developer records which one applies.
-root=$(new_root)
-write_src "$root" 'let rc = getattrlist(path, &list, &buf, size, 0)'
-check 'getattrlist undeclared names both categories' 1 "$root" \
-  '+declare NSPrivacyAccessedAPICategoryFileTimestamp' \
-  '+declare NSPrivacyAccessedAPICategoryDiskSpace'
+write_src "$root" 'let d = (attrs as NSDictionary).fileModificationDate()'
+check 'a declared category in use is neither a violation nor stale' 0 "$root" \
+  "+$satisfied" "-$stale" -'Undeclared'
 
 # Anchoring: an identifier that merely ends in a matched spelling is not a call
 # to it, and a gate that fired on one would cost a declaration with no call
@@ -167,6 +191,55 @@ root=$(new_root)
 write_manifest "$root" DiskSpace
 check 'declaration with no call site is a note, not a failure' 0 "$root" \
   "+$stale" '+NSPrivacyAccessedAPICategoryDiskSpace' "+$satisfied"
+
+# Declarations are addressed by key path, not grepped out of the extracted
+# JSON. Each of the next three manifests parses, mentions the category name
+# somewhere inside NSPrivacyAccessedAPITypes, and declares nothing Apple would
+# accept — the direction that matters, because a grep green-lights a build that
+# gets ITMS-91053.
+root=$(new_root)
+write_raw_manifest "$root" <<'XML'
+    <dict><key>NSPrivacyAccessedAPITypeReasons</key><array><string>NSPrivacyAccessedAPICategoryUserDefaults</string></array></dict>
+XML
+write_src "$root" 'let store = UserDefaults.standard'
+check 'a category named only inside a reasons array declares nothing' 1 "$root" \
+  '+declare NSPrivacyAccessedAPICategoryUserDefaults'
+
+root=$(new_root)
+write_raw_manifest "$root" <<'XML'
+    <dict><key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryDiskSpace</string><key>NSPrivacyAccessedAPITypeReasons</key><array><string>Needed for NSPrivacyAccessedAPICategoryUserDefaults too</string></array></dict>
+XML
+write_src "$root" 'let store = UserDefaults.standard'
+check 'a free-text reason naming another category does not declare it' 1 "$root" \
+  '+declare NSPrivacyAccessedAPICategoryUserDefaults'
+
+root=$(new_root)
+write_raw_manifest "$root" <<'XML'
+    <dict><key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryUserDefaults</string><key>NSPrivacyAccessedAPITypeReasons</key><array/></dict>
+XML
+write_src "$root" 'let store = UserDefaults.standard'
+check 'a declaration with an empty reasons array fails' 1 "$root" \
+  '+Declared with no approved reason code: NSPrivacyAccessedAPICategoryUserDefaults' \
+  '+declare NSPrivacyAccessedAPICategoryUserDefaults'
+
+# ...and the same entry with a reason is accepted, so the case above turns on
+# the empty array rather than on the hand-written manifest.
+root=$(new_root)
+write_raw_manifest "$root" <<'XML'
+    <dict><key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryUserDefaults</string><key>NSPrivacyAccessedAPITypeReasons</key><array><string>CA92.1</string></array></dict>
+XML
+write_src "$root" 'let store = UserDefaults.standard'
+check 'the same declaration carrying a reason is accepted' 0 "$root" \
+  "+$satisfied" -'Undeclared' -'no approved reason'
+
+# A reasonless declaration is a failure even when nothing calls the API: the
+# entry is invalid where an unused but well-formed declaration is only stale.
+root=$(new_root)
+write_raw_manifest "$root" <<'XML'
+    <dict><key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryDiskSpace</string><key>NSPrivacyAccessedAPITypeReasons</key><array/></dict>
+XML
+check 'a reasonless declaration fails with no call site behind it' 1 "$root" \
+  '+Declared with no approved reason code: NSPrivacyAccessedAPICategoryDiskSpace'
 
 # The manifest's own comment names the APIs it covers, so scanning it as a
 # source file would report every declared category as a use of itself.
