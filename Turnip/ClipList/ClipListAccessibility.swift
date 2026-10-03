@@ -91,6 +91,17 @@ enum ClipListAccessibility {
         return String(localized: "Clip \(clipNumber) of \(clipCount): \(reason)")
     }
 
+    /// "1 clip" / "N clips", read on entering the grid. A run's result is otherwise reachable
+    /// only by swiping every card and counting, and a run that found nothing has to say so
+    /// rather than read as an empty screen.
+    static func gridLabel(clipCount: Int) -> String {
+        switch clipCount {
+        case 0: return String(localized: "No clips")
+        case 1: return String(localized: "1 clip")
+        default: return String(localized: "\(clipCount) clips")
+        }
+    }
+
     /// The zero-tricks notice's text, shared by the visible notice and its announcement so
     /// the two cannot drift.
     static var noTricksFound: String { String(localized: "No tricks found") }
