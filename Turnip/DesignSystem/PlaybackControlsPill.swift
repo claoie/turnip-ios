@@ -27,8 +27,10 @@ struct PlayPauseButton: View {
         Button(action: action) {
             Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                 .foregroundStyle(.white)
+                .playbackControlTouchTarget()
         }
         .accessibilityLabel(isPlaying ? "Pause" : "Play")
+        .accessibilityIdentifier("playback-play-pause")
     }
 }
 
@@ -42,7 +44,21 @@ struct MuteButton: View {
         Button(action: action) {
             Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 .foregroundStyle(.white)
+                .playbackControlTouchTarget()
         }
         .accessibilityLabel(isMuted ? "Unmute" : "Mute")
+        .accessibilityIdentifier("playback-mute")
+    }
+}
+
+private extension View {
+    /// Brings a bare glyph up to the 44 pt touch-target and focus-ring floor without changing
+    /// what the pill lays out. Applied to the glyph inside the `Button`, so it is part of that
+    /// button's own hit-testing region — the placement `ScrimIconButton` documents. An inset
+    /// rather than a `frame`: a body-sized glyph is about 20 pt and the pill's padding sits
+    /// outside the buttons, so a frame would stretch the capsule to 64 pt tall instead of
+    /// growing the region a finger has to find.
+    func playbackControlTouchTarget() -> some View {
+        contentShape([.interaction, .accessibility], Rectangle().inset(by: -12))
     }
 }

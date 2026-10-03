@@ -83,8 +83,8 @@ final class ScreenshotTests: XCTestCase {
 
     /// Clip list triage: three detected windows, one trashed, thumbnails as
     /// placeholder tiles (the /dev/null asset decodes nothing; the loader falls
-    /// back to the placeholder — the test waits for the placeholder's
-    /// accessibility element, so it guards the fallback and not just the
+    /// back to the placeholder — the test waits for the placeholder clause of a
+    /// card's accessibility label, so it guards the fallback and not just the
     /// navigation bar appearing).
     func testClipListTriage() throws {
         let app = XCUIApplication()
@@ -92,7 +92,7 @@ final class ScreenshotTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.navigationBars["Clips"].waitForExistence(timeout: 15))
         let placeholder = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == 'Thumbnail placeholder'"))
+            .matching(NSPredicate(format: "label CONTAINS 'thumbnail placeholder'"))
             .firstMatch
         XCTAssertTrue(placeholder.waitForExistence(timeout: 15))
         addScreenshot(named: "clip-list-triage")
@@ -165,14 +165,15 @@ final class ScreenshotTests: XCTestCase {
 
     /// Tapping a tile opens the full `ClipEditorView` directly — the tile itself is
     /// the single entry point into detail/editing, not a separate expand icon and not
-    /// an intermediate full-screen viewer.
+    /// an intermediate full-screen viewer. Reached by identifier rather than by label,
+    /// since a card's label counts off its position and duration.
     func testClipListTapOpensEditor() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-screenshotClipListMedia"]
         app.launch()
         XCTAssertTrue(app.navigationBars["Clips"].waitForExistence(timeout: 15))
         let tile = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == 'Open clip'"))
+            .matching(NSPredicate(format: "identifier == 'clip-card-1'"))
             .firstMatch
         XCTAssertTrue(tile.waitForExistence(timeout: 15))
         tile.tap()

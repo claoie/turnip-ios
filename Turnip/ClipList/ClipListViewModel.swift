@@ -159,6 +159,7 @@ final class ClipListViewModel: ObservableObject {
     /// so the default value's closure literal, which reads the main-actor-isolated
     /// `TurnipSettingsStore.shared`, type-checks as a default argument.
     private let settingsProvider: @MainActor () -> TurnipSettings
+    private let announce: AccessibilityAnnouncing
 
     /// The asset's duration in seconds, loaded once per asset and shared by every
     /// card's inline trim timeline. `nil` when the asset can't be read — the timeline
@@ -190,7 +191,8 @@ final class ClipListViewModel: ObservableObject {
         saveToPhotos: @escaping SaveOneClipToPhotos = saveOneClipToPhotos,
         deleteOriginalAsset: @escaping DeleteOriginalAsset = deleteOriginalVideo,
         makeDirectory: @escaping @Sendable () -> URL = defaultExportDirectory,
-        settingsProvider: @escaping @MainActor () -> TurnipSettings = { TurnipSettingsStore.shared.current }
+        settingsProvider: @escaping @MainActor () -> TurnipSettings = { TurnipSettingsStore.shared.current },
+        announce: @escaping AccessibilityAnnouncing = postAccessibilityAnnouncement
     ) {
         let original = ClipListItem(
             window: TrickWindow(startTime: 0, endTime: max(duration, 0)),
@@ -205,6 +207,31 @@ final class ClipListViewModel: ObservableObject {
         self.deleteOriginalAsset = deleteOriginalAsset
         self.makeDirectory = makeDirectory
         self.settingsProvider = settingsProvider
+        self.announce = announce
+    }
+
+    /// Where `item` sits among the detected clips, 1-based, and how many there are — the
+    /// count a card's VoiceOver label reads off. `nil` for the original video, which stands
+    /// for the source already in Photos rather than a detected clip.
+    func clipPosition(of item: ClipListItem) -> (number: Int, count: Int)? {
+        guard !item.isOriginal else { return nil }
+        let clips = items.filter { !$0.isOriginal }
+        guard let offset = clips.firstIndex(where: { $0.id == item.id }) else { return nil }
+        return (offset + 1, clips.count)
+    }
+
+    /// How many clips a Done tap would write to Photos, and whether it would also delete the
+    /// source video — what the button announces before it is tapped, and what the save
+    /// announces on its way in and out.
+    var saveScope: (clipCount: Int, deletesOriginal: Bool) {
+        let clipCount = items.filter { !$0.isOriginal && !$0.isTrashed }.count
+        let deletesOriginal = items.first(where: \.isOriginal)?.isTrashed == true
+        return (clipCount, deletesOriginal)
+    }
+
+    /// Speaks the zero-tricks notice, which otherwise fades itself out unheard.
+    func announceNoTricksFound() {
+        announce(ClipListAccessibility.noTricksFound)
     }
 
     /// The analyzed asset, shared with the editor destination so it previews and
@@ -441,15 +468,20 @@ final class ClipListViewModel: ObservableObject {
         // the same destination, and a setting change mid-save shouldn't split a run across two
         // albums.
         let albumTitle = settingsProvider().albumDestination
+        let clipCount = saveScope.clipCount
+        announce(ClipListAccessibility.saveStarting(clipCount: clipCount))
         var failures: [String] = []
+        var clipNumber = 0
         for item in items where !item.isOriginal && !item.isTrashed {
+            clipNumber += 1
             do {
                 let spec = ClipSpec(
                     window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment)
                 let fileURL = try await exportClip(spec, asset, directory) { _ in }
                 try await saveToPhotos(fileURL, albumTitle)
             } catch {
-                failures.append(Self.reason(for: error))
+                failures.append(ClipListAccessibility.saveFailure(
+                    clipNumber: clipNumber, clipCount: clipCount, reason: Self.reason(for: error)))
             }
         }
         guard failures.isEmpty else {
@@ -460,6 +492,7 @@ final class ClipListViewModel: ObservableObject {
         if let original = items.first(where: \.isOriginal), original.isTrashed {
             try? await deleteOriginalAsset(assetIdentifier)
         }
+        announce(ClipListAccessibility.saveFinished(clipCount: clipCount))
         return true
     }
 
@@ -468,9 +501,9 @@ final class ClipListViewModel: ObservableObject {
     private static func reason(for error: Error) -> String {
         switch error {
         case ClipSaveError.exportFailed(let reason):
-            return "Export failed — \(reason)"
+            return String(localized: "Export failed — \(reason)")
         case ClipSaveError.photosSaveFailed(let reason):
-            return "Couldn't save to Photos — \(reason)"
+            return String(localized: "Couldn't save to Photos — \(reason)")
         default:
             return error.localizedDescription
         }

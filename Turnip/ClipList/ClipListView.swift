@@ -80,6 +80,7 @@ struct ClipListView: View {
                         })
                 }
                 AddClipTile { Task { await viewModel.addClip() } }
+                    .accessibilityIdentifier("add-clip")
             }
             .padding()
         }
@@ -97,6 +98,7 @@ struct ClipListView: View {
             ToolbarItem(placement: .navigationBarLeading) {
                 BackChevronButton(accessibilityLabel: "Back to Home", action: popToRoot)
                     .disabled(viewModel.isSaving)
+                    .accessibilityIdentifier("clip-list-back")
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -107,6 +109,8 @@ struct ClipListView: View {
                     }
                 }
             }
+            .accessibilityValue(doneAccessibilityValue)
+            .accessibilityIdentifier("clips-done")
         }
         .overlay {
             if viewModel.isSaving {
@@ -123,11 +127,22 @@ struct ClipListView: View {
         }
         .overlay(alignment: .top) {
             if isShowingNoTricksNotice {
-                GlassNoticeView(message: "No tricks found", isPresented: $isShowingNoTricksNotice)
+                GlassNoticeView(
+                    message: ClipListAccessibility.noTricksFound,
+                    isPresented: $isShowingNoTricksNotice)
                     .padding(.top, 8)
                     .accessibilityIdentifier("no-tricks-notice")
+                    .onAppear { viewModel.announceNoTricksFound() }
             }
         }
+    }
+
+    /// What Done commits to, read after its "Done" label. The button names the gesture; the
+    /// count and the original's fate are the part a listener cannot otherwise reach.
+    private var doneAccessibilityValue: String {
+        let scope = viewModel.saveScope
+        return ClipListAccessibility.doneValue(
+            clipCount: scope.clipCount, deletesOriginal: scope.deletesOriginal)
     }
 
     private var savingOverlay: some View {
@@ -296,6 +311,9 @@ private struct ClipCardView: View {
             Text(item.isOriginal ? "Original video" : item.durationLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                // The card's own label already states which clip this is and how long it
+                // runs, so leaving the caption in the tree makes a listener hear it twice.
+                .accessibilityHidden(true)
         }
         .opacity(isHidden ? 0 : 1)
         .task(id: item) {
@@ -342,10 +360,13 @@ private struct ClipCardView: View {
                 .clipped()
                 .contentShape(Rectangle())
                 .onTapGesture { onOpen?(proxy.frame(in: .global), thumbnail) }
-                // The UI-test screenshot harness waits on this label to prove the
-                // thumbnail fallback actually engaged.
-                .accessibilityLabel(tileAccessibilityLabel)
+                .accessibilityElement(children: .ignore)
+                // The UI-test screenshot harness waits on this label's placeholder clause to
+                // prove the thumbnail fallback actually engaged.
+                .accessibilityLabel(cardAccessibilityLabel)
                 .accessibilityAddTraits(onOpen == nil ? [] : .isButton)
+                .accessibilityIdentifier(cardAccessibilityIdentifier)
+                .accessibilityAction(named: trashActionName, trash)
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -354,9 +375,35 @@ private struct ClipCardView: View {
         .opacity(item.isTrashed ? 0.4 : 1)
     }
 
-    private var tileAccessibilityLabel: String {
-        guard thumbnail != nil else { return "Thumbnail placeholder" }
-        return item.isOriginal ? "Original video" : "Open clip"
+    /// Everything one card conveys visually — which clip it is, how long it runs, and which
+    /// way its trash toggle is set — as the single element a listener lands on.
+    private var cardAccessibilityLabel: String {
+        let position = viewModel.clipPosition(of: item)
+        return ClipListAccessibility.cardLabel(
+            clipNumber: position?.number,
+            clipCount: position?.count ?? 0,
+            spokenDuration: spokenDuration,
+            isTrashed: item.isTrashed,
+            hasThumbnail: thumbnail != nil)
+    }
+
+    /// The original stands for the whole source video, so it speaks a whole-video duration;
+    /// a detected clip runs seconds and speaks the tenth of a second its trim carries.
+    private var spokenDuration: String {
+        let seconds = item.window.endTime - item.window.startTime
+        return item.isOriginal
+            ? VideoDurationFormatter.accessibilityString(from: seconds)
+            : ClipDurationFormatter.accessibilityString(from: seconds)
+    }
+
+    private var cardAccessibilityIdentifier: String {
+        guard let position = viewModel.clipPosition(of: item) else { return "clip-card-original" }
+        return "clip-card-\(position.number)"
+    }
+
+    private var trashActionName: String {
+        ClipListAccessibility.trashActionName(
+            isTrashed: item.isTrashed, isOriginal: item.isOriginal)
     }
 
     @ViewBuilder
@@ -397,10 +444,16 @@ private struct ClipCardView: View {
                     .foregroundStyle(.white)
             }
             .frame(width: Self.iconButtonDiameter, height: Self.iconButtonDiameter)
+            // Grows the hit and focus regions from the drawn 28 pt circle to the 44 pt floor.
+            // On the label, so it's part of the Button's own hit-testing region — the same
+            // placement `ScrimIconButton` uses — and as an inset rather than a `frame`, which
+            // would re-center the circle in the larger box and push it off the tile's corner.
+            .contentShape([.interaction, .accessibility], Rectangle().inset(by: -8))
         }
         .buttonStyle(.plain)
         .padding(6)
         .accessibilityLabel(item.isTrashed ? "Restore clip" : "Trash clip")
+        .accessibilityIdentifier("clip-trash-toggle")
     }
 
     private func trash() {
