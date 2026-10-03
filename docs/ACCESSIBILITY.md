@@ -198,7 +198,7 @@ control:
     `StringProtocol` overload and a literal passed at the call site is never a
     `LocalizedStringKey`. It looks localizable at every call site, which is what makes it easy
     to miss. Fixing it means changing those parameters to `LocalizedStringKey` across all
-    their callers; tracked separately rather than folded into the accessibility sweep.
+    their callers, which is tracked in #215 rather than folded into the accessibility sweep.
 
 ## Not in scope
 
