@@ -166,6 +166,9 @@ final class ClipListViewModel: ObservableObject {
     /// `TurnipSettingsStore.shared`, type-checks as a default argument.
     private let settingsProvider: @MainActor () -> TurnipSettings
     private let announce: AccessibilityAnnouncing
+    /// For a message that lands as the screen changes: the zero-tricks notice, shown as this
+    /// screen is pushed, and the save's completion, posted just before the pop to Home.
+    private let announceAfterScreenChange: AccessibilityAnnouncing
 
     /// The asset's duration in seconds, loaded once per asset and shared by every
     /// card's range timeline, its loop's window clamp, and `addClip()`. `nil` when the
@@ -202,7 +205,9 @@ final class ClipListViewModel: ObservableObject {
         deleteOriginalAsset: @escaping DeleteOriginalAsset = deleteOriginalVideo,
         makeDirectory: @escaping @Sendable () -> URL = defaultExportDirectory,
         settingsProvider: @escaping @MainActor () -> TurnipSettings = { TurnipSettingsStore.shared.current },
-        announce: @escaping AccessibilityAnnouncing = postAccessibilityAnnouncement
+        announce: @escaping AccessibilityAnnouncing = postAccessibilityAnnouncement,
+        announceAfterScreenChange: @escaping AccessibilityAnnouncing =
+            postAccessibilityAnnouncementAfterScreenChange
     ) {
         let original = ClipListItem(
             window: TrickWindow(startTime: 0, endTime: max(duration, 0)),
@@ -219,6 +224,7 @@ final class ClipListViewModel: ObservableObject {
         self.makeDirectory = makeDirectory
         self.settingsProvider = settingsProvider
         self.announce = announce
+        self.announceAfterScreenChange = announceAfterScreenChange
     }
 
     /// Where `item` sits among the detected clips, 1-based, and how many there are — the
@@ -242,7 +248,7 @@ final class ClipListViewModel: ObservableObject {
 
     /// Speaks the zero-tricks notice, which otherwise fades itself out unheard.
     func announceNoTricksFound() {
-        announce(ClipListAccessibility.noTricksFound)
+        announceAfterScreenChange(ClipListAccessibility.noTricksFound)
     }
 
     /// The analyzed asset, shared with the editor destination so it previews and
@@ -511,7 +517,7 @@ final class ClipListViewModel: ObservableObject {
             try? await deleteOriginalAsset(assetIdentifier)
         }
         if clipCount > 0 {
-            announce(ClipListAccessibility.saveFinished(clipCount: clipCount))
+            announceAfterScreenChange(ClipListAccessibility.saveFinished(clipCount: clipCount))
         }
         return true
     }

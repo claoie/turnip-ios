@@ -41,7 +41,8 @@ final class ClipListTests: XCTestCase {
         saveToPhotos: @escaping SaveOneClipToPhotos = { _, _ in },
         deleteOriginalAsset: @escaping DeleteOriginalAsset = { _ in },
         settingsProvider: @escaping @MainActor () -> TurnipSettings = { TurnipSettings() },
-        announce: @escaping AccessibilityAnnouncing = { _ in }
+        announce: @escaping AccessibilityAnnouncing = { _ in },
+        announceAfterScreenChange: AccessibilityAnnouncing? = nil
     ) -> ClipListViewModel {
         ClipListViewModel(
             items: items,
@@ -57,7 +58,8 @@ final class ClipListTests: XCTestCase {
                     .appendingPathComponent("turnip-test-\(UUID().uuidString)", isDirectory: true)
             },
             settingsProvider: settingsProvider,
-            announce: announce)
+            announce: announce,
+            announceAfterScreenChange: announceAfterScreenChange ?? announce)
     }
 
     // MARK: - ClipListItem
@@ -785,6 +787,40 @@ final class ClipListTests: XCTestCase {
         XCTAssertTrue(result)
         XCTAssertEqual(
             spoken.messages, ["Saving 2 clips to Photos", "Saved 2 clips to Photos"])
+    }
+
+    /// The start is spoken in place, but the completion lands as the screen pops to Home, which
+    /// is when VoiceOver drops an announcement — so it goes out once the screen has settled.
+    @MainActor
+    func testSaveCompletionWaitsOutTheScreenChange() async {
+        let spokenNow = SpokenAnnouncements()
+        let spokenAfter = SpokenAnnouncements()
+        let viewModel = makeViewModel(
+            items: [makeItem()],
+            announce: { spokenNow.messages.append($0) },
+            announceAfterScreenChange: { spokenAfter.messages.append($0) })
+
+        let result = await viewModel.save()
+
+        XCTAssertTrue(result)
+        XCTAssertEqual(spokenNow.messages, ["Saving 1 clip to Photos"])
+        XCTAssertEqual(spokenAfter.messages, ["Saved 1 clip to Photos"])
+    }
+
+    /// The zero-tricks notice appears as the Clip List is pushed, so it is spoken after the push.
+    @MainActor
+    func testNoTricksNoticeIsSpokenAfterTheScreenChange() {
+        let spokenNow = SpokenAnnouncements()
+        let spokenAfter = SpokenAnnouncements()
+        let viewModel = makeViewModel(
+            items: [],
+            announce: { spokenNow.messages.append($0) },
+            announceAfterScreenChange: { spokenAfter.messages.append($0) })
+
+        viewModel.announceNoTricksFound()
+
+        XCTAssertEqual(spokenNow.messages, [])
+        XCTAssertEqual(spokenAfter.messages, ["No tricks found"])
     }
 
     /// A run with nothing to write — no tricks found, or every clip discarded — still pops to

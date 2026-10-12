@@ -14,3 +14,13 @@ typealias AccessibilityAnnouncing = @MainActor (String) -> Void
 func postAccessibilityAnnouncement(_ message: String) {
     UIAccessibility.post(notification: .announcement, argument: message)
 }
+
+/// `postAccessibilityAnnouncement`, held back until a screen change starting now has
+/// settled: VoiceOver drops an announcement posted while the screen is changing.
+@MainActor
+func postAccessibilityAnnouncementAfterScreenChange(_ message: String) {
+    Task { @MainActor in
+        try? await Task.sleep(for: .seconds(1))
+        postAccessibilityAnnouncement(message)
+    }
+}

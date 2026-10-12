@@ -197,8 +197,8 @@ struct TrimSliderView: View {
     /// The window the two handles currently bracket, read as one element rather than as two
     /// unlabeled timestamps.
     private var trimRangeLabel: String {
-        let start = ClipDurationFormatter.string(from: viewModel.window.startTime)
-        let end = ClipDurationFormatter.string(from: viewModel.window.endTime)
+        let start = ClipDurationFormatter.accessibilityString(from: viewModel.window.startTime)
+        let end = ClipDurationFormatter.accessibilityString(from: viewModel.window.endTime)
         return String(localized: "Trim range \(start) to \(end)")
     }
 

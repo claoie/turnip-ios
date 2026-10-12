@@ -130,14 +130,17 @@ control:
   completion signal is the spinner leaving — which is exactly the item the retired export
   confirmation screen (#19) handed over. A run with no clip to write speaks neither. A failed
   run never speaks completion; its alert is a `UIAlertController`, which VoiceOver announces on
-  presentation.
+  presentation. The completion is posted just before the pop to Home, so it goes out a second
+  later (`postAccessibilityAnnouncementAfterScreenChange`): VoiceOver drops an announcement
+  posted while the screen is changing.
 - Per-clip failures name their clip ("Clip 2 of 3: Export failed — …") by the card's own
   position, so the number leads back to the card that failed. A grid of one clip has nothing to
   disambiguate, so it stays unnumbered.
 - After a partial failure, a clip that already landed carries a "Saved to Photos" marker, read
   as its own element after the card. A retry writes only the unmarked clips, so Save Clips'
   value and the start and completion announcements count those, not every card on screen.
-- The zero-tricks notice is announced on arrival, and **does not dismiss itself while a screen
+- The zero-tricks notice is announced once the push onto the Clip List has settled, through
+  the same delayed post, and **does not dismiss itself while a screen
   reader is running** — a notice on a five-second timer can expire before VoiceOver reaches it.
   It waits for a tap instead (`GlassNoticeView.isScreenReaderRunning`).
 - No auto-playing loops when `accessibilityReduceMotion` is on; respect

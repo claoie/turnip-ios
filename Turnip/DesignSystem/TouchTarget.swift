@@ -15,12 +15,28 @@ extension View {
     /// 16.0 (`project.yml`), so below 17 the interaction shape widens alone: the control is
     /// still reachable and still hit-testable at 44 pt, and only the focus rectangle stays
     /// drawn tight to the glyph.
+    ///
+    /// `axes` limits the growth for a control laid out beside another one, where widening it
+    /// sideways would take taps meant for its neighbor.
     @ViewBuilder
-    func touchTarget(insetBy inset: CGFloat) -> some View {
+    func touchTarget(insetBy inset: CGFloat, axes: Axis.Set = [.horizontal, .vertical]) -> some View {
+        let shape = OutsetRectangle(
+            dx: axes.contains(.horizontal) ? inset : 0,
+            dy: axes.contains(.vertical) ? inset : 0)
         if #available(iOS 17.0, *) {
-            contentShape([.interaction, .accessibility], Rectangle().inset(by: -inset))
+            contentShape([.interaction, .accessibility], shape)
         } else {
-            contentShape(Rectangle().inset(by: -inset))
+            contentShape(shape)
         }
+    }
+}
+
+/// A rectangle grown past its frame by `dx` on each side and `dy` above and below.
+private struct OutsetRectangle: Shape {
+    let dx: CGFloat
+    let dy: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(rect.insetBy(dx: -dx, dy: -dy))
     }
 }

@@ -202,7 +202,7 @@ final class ScreenshotTests: XCTestCase {
     /// failing fast with a reason if its sample movie failed to encode — see `testClipEditor`.
     private func waitForClipEditorToLoad(_ app: XCUIApplication) {
         let trimRange = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == 'Trim range 2.0s to 5.0s'"))
+            .matching(NSPredicate(format: "label == 'Trim range 2 seconds to 5 seconds'"))
             .firstMatch
         let loadFailure = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label BEGINSWITH %@", "Couldn't load this clip"))
@@ -267,7 +267,7 @@ final class ScreenshotTests: XCTestCase {
 
     /// Clip editor over a generated sample movie: the preview with the live crop
     /// rect and the trim slider. The trim range's accessibility
-    /// label ("Trim range 2.0s to 5.0s") only appears once the movie's duration
+    /// label ("Trim range 2 seconds to 5 seconds") only appears once the movie's duration
     /// loads, so it also proves the editor reached its loaded state.
     ///
     /// The wait is longer than this file's usual 15s: unlike every other wait
@@ -280,7 +280,7 @@ final class ScreenshotTests: XCTestCase {
         app.launchArguments = ["-screenshotClipEditor"]
         app.launch()
         let trimRange = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == 'Trim range 2.0s to 5.0s'"))
+            .matching(NSPredicate(format: "label == 'Trim range 2 seconds to 5 seconds'"))
             .firstMatch
         // Fail fast, and with a reason, if the harness degraded to its load-failure
         // fallback: without this, a sample-movie encode that failed on a loaded CI

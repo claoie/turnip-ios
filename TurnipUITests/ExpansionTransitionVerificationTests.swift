@@ -11,9 +11,6 @@ final class ExpansionTransitionVerificationTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// Polls `element.frame` until two consecutive reads agree, rather than a fixed sleep —
-    /// the flight settles in well under a second, but a fixed sleep risks sampling mid-flight
-    /// on a loaded CI runner.
     /// The first detected clip's card, once its thumbnail has decoded: a tap hands the flight
     /// that thumbnail as its starting picture.
     private func firstClipCard(in app: XCUIApplication) -> XCUIElement {
@@ -23,6 +20,9 @@ final class ExpansionTransitionVerificationTests: XCTestCase {
             .firstMatch
     }
 
+    /// Polls `element.frame` until two consecutive reads agree, rather than a fixed sleep —
+    /// the flight settles in well under a second, but a fixed sleep risks sampling mid-flight
+    /// on a loaded CI runner.
     private func settledFrame(of element: XCUIElement, timeout: TimeInterval = 5) -> CGRect {
         var previous = element.frame
         let deadline = Date().addingTimeInterval(timeout)
@@ -167,7 +167,7 @@ final class ExpansionTransitionVerificationTests: XCTestCase {
             .matching(NSPredicate(format: "label BEGINSWITH 'Trim range'"))
             .firstMatch
         XCTAssertTrue(trimmed.waitForExistence(timeout: 5))
-        XCTAssertNotEqual(trimmed.label, "Trim range 0.5s to 2.0s", "the drag didn't move the end handle")
+        XCTAssertNotEqual(trimmed.label, "Trim range 0.5 seconds to 2 seconds", "the drag didn't move the end handle")
 
         // Down from the title itself — the top row's band, which the dismiss gesture owns
         // (the video surface keeps a downward drag for its own crop gesture) — so the
