@@ -256,19 +256,25 @@ final class ClipListTests: XCTestCase {
         XCTAssertTrue(viewModel.items[1].isSaved)
     }
 
-    /// The editor clamps a window that runs past the video's end as it loads, so an untouched
-    /// clip like that comes back with a shorter window. The export it describes is the same.
+    /// The editor clamps a window that runs past the video's end as it loads, against the
+    /// `AVAsset`'s own duration, so an untouched clip like that comes back with a shorter window.
+    /// The list is handed the Photos duration, which can differ — here half a second longer —
+    /// so the comparison has to clamp against the asset's duration too.
     @MainActor
-    func testApplyEditorResultKeepsTheSavedFlagWhenOnlyTheLoadClampMovedTheWindow() async {
+    func testApplyEditorResultKeepsTheSavedFlagWhenOnlyTheLoadClampMovedTheWindow() async throws {
+        let url = try await TestVideoWriter.writeTestVideo(frameCount: 60, width: 64, height: 64, fps: 30)
+        defer { try? FileManager.default.removeItem(at: url) }
         let overrunning = ClipListItem(
-            window: TrickWindow(startTime: 28, endTime: 31), cropRect: fullFrame)
-        let viewModel = makeViewModel(items: [overrunning], duration: 30)
+            window: TrickWindow(startTime: 1, endTime: 4), cropRect: fullFrame)
+        let viewModel = makeViewModel(items: [overrunning], asset: AVURLAsset(url: url), duration: 2.5)
+        let loaded = await viewModel.assetDuration()
+        let assetDuration = try XCTUnwrap(loaded)
         let result = await viewModel.save()
         XCTAssertTrue(result)
 
         viewModel.applyEditorResult(
             ClipEditorResult(
-                window: TrickWindow(startTime: 28, endTime: 30),
+                window: ClipEditorViewModel.clamped(window: overrunning.window, to: assetDuration),
                 cropRect: fullFrame,
                 cropAdjustment: .identity),
             to: viewModel.items[1].id)
@@ -276,9 +282,26 @@ final class ClipListTests: XCTestCase {
         XCTAssertTrue(viewModel.items[1].isSaved)
     }
 
-    /// A crop change alone is an edit too.
+    /// A crop rect change alone — what Auto crop moves — is an edit too.
     @MainActor
-    func testApplyEditorResultClearsTheSavedFlagOnACropChange() async {
+    func testApplyEditorResultClearsTheSavedFlagOnACropRectChange() async {
+        let viewModel = makeViewModel(items: [makeItem()])
+        let result = await viewModel.save()
+        XCTAssertTrue(result)
+
+        viewModel.applyEditorResult(
+            ClipEditorResult(
+                window: window,
+                cropRect: NormalizedRect(minX: 0.1, maxX: 0.9, minY: 0.1, maxY: 0.9),
+                cropAdjustment: .identity),
+            to: viewModel.items[1].id)
+
+        XCTAssertFalse(viewModel.items[1].isSaved)
+    }
+
+    /// A crop adjustment change alone is an edit too.
+    @MainActor
+    func testApplyEditorResultClearsTheSavedFlagOnACropAdjustmentChange() async {
         let viewModel = makeViewModel(items: [makeItem()])
         let result = await viewModel.save()
         XCTAssertTrue(result)

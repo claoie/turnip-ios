@@ -170,6 +170,9 @@ final class ClipListViewModel: ObservableObject {
     /// card's range timeline, its loop's window clamp, and `addClip()`. `nil` when the
     /// asset can't be read — the timeline then hides itself rather than guessing a scale.
     private var durationTask: Task<TimeInterval?, Never>?
+    /// `assetDuration()`'s result once it has resolved: the same `AVAsset` duration the
+    /// editor clamps a window to, which can differ from the Photos duration `items[0]` carries.
+    private var loadedAssetDuration: TimeInterval?
 
     /// The video track and its geometry, loaded once per asset and shared by every
     /// card's live preview composition (`videoComposition(cropRect:cropAdjustment:)`).
@@ -254,11 +257,13 @@ final class ClipListViewModel: ObservableObject {
     /// Whether `result` would export the same video as `item`. The editor commits on every
     /// close, so opening a clip only to watch it must not read as an edit. It also clamps a
     /// window that runs past the video's end when it loads, which changes the window without
-    /// changing what an export of it contains.
+    /// changing what an export of it contains. That clamp uses the asset's own duration, so the
+    /// comparison does too; until the cards have loaded it, only an identical window matches.
     private func describesTheSameVideo(_ result: ClipEditorResult, as item: ClipListItem) -> Bool {
-        let videoDuration = items.first(where: \.isOriginal)?.window.endTime ?? 0
-        let sameWindow = result.window == item.window
-            || result.window == ClipEditorViewModel.clamped(window: item.window, to: videoDuration)
+        var sameWindow = result.window == item.window
+        if !sameWindow, let loadedAssetDuration {
+            sameWindow = result.window == ClipEditorViewModel.clamped(window: item.window, to: loadedAssetDuration)
+        }
         return sameWindow && result.cropRect == item.cropRect && result.cropAdjustment == item.cropAdjustment
     }
 
@@ -322,7 +327,9 @@ final class ClipListViewModel: ObservableObject {
             }
         }
         guard let durationTask else { return nil }
-        return await durationTask.value
+        let duration = await durationTask.value
+        loadedAssetDuration = duration
+        return duration
     }
 
     /// Loads the source video track's natural size, preferred transform, and nominal
