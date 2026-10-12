@@ -261,7 +261,7 @@ final class ScreenshotTests: XCTestCase {
             .firstMatch
         XCTAssertTrue(badge.waitForExistence(timeout: 15))
         badge.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(app.navigationBars["Edit clip"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["clip-editor-title"].waitForExistence(timeout: 15))
     }
 
     /// Clip editor over a generated sample movie: the preview with the live crop
