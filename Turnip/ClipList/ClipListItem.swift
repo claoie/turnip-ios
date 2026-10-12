@@ -16,8 +16,9 @@ import Foundation
 /// failure re-exports only the clips still missing from the library: without it the
 /// save loop's predicate matches every clip again and the ones that already landed
 /// get written a second time, which nothing in the app can undo. It resets when the
-/// editor commits new geometry (`ClipListViewModel.applyEditorResult(_:to:)` builds a
-/// fresh item), since an edited clip is no longer the one that was saved.
+/// editor commits different geometry (`ClipListViewModel.applyEditorResult(_:to:)`),
+/// since an edited clip is no longer the one that was saved; opening a clip and closing
+/// it unchanged leaves it set.
 ///
 /// `isOriginal` marks the one item — always `ClipListViewModel.items[0]` — that
 /// stands for the source video already in Photos rather than a derived clip: it

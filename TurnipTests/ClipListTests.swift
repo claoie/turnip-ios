@@ -241,6 +241,58 @@ final class ClipListTests: XCTestCase {
         XCTAssertFalse(viewModel.items[1].isSaved)
     }
 
+    /// The editor commits on every close, including one where nothing changed. Opening a saved
+    /// clip just to watch it must leave it saved, or the retry writes it to Photos a second time.
+    @MainActor
+    func testApplyEditorResultKeepsTheSavedFlagWhenNothingChanged() async {
+        let viewModel = makeViewModel(items: [makeItem()])
+        let result = await viewModel.save()
+        XCTAssertTrue(result)
+
+        viewModel.applyEditorResult(
+            ClipEditorResult(window: window, cropRect: fullFrame, cropAdjustment: .identity),
+            to: viewModel.items[1].id)
+
+        XCTAssertTrue(viewModel.items[1].isSaved)
+    }
+
+    /// The editor clamps a window that runs past the video's end as it loads, so an untouched
+    /// clip like that comes back with a shorter window. The export it describes is the same.
+    @MainActor
+    func testApplyEditorResultKeepsTheSavedFlagWhenOnlyTheLoadClampMovedTheWindow() async {
+        let overrunning = ClipListItem(
+            window: TrickWindow(startTime: 28, endTime: 31), cropRect: fullFrame)
+        let viewModel = makeViewModel(items: [overrunning], duration: 30)
+        let result = await viewModel.save()
+        XCTAssertTrue(result)
+
+        viewModel.applyEditorResult(
+            ClipEditorResult(
+                window: TrickWindow(startTime: 28, endTime: 30),
+                cropRect: fullFrame,
+                cropAdjustment: .identity),
+            to: viewModel.items[1].id)
+
+        XCTAssertTrue(viewModel.items[1].isSaved)
+    }
+
+    /// A crop change alone is an edit too.
+    @MainActor
+    func testApplyEditorResultClearsTheSavedFlagOnACropChange() async {
+        let viewModel = makeViewModel(items: [makeItem()])
+        let result = await viewModel.save()
+        XCTAssertTrue(result)
+
+        viewModel.applyEditorResult(
+            ClipEditorResult(
+                window: window,
+                cropRect: fullFrame,
+                cropAdjustment: CropAdjustment(scale: 2, rotationRadians: 0, offset: .zero)),
+            to: viewModel.items[1].id)
+
+        XCTAssertFalse(viewModel.items[1].isSaved)
+    }
+
     /// No stale thumbnail after an edit: `thumbnail(for:)` decodes through the real
     /// `ClipThumbnailLoader` against a real one-frame video. The edit changes only
     /// `cropRect` (same window, same midpoint, so the seek target is identical both

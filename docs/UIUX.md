@@ -447,11 +447,11 @@ default empty state, so it never reads as "your library is empty."
   a second copy of a healthy clip in the user's library. Its tile's marker is
   what says which clips those are. Once the last missing clip lands, that
   retry deletes the trashed original exactly as a clean first Save Clips would.
-  One residue the skip doesn't cover: editing a clip after a partial failure
-  clears its marker, correctly, since the retrimmed clip isn't the one that
-  landed — so the retry writes the new version and the pre-edit copy stays in
-  Photos. Nothing in the app can take that copy back; the user deletes it in
-  Photos. The app tracks no identifier for an asset it wrote, so it can't
+  Opening a saved clip and closing it unchanged keeps its marker. One residue
+  the skip doesn't cover: editing a clip after a partial failure clears its
+  marker, correctly, since the retrimmed clip isn't the one that landed — so
+  the retry writes the new version and the pre-edit copy stays in Photos.
+  Nothing in the app can take that copy back; the user deletes it in Photos. The app tracks no identifier for an asset it wrote, so it can't
   offer to.
 - *Planned* ([`PROFILE_DESIGN.md`](PROFILE_DESIGN.md) §2.3, §4): "Save Clips"
   becomes "Next: name clips", which opens Name Clips (§3a), where the save now

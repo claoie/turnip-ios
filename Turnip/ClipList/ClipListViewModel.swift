@@ -236,17 +236,30 @@ final class ClipListViewModel: ObservableObject {
     /// and crop adjustment the user left the editor with replace the list entry's, so
     /// trim/crop edits commit on back-navigation (docs/UIUX.md § "Clip Detail / Editor").
     /// The item's `isTrashed` carries over unchanged — the editor doesn't own that decision.
-    /// `isSaved` deliberately does not: the clip the user just retrimmed or recropped is not
-    /// the one that landed in Photos, so Save Clips has to export and save it again.
-    /// A no-op for unknown ids.
+    /// `isSaved` carries over only while the result still describes the video that landed:
+    /// a clip the user retrimmed or recropped is not the one in Photos, so Save Clips has to
+    /// export and save it again. A no-op for unknown ids.
     func applyEditorResult(_ result: ClipEditorResult, to id: UUID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        let item = items[index]
         items[index] = ClipListItem(
             id: id,
             window: result.window,
             cropRect: result.cropRect,
             cropAdjustment: result.cropAdjustment,
-            isTrashed: items[index].isTrashed)
+            isTrashed: item.isTrashed,
+            isSaved: item.isSaved && describesTheSameVideo(result, as: item))
+    }
+
+    /// Whether `result` would export the same video as `item`. The editor commits on every
+    /// close, so opening a clip only to watch it must not read as an edit. It also clamps a
+    /// window that runs past the video's end when it loads, which changes the window without
+    /// changing what an export of it contains.
+    private func describesTheSameVideo(_ result: ClipEditorResult, as item: ClipListItem) -> Bool {
+        let videoDuration = items.first(where: \.isOriginal)?.window.endTime ?? 0
+        let sameWindow = result.window == item.window
+            || result.window == ClipEditorViewModel.clamped(window: item.window, to: videoDuration)
+        return sameWindow && result.cropRect == item.cropRect && result.cropAdjustment == item.cropAdjustment
     }
 
     /// Removes the item with the given id entirely: the editor's Delete action, and
