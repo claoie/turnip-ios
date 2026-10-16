@@ -83,9 +83,10 @@ enum ClipListAccessibility {
             : String(localized: "Saved \(clipCount) clips to Photos")
     }
 
-    /// One clip's failure. A run reports its failures together, so without the number a
-    /// listener hearing two reasons cannot tell which clips they belong to — but a run with
-    /// one clip has nothing to disambiguate, and "Clip 1 of 1" there is pure noise.
+    /// One clip's failure, numbered like its card. A run reports its failures together, so
+    /// without the number a listener hearing two reasons cannot tell which clips they belong
+    /// to — but a grid of one clip has nothing to disambiguate, and "Clip 1 of 1" there is
+    /// pure noise.
     static func saveFailure(clipNumber: Int, clipCount: Int, reason: String) -> String {
         guard clipCount > 1 else { return reason }
         return String(localized: "Clip \(clipNumber) of \(clipCount): \(reason)")
