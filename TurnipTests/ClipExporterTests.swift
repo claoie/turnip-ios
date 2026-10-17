@@ -199,7 +199,12 @@ final class ClipExporterTests: XCTestCase {
         let transform = try XCTUnwrap(ClipExportTransform.make(
             cropPath: movingPath, over: 1...5, naturalSize: landscape, preferredTransform: .identity))
 
-        XCTAssertEqual(transform.renderSize, CGSize(width: 384, height: 648))
+        // A path never zooms, so the whole clip renders at the size a static crop on any one of
+        // its rects would — computed rather than written out, since 0.2 of 1920 in Float rounds
+        // up to the next even pixel.
+        let firstRect = try XCTUnwrap(ClipExportTransform.make(
+            cropRect: movingPath.keyframes[0].rect, naturalSize: landscape, preferredTransform: .identity))
+        XCTAssertEqual(transform.renderSize, firstRect.renderSize)
         let stops: [TimeInterval] = [1, 2, 3, 4, 5]
         XCTAssertEqual(transform.ramps.count, stops.count - 1)
         for (ramp, (earlier, later)) in zip(transform.ramps, zip(stops, stops.dropFirst())) {
