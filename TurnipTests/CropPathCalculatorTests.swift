@@ -165,6 +165,22 @@ final class CropPathCalculatorTests: XCTestCase {
         }
     }
 
+    /// The last located keyframe can sit off its smoothed center, shifted to keep a sudden move
+    /// in; the frames after it hold that keyframe rather than stepping back to the center.
+    func testUnlocatedFramesAfterAContainedJumpHoldTheShiftedKeyframe() throws {
+        let located = (0..<20).map { index in
+            athlete(at: Double(index) * 0.1, x: index < 18 ? 0.3 : 0.6)
+        }
+        let trailing = (0..<10).map { frame(at: 2 + Double($0) * 0.1, []) }
+
+        let path = try XCTUnwrap(calculator.cropPath(for: located + trailing, renderedPixelSize: landscape))
+
+        XCTAssertLessThanOrEqual(0.62, path.keyframes[19].rect.maxX + 0.00001)
+        for keyframe in path.keyframes[20...] {
+            XCTAssertEqual(keyframe.rect, path.keyframes[19].rect, "t=\(keyframe.time)")
+        }
+    }
+
     /// An athlete taller than a 9:16 crop of the frame's height can hold: the crop shrinks
     /// uniformly to the frame's height and keeps its ratio.
     func testAFullHeightAthleteShrinksTheCropToTheFrame() throws {
