@@ -1030,6 +1030,155 @@ final class ClipListTests: XCTestCase {
         _ = await first
     }
 
+    // MARK: - Follow the athlete
+
+    private let followedWindow = TrickWindow(startTime: 0, endTime: 3)
+
+    /// An athlete crossing the frame left to right over three seconds of samples.
+    private func crossingAthlete() -> [PoseFrameResult] {
+        (0..<30).map { index in
+            let x: Float = 0.2 + 0.02 * Float(index)
+            return PoseFixture.frame(index: index, hip: (x: x, y: 0.6), upperBody: (x: x, y: 0.3))
+        }
+    }
+
+    private func standingAthlete() -> [PoseFrameResult] {
+        (0..<30).map { PoseFixture.frame(index: $0, hip: (x: 0.5, y: 0.6), upperBody: (x: 0.5, y: 0.3)) }
+    }
+
+    private func writeFollowVideo() async throws -> URL {
+        try await TestVideoWriter.writeTestVideo(frameCount: 90, width: 64, height: 36, fps: 30)
+    }
+
+    @MainActor
+    func testFollowTheAthleteGivesACrossingAthleteAMovingCrop() async throws {
+        let url = try await writeFollowVideo()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let viewModel = makeViewModel(
+            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
+            asset: AVURLAsset(url: url), duration: 3, settingsProvider: { TurnipSettings(followAthlete: true) })
+
+        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+
+        let followed = try XCTUnwrap(path)
+        XCTAssertFalse(followed.isStatic)
+        XCTAssertEqual(followed.keyframes.count, 30)
+    }
+
+    @MainActor
+    func testWithFollowOffEveryClipHoldsItsStaticCrop() async throws {
+        let url = try await writeFollowVideo()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let viewModel = makeViewModel(
+            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
+            asset: AVURLAsset(url: url), duration: 3)
+
+        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+
+        XCTAssertNil(path)
+    }
+
+    /// The editor shows the static crop, so a clip the user reframed there keeps what they set.
+    @MainActor
+    func testAClipReframedInTheEditorHoldsItsStaticCrop() async throws {
+        let url = try await writeFollowVideo()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let viewModel = makeViewModel(
+            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
+            asset: AVURLAsset(url: url), duration: 3, settingsProvider: { TurnipSettings(followAthlete: true) })
+        let reframed = CropAdjustment(scale: 1.2, rotationRadians: 0, offset: .zero)
+
+        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: reframed)
+
+        XCTAssertNil(path)
+    }
+
+    /// A crop that would never move is no different from the static one, and the static one is
+    /// what the editor shows.
+    @MainActor
+    func testAnAthleteWhoStaysPutHoldsTheStaticCrop() async throws {
+        let url = try await writeFollowVideo()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let viewModel = makeViewModel(
+            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: standingAthlete(),
+            asset: AVURLAsset(url: url), duration: 3, settingsProvider: { TurnipSettings(followAthlete: true) })
+
+        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+
+        XCTAssertNil(path)
+    }
+
+    /// Read once when the screen opens: a change mid-screen would leave the cards already on
+    /// screen and the save disagreeing about which crop a clip has.
+    @MainActor
+    func testFollowTheAthleteIsReadOnceWhenTheScreenOpens() async throws {
+        final class FollowSwitch { var isOn = true }
+        let url = try await writeFollowVideo()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let toggle = FollowSwitch()
+        let viewModel = makeViewModel(
+            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
+            asset: AVURLAsset(url: url), duration: 3,
+            settingsProvider: { TurnipSettings(followAthlete: toggle.isOn) })
+        toggle.isOn = false
+
+        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+
+        XCTAssertNotNil(path)
+    }
+
+    @MainActor
+    func testSaveExportsAFollowedClipAlongItsPath() async throws {
+        actor Recorder {
+            var paths: [CropPath?] = []
+            func record(_ path: CropPath?) { paths.append(path) }
+        }
+        let url = try await writeFollowVideo()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let recorder = Recorder()
+        let viewModel = makeViewModel(
+            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
+            asset: AVURLAsset(url: url), duration: 3,
+            exportClip: { spec, _, _, _ in
+                await recorder.record(spec.cropPath)
+                return URL(fileURLWithPath: "/tmp/fake.mp4")
+            },
+            settingsProvider: { TurnipSettings(followAthlete: true) })
+        let expected = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+
+        let result = await viewModel.save()
+
+        XCTAssertTrue(result)
+        XCTAssertNotNil(expected)
+        let paths = await recorder.paths
+        XCTAssertEqual(paths, [expected])
+    }
+
+    /// A tile's loop plays the moving crop too: its composition ramps, rather than holding the
+    /// static crop's one transform.
+    @MainActor
+    func testAFollowedClipsPreviewCompositionMovesTheCrop() async throws {
+        let url = try await writeFollowVideo()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let viewModel = makeViewModel(
+            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
+            asset: AVURLAsset(url: url), duration: 3, settingsProvider: { TurnipSettings(followAthlete: true) })
+
+        let loaded = await viewModel.videoComposition(
+            cropRect: fullFrame, cropAdjustment: .identity, window: followedWindow)
+
+        let composition = try XCTUnwrap(loaded)
+        let instruction = try XCTUnwrap(
+            composition.instructions.first as? AVMutableVideoCompositionInstruction)
+        let layerInstruction = try XCTUnwrap(instruction.layerInstructions.first)
+        var start = CGAffineTransform.identity
+        var end = CGAffineTransform.identity
+        var range = CMTimeRange(start: .zero, duration: .zero)
+        XCTAssertTrue(layerInstruction.getTransformRamp(
+            for: CMTime(seconds: 1.45, preferredTimescale: 600), start: &start, end: &end, timeRange: &range))
+        XCTAssertNotEqual(start, end)
+    }
+
     // MARK: - Add clip
 
     @MainActor

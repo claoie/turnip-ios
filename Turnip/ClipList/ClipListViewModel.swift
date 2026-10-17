@@ -165,6 +165,10 @@ final class ClipListViewModel: ObservableObject {
     /// so the default value's closure literal, which reads the main-actor-isolated
     /// `TurnipSettingsStore.shared`, type-checks as a default argument.
     private let settingsProvider: @MainActor () -> TurnipSettings
+    /// Follow the athlete, read once when the screen opens so every card, every loop and the
+    /// save agree on it for the screen's whole life.
+    private let followsAthlete: Bool
+    private let cropPathCalculator = CropPathCalculator()
     private let announce: AccessibilityAnnouncing
     /// For a message that lands as the screen changes: the zero-tricks notice, shown as this
     /// screen is pushed, and the save's completion, posted just before the pop to Home.
@@ -223,6 +227,7 @@ final class ClipListViewModel: ObservableObject {
         self.deleteOriginalAsset = deleteOriginalAsset
         self.makeDirectory = makeDirectory
         self.settingsProvider = settingsProvider
+        self.followsAthlete = settingsProvider().followAthlete
         self.announce = announce
         self.announceAfterScreenChange = announceAfterScreenChange
     }
@@ -401,18 +406,49 @@ final class ClipListViewModel: ObservableObject {
     /// stale-`self`) item, and threading a whole `ClipListItem` through here would tempt a
     /// caller into rereading `item` itself for these two fields instead of passing the
     /// geometry it already resolved.
+    ///
+    /// With a `window`, a clip that follows the athlete (`cropPath(window:cropAdjustment:)`)
+    /// renders its moving crop, timed in source time since the player runs over the
+    /// untrimmed asset.
     func videoComposition(
-        cropRect: NormalizedRect, cropAdjustment: CropAdjustment
+        cropRect: NormalizedRect, cropAdjustment: CropAdjustment, window: TrickWindow? = nil
     ) async -> AVVideoComposition? {
         guard let geometry = await trackGeometry(),
               let duration = try? await asset.load(.duration)
         else { return nil }
-        guard let transform = ClipExportTransform.make(
+        var path: CropPath?
+        if let window {
+            path = await cropPath(window: window, cropAdjustment: cropAdjustment)
+        }
+        let moving = path.flatMap {
+            ClipExportTransform.make(
+                cropPath: $0, over: 0...max(duration.seconds, 0), naturalSize: geometry.naturalSize,
+                preferredTransform: geometry.preferredTransform, cropAdjustment: cropAdjustment)
+        }
+        guard let transform = moving ?? ClipExportTransform.make(
             cropRect: cropRect, naturalSize: geometry.naturalSize,
             preferredTransform: geometry.preferredTransform, cropAdjustment: cropAdjustment)
         else { return nil }
         return transform.makeVideoComposition(
             for: geometry.track, duration: duration, frameRate: geometry.frameRate)
+    }
+
+    /// The path a clip's crop follows, or `nil` when it holds its static crop: Follow the
+    /// athlete is off, the editor reframed the clip (the editor shows the static crop, and a
+    /// reframe is the user choosing it), nothing in the window was located, or the athlete
+    /// stays put.
+    func cropPath(window: TrickWindow, cropAdjustment: CropAdjustment) async -> CropPath? {
+        guard followsAthlete, cropAdjustment == .identity, let geometry = await trackGeometry() else { return nil }
+        let framesInWindow = poseFrames.filter {
+            $0.timestamp >= window.startTime && $0.timestamp <= window.endTime
+        }
+        let displayedSize = VideoTrackGeometry(
+            naturalSize: geometry.naturalSize, preferredTransform: geometry.preferredTransform
+        ).displayedSize
+        guard let path = cropPathCalculator.cropPath(for: framesInWindow, renderedPixelSize: displayedSize),
+              !path.isStatic
+        else { return nil }
+        return path
     }
 
     /// The card thumbnail, loading lazily. Idempotent and safe to call from every card's
@@ -438,7 +474,8 @@ final class ClipListViewModel: ObservableObject {
             return await running.task.value
         }
         let task = Task { [loader, asset, item] in
-            await loader.thumbnail(for: item, in: asset)
+            let path = await self.cropPath(window: item.window, cropAdjustment: item.cropAdjustment)
+            return await loader.thumbnail(for: item, following: path, in: asset)
         }
         inFlight[item.id] = (key, task)
         let image = await task.value
@@ -494,8 +531,10 @@ final class ClipListViewModel: ObservableObject {
         var failures: [String] = []
         for item in items where !item.isOriginal && !item.isTrashed && !item.isSaved {
             do {
+                let path = await cropPath(window: item.window, cropAdjustment: item.cropAdjustment)
                 let spec = ClipSpec(
-                    window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment)
+                    window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment,
+                    cropPath: path)
                 let fileURL = try await exportClip(spec, asset, directory) { _ in }
                 try await saveToPhotos(fileURL, albumTitle)
                 markSaved(item.id)

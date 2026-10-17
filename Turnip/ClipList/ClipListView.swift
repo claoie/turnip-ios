@@ -333,9 +333,10 @@ private struct ClipCardView: View {
         _playback = StateObject(
             wrappedValue: ClipCardPlayback(
                 asset: viewModel.sourceAsset,
-                loadComposition: { [viewModel] cropRect, cropAdjustment in
+                loadComposition: { [viewModel] geometry in
                     await viewModel.videoComposition(
-                        cropRect: cropRect, cropAdjustment: cropAdjustment)
+                        cropRect: geometry.cropRect, cropAdjustment: geometry.cropAdjustment,
+                        window: geometry.window)
                 },
                 loadDuration: { [viewModel] in await viewModel.assetDuration() }))
     }

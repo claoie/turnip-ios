@@ -30,8 +30,8 @@ private final class FakeLoop: ClipLooping {
     }
 }
 
-/// Every loop `ClipCardPlayback` asked for and every framing it loaded a composition for,
-/// both in order, plus the two accessibility settings behind its gate. A class so a test
+/// Every loop `ClipCardPlayback` asked for and every framing and window it loaded a
+/// composition for, all in order, plus the two accessibility settings behind its gate. A class so a test
 /// can flip either setting after construction — both can change while a tile is mounted.
 private final class LoopRecorder {
     struct CompositionRequest: Equatable {
@@ -44,6 +44,7 @@ private final class LoopRecorder {
     var duration: TimeInterval?
     var loops: [FakeLoop] = []
     var compositionRequests: [CompositionRequest] = []
+    var compositionWindows: [TrickWindow] = []
 }
 
 @MainActor
@@ -85,10 +86,11 @@ final class ClipCardPlaybackTests: XCTestCase {
                     isVideoAutoplayEnabled: recorder.isVideoAutoplayEnabled,
                     isReduceMotionEnabled: recorder.isReduceMotionEnabled)
             },
-            loadComposition: { cropRect, cropAdjustment in
+            loadComposition: { geometry in
                 recorder.compositionRequests.append(
                     LoopRecorder.CompositionRequest(
-                        cropRect: cropRect, cropAdjustment: cropAdjustment))
+                        cropRect: geometry.cropRect, cropAdjustment: geometry.cropAdjustment))
+                recorder.compositionWindows.append(geometry.window)
                 return nil
             },
             loadDuration: { recorder.duration },
@@ -421,6 +423,9 @@ final class ClipCardPlaybackTests: XCTestCase {
         XCTAssertEqual(recorder.loops[1].geometry.window, editedWindow)
         XCTAssertEqual(recorder.loops[1].playCount, 1)
         XCTAssertIdentical(playback.loop as? FakeLoop, recorder.loops[1])
+        // A crop that follows the athlete is fitted to the frames inside the window, so the
+        // composition has to be reloaded for the new one too, not just the looper's range.
+        XCTAssertEqual(recorder.compositionWindows, [window, editedWindow])
     }
 
     /// The window arrives through an `.onChange` closure that carries no framing, so the

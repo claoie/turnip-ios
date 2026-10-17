@@ -70,9 +70,11 @@ final class AVPlayerLoop: ClipLooping {
 /// rebuilding over the pre-edit range.
 @MainActor
 final class ClipCardPlayback: ObservableObject {
-    /// Loads the `videoComposition` a loop over this framing has to render through.
+    /// Loads the `videoComposition` a loop over this geometry has to render through. Takes
+    /// the window as well as the framing: a crop that follows the athlete moves along a path
+    /// fitted to the frames inside it.
     typealias LoadComposition = @MainActor (
-        _ cropRect: NormalizedRect, _ cropAdjustment: CropAdjustment
+        _ geometry: ClipCardPlaybackGeometry
     ) async -> AVVideoComposition?
     /// Loads the source asset's real duration, for clamping a window before it reaches the
     /// looper. `nil` when it can't be read — the window then builds unclamped.
@@ -210,7 +212,7 @@ final class ClipCardPlayback: ObservableObject {
         let token = UUID()
         buildToken = token
         buildTask = Task { @MainActor [self] in
-            async let compositionLoad = loadComposition(target.cropRect, target.cropAdjustment)
+            async let compositionLoad = loadComposition(target)
             async let durationLoad = loadDuration()
             let composition = await compositionLoad
             let duration = await durationLoad
