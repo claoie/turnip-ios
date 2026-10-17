@@ -87,7 +87,8 @@ struct CropPathCalculator: Sendable {
 
     /// `nil` when no frame holds a keypoint above the confidence threshold, or when the rendered
     /// frame size is unknown. Otherwise one keyframe per frame, in time order — a frame with no
-    /// located keypoint still gets one, placed by its neighbours.
+    /// located keypoint still gets one, placed by its neighbours — or, before the first located
+    /// sample or after the last, held where the crop is at that end.
     func cropPath(for frames: [PoseFrameResult], renderedPixelSize: CGSize) -> CropPath? {
         guard renderedPixelSize.width > 0, renderedPixelSize.height > 0 else { return nil }
         let samples = frames
@@ -97,7 +98,12 @@ struct CropPathCalculator: Sendable {
         guard !located.isEmpty else { return nil }
 
         let size = cropSize(fitting: located)
-        let smoothed = samples.map { smoothedCenter(at: $0.time, over: located) }
+        // A sample outside the located span takes the center at the span's nearest end: extending
+        // the fitted line past it would turn the last samples' jitter into a pan.
+        let locatedSpan = located[0].time...located[located.count - 1].time
+        let smoothed = samples.map { sample in
+            smoothedCenter(at: min(max(sample.time, locatedSpan.lowerBound), locatedSpan.upperBound), over: located)
+        }
         let centers = isStill(smoothed, size: size)
             ? Array(repeating: Self.unionCenter(of: located), count: samples.count)
             : smoothed
@@ -166,8 +172,8 @@ struct CropPathCalculator: Sendable {
             let offset = sample.time - time
             sums.add(offset: offset, weight: exp(-offset * offset / twoVariance), center: sample.center)
         }
-        // Further than ~38 standard deviations from every located sample, every weight underflows
-        // to zero; the nearest located center is what the fit tends to there.
+        // Inside a run of unlocated samples longer than ~38 standard deviations every weight
+        // underflows to zero, and there is nothing to fit.
         guard sums.weight > 0 else {
             let nearest = located.min { abs($0.time - time) < abs($1.time - time) } ?? located[0]
             return nearest.center

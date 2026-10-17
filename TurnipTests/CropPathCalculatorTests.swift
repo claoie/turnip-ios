@@ -136,8 +136,82 @@ final class CropPathCalculatorTests: XCTestCase {
         XCTAssertEqual(centerX(path.keyframes[11].rect), athleteCenterAtFrame11, accuracy: 0.0001)
     }
 
+    /// A trick window's lead-in and trailing buffers often hold frames where nothing was located.
+    /// Continuing the fitted line into them would turn the last samples' jitter into a pan.
+    func testUnlocatedFramesBeyondTheLocatedSpanKeepAStillCropStill() throws {
+        let jittering = (0..<20).map { index in
+            athlete(at: 1 + Double(index) * 0.1, x: index.isMultiple(of: 2) ? 0.505 : 0.495)
+        }
+        let leadIn = (0..<10).map { frame(at: Double($0) * 0.1, []) }
+        let trailing = (0..<30).map { frame(at: 3 + Double($0) * 0.1, []) }
+
+        let path = try XCTUnwrap(calculator.cropPath(
+            for: leadIn + jittering + trailing, renderedPixelSize: landscape))
+
+        XCTAssertTrue(path.isStatic)
+        XCTAssertEqual(centerX(path.keyframes[0].rect), 0.51, accuracy: 0.00001)
+    }
+
+    func testUnlocatedFramesBeyondTheLocatedSpanHoldTheCropAtThatEnd() throws {
+        let moving = (0..<20).map { athlete(at: Double($0) * 0.1, x: 0.2 + 0.015 * Float($0)) }
+        let trailing = (0..<20).map { frame(at: 2 + Double($0) * 0.1, []) }
+
+        let path = try XCTUnwrap(calculator.cropPath(for: moving + trailing, renderedPixelSize: landscape))
+
+        XCTAssertEqual(path.keyframes.count, 40)
+        let lastLocated = path.keyframes[19].rect
+        for keyframe in path.keyframes[20...] {
+            XCTAssertEqual(keyframe.rect, lastLocated, "t=\(keyframe.time)")
+        }
+    }
+
+    /// An athlete taller than a 9:16 crop of the frame's height can hold: the crop shrinks
+    /// uniformly to the frame's height and keeps its ratio.
+    func testAFullHeightAthleteShrinksTheCropToTheFrame() throws {
+        let frames = (0..<20).map { index -> PoseFrameResult in
+            let x = 0.3 + 0.02 * Float(index)
+            return frame(at: Double(index) * 0.1, [(x: x, y: 0.05), (x: x + 0.05, y: 0.95)])
+        }
+
+        let path = try XCTUnwrap(calculator.cropPath(for: frames, renderedPixelSize: landscape))
+
+        for keyframe in path.keyframes {
+            XCTAssertEqual(keyframe.rect.minY, 0, accuracy: 0.00001)
+            XCTAssertEqual(keyframe.rect.maxY, 1, accuracy: 0.00001)
+            XCTAssertEqual(keyframe.rect.width * Float(landscape.width), 1080 * 9 / 16, accuracy: 0.01)
+        }
+    }
+
+    /// A jump moves the athlete up and down a portrait frame; the crop follows on that axis, keeps
+    /// the athlete in, and stops at the frame's bottom edge.
+    func testTheCropFollowsVerticalMotionWithinTheFrame() throws {
+        let portrait = CGSize(width: 1080, height: 1920)
+        let frames = (0..<30).map { index -> PoseFrameResult in
+            let top: Float = index < 20 ? 0.3 + 0.01 * Float(index) : 0.85
+            return frame(at: Double(index) * 0.1, [(x: 0.5, y: top), (x: 0.52, y: top + 0.15)])
+        }
+
+        let path = try XCTUnwrap(calculator.cropPath(for: frames, renderedPixelSize: portrait))
+
+        XCTAssertFalse(path.isStatic)
+        let centers = path.keyframes.prefix(20).map { centerY($0.rect) }
+        XCTAssertTrue(zip(centers, centers.dropFirst()).allSatisfy { $0 < $1 }, "\(centers)")
+        for (frame, keyframe) in zip(frames, path.keyframes) {
+            XCTAssertLessThanOrEqual(keyframe.rect.maxY, 1)
+            for point in CropRectCalculator.locatedPoints(in: [frame]) {
+                XCTAssertGreaterThanOrEqual(Float(point.y), keyframe.rect.minY - 0.00001, "t=\(keyframe.time)")
+                XCTAssertLessThanOrEqual(Float(point.y), keyframe.rect.maxY + 0.00001, "t=\(keyframe.time)")
+            }
+        }
+        XCTAssertEqual(path.keyframes[29].rect.maxY, 1, accuracy: 0.00001)
+    }
+
+    /// An athlete in the bottom-left corner pushes the padded crop past two edges at once.
     func testTheCropNeverLeavesTheFrame() throws {
-        let frames = (0..<30).map { athlete(at: Double($0) * 0.1, x: 0.002 * Float($0)) }
+        let frames = (0..<30).map { index -> PoseFrameResult in
+            let x = 0.002 * Float(index)
+            return frame(at: Double(index) * 0.1, [(x: x, y: 0.6), (x: x + 0.02, y: 0.99)])
+        }
 
         let path = try XCTUnwrap(calculator.cropPath(for: frames, renderedPixelSize: landscape))
 
@@ -148,6 +222,23 @@ final class CropPathCalculatorTests: XCTestCase {
             XCTAssertLessThanOrEqual(keyframe.rect.maxY, 1)
         }
         XCTAssertEqual(path.keyframes[0].rect.minX, 0, accuracy: 0.00001)
+        XCTAssertEqual(path.keyframes[0].rect.maxY, 1, accuracy: 0.00001)
+    }
+
+    /// A wide athlete — mid-roll, say — on a portrait frame leaves the crop room above and below,
+    /// so drifting down it moves the crop without ever needing the containment step.
+    func testTheCropFollowsVerticalDriftThatStaysInsideIt() throws {
+        let portrait = CGSize(width: 1080, height: 1920)
+        let frames = (0..<30).map { index -> PoseFrameResult in
+            let y = 0.3 + 0.005 * Float(index)
+            return frame(at: Double(index) * 0.1, [(x: 0.35, y: y), (x: 0.65, y: y + 0.02)])
+        }
+
+        let path = try XCTUnwrap(calculator.cropPath(for: frames, renderedPixelSize: portrait))
+
+        XCTAssertFalse(path.isStatic)
+        let centers = path.keyframes.map { centerY($0.rect) }
+        XCTAssertTrue(zip(centers, centers.dropFirst()).allSatisfy { $0 < $1 }, "\(centers)")
     }
 
     /// Smoothing is measured in seconds, so the analysis granularity setting changes how often

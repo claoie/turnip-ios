@@ -145,7 +145,7 @@ Static crop (one rect per clip) is Rev 1's choice — simpler, works well when t
 - Size: the largest rect the static calculator would draw around any single sample (same floor, padding and ratio), shrunk to fit the frame
 - Center: each sample's athlete center from a line fitted through its neighbours by least squares, weighted by a Gaussian of 0.4 s standard deviation. The whole window is known up front, so the fit looks ahead as far as it looks back and the crop moves with the athlete instead of trailing them; a line rather than an average follows steady motion exactly at the window's ends. The width is in seconds, so the analysis granularity changes how often the athlete is sampled, not how the crop moves
 - Still unless moving: when the smoothed centers stay within 10% of the crop's size on both axes, every keyframe takes the static crop's center — keypoint jitter on a standing athlete would otherwise read as camera shake
-- A sample with no located keypoint still gets a keyframe, placed by its neighbours
+- A sample with no located keypoint still gets a keyframe, placed by its neighbours; before the first located sample or after the last — the window's lead-in and trailing buffers often hold these — it is held where the crop is at that end, since extending the fitted line would turn the last samples' jitter into a pan
 - Each keyframe then shifts just far enough to hold that sample's located joints, and slides inside the frame, which wins if the two disagree
 - Between keyframes the crop moves in a straight line, which is what a video composition's transform ramp draws. Export, the Clip List preview and the editor still use the static rect.
 
