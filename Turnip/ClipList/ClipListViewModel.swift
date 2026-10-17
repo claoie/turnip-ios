@@ -289,7 +289,9 @@ final class ClipListViewModel: ObservableObject {
             cropRect: result.cropRect,
             cropAdjustment: result.cropAdjustment,
             isTrashed: item.isTrashed,
-            isSaved: item.isSaved && describesTheSameVideo(result, as: item))
+            isSaved: item.isSaved && describesTheSameVideo(result, as: item),
+            isFramedByDetection: item.isFramedByDetection
+                && result.cropRect == item.cropRect && result.cropAdjustment == item.cropAdjustment)
     }
 
     /// Whether `result` would export the same video as `item`. The editor commits on every
@@ -407,18 +409,18 @@ final class ClipListViewModel: ObservableObject {
     /// caller into rereading `item` itself for these two fields instead of passing the
     /// geometry it already resolved.
     ///
-    /// With a `window`, a clip that follows the athlete (`cropPath(window:cropAdjustment:)`)
-    /// renders its moving crop, timed in source time since the player runs over the
-    /// untrimmed asset.
+    /// With a `followingWindow` — a clip still framed by detection, over its window — a clip
+    /// that follows the athlete (`cropPath(window:isFramedByDetection:)`) renders its moving
+    /// crop, timed in source time since the player runs over the untrimmed asset.
     func videoComposition(
-        cropRect: NormalizedRect, cropAdjustment: CropAdjustment, window: TrickWindow? = nil
+        cropRect: NormalizedRect, cropAdjustment: CropAdjustment, followingWindow: TrickWindow? = nil
     ) async -> AVVideoComposition? {
         guard let geometry = await trackGeometry(),
               let duration = try? await asset.load(.duration)
         else { return nil }
         var path: CropPath?
-        if let window {
-            path = await cropPath(window: window, cropAdjustment: cropAdjustment)
+        if let followingWindow {
+            path = await cropPath(window: followingWindow, isFramedByDetection: true)
         }
         let moving = path.flatMap {
             ClipExportTransform.make(
@@ -434,11 +436,11 @@ final class ClipListViewModel: ObservableObject {
     }
 
     /// The path a clip's crop follows, or `nil` when it holds its static crop: Follow the
-    /// athlete is off, the editor reframed the clip (the editor shows the static crop, and a
-    /// reframe is the user choosing it), nothing in the window was located, or the athlete
-    /// stays put.
-    func cropPath(window: TrickWindow, cropAdjustment: CropAdjustment) async -> CropPath? {
-        guard followsAthlete, cropAdjustment == .identity, let geometry = await trackGeometry() else { return nil }
+    /// athlete is off, the crop is not detection's (the original, a hand-added clip, or one
+    /// the editor reframed — the editor shows the static crop, and a reframe is the user
+    /// choosing it), nothing in the window was located, or the athlete stays put.
+    func cropPath(window: TrickWindow, isFramedByDetection: Bool) async -> CropPath? {
+        guard followsAthlete, isFramedByDetection, let geometry = await trackGeometry() else { return nil }
         let framesInWindow = poseFrames.filter {
             $0.timestamp >= window.startTime && $0.timestamp <= window.endTime
         }
@@ -474,7 +476,7 @@ final class ClipListViewModel: ObservableObject {
             return await running.task.value
         }
         let task = Task { [loader, asset, item] in
-            let path = await self.cropPath(window: item.window, cropAdjustment: item.cropAdjustment)
+            let path = await self.cropPath(window: item.window, isFramedByDetection: item.isFramedByDetection)
             return await loader.thumbnail(for: item, following: path, in: asset)
         }
         inFlight[item.id] = (key, task)
@@ -531,7 +533,7 @@ final class ClipListViewModel: ObservableObject {
         var failures: [String] = []
         for item in items where !item.isOriginal && !item.isTrashed && !item.isSaved {
             do {
-                let path = await cropPath(window: item.window, cropAdjustment: item.cropAdjustment)
+                let path = await cropPath(window: item.window, isFramedByDetection: item.isFramedByDetection)
                 let spec = ClipSpec(
                     window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment,
                     cropPath: path)

@@ -45,6 +45,7 @@ private final class LoopRecorder {
     var loops: [FakeLoop] = []
     var compositionRequests: [CompositionRequest] = []
     var compositionWindows: [TrickWindow] = []
+    var compositionFollowingWindows: [TrickWindow?] = []
 }
 
 @MainActor
@@ -63,12 +64,14 @@ final class ClipCardPlaybackTests: XCTestCase {
     private func geometry(
         window: TrickWindow? = nil,
         cropRect: NormalizedRect? = nil,
-        cropAdjustment: CropAdjustment = .identity
+        cropAdjustment: CropAdjustment = .identity,
+        isFramedByDetection: Bool = false
     ) -> ClipCardPlaybackGeometry {
         ClipCardPlaybackGeometry(
             window: window ?? self.window,
             cropRect: cropRect ?? self.cropRect,
-            cropAdjustment: cropAdjustment)
+            cropAdjustment: cropAdjustment,
+            isFramedByDetection: isFramedByDetection)
     }
 
     /// `AVAsset` is abstract and throws at runtime, so this uses the concrete
@@ -91,6 +94,7 @@ final class ClipCardPlaybackTests: XCTestCase {
                     LoopRecorder.CompositionRequest(
                         cropRect: geometry.cropRect, cropAdjustment: geometry.cropAdjustment))
                 recorder.compositionWindows.append(geometry.window)
+                recorder.compositionFollowingWindows.append(geometry.followingWindow)
                 return nil
             },
             loadDuration: { recorder.duration },
@@ -426,6 +430,29 @@ final class ClipCardPlaybackTests: XCTestCase {
         // A crop that follows the athlete is fitted to the frames inside the window, so the
         // composition has to be reloaded for the new one too, not just the looper's range.
         XCTAssertEqual(recorder.compositionWindows, [window, editedWindow])
+    }
+
+    /// A clip still framed by detection follows the athlete over its window, so a window change
+    /// has to keep that flag: dropping it would rebuild the loop on the static crop.
+    func testWindowChangeKeepsAClipFramedByDetectionFollowingOverTheNewWindow() async {
+        let recorder = LoopRecorder()
+        let playback = makePlayback(recorder)
+        playback.start(geometry: geometry(isFramedByDetection: true), isSuspended: false)
+        await settle(playback)
+
+        playback.windowChanged(to: editedWindow)
+        await settle(playback)
+
+        XCTAssertEqual(recorder.compositionFollowingWindows, [window, editedWindow])
+    }
+
+    func testAClipNotFramedByDetectionLoadsNoFollowingWindow() async {
+        let recorder = LoopRecorder()
+        let playback = makePlayback(recorder)
+        playback.start(geometry: geometry(), isSuspended: false)
+        await settle(playback)
+
+        XCTAssertEqual(recorder.compositionFollowingWindows, [nil])
     }
 
     /// The window arrives through an `.onChange` closure that carries no framing, so the

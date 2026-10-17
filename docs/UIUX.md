@@ -306,8 +306,10 @@ default empty state, so it never reads as "your library is empty."
   - **Follow the athlete** (toggle, off by default) — whether each clip's crop moves with the
     athlete through the trick instead of holding one frame (`docs/DESIGN.md` pipeline step 6,
     "Follow crop"). It applies to the Clip List's tiles, their looping previews and Save Clips,
-    read once when the Clip List opens. A clip whose athlete stays put keeps the static crop, and so does a clip
-    the user reframes in the editor, since the editor shows only the static crop for now.
+    read once when the Clip List opens. Only a detected clip follows, while its crop is still the
+    one detection computed: the original tile, a "+" clip and a clip the user reframes in the
+    editor keep their static crop, since the editor shows only the static crop for now. So does
+    a clip whose athlete stays put.
 - Further settings beyond these five are out of scope for this doc's current revision.
 
 ### 1b. Camera

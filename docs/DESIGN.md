@@ -148,7 +148,7 @@ Static crop (one rect per clip) is Rev 1's choice — simpler, works well when t
 - A sample with no located keypoint still gets a keyframe, placed by its neighbours; before the first located sample or after the last — the window's lead-in and trailing buffers often hold these — it holds that end's keyframe exactly, since extending the fitted line would turn the last samples' jitter into a pan
 - Each keyframe then shifts just far enough to hold that sample's located joints, and slides inside the frame, which wins if the two disagree
 - Between keyframes the crop moves in a straight line, which is what a video composition's transform ramp draws: export and the Clip List's looping preview both render the path as one ramp per stretch between keyframes, and the tile's poster frame is cropped to the path's rect at its own moment
-- Settings' **Follow the athlete** (off by default) turns it on. A path that never moves, and a clip reframed in the editor, keep the static rect; the editor itself still shows only the static rect
+- Settings' **Follow the athlete** (off by default) turns it on, for detected clips whose crop is still detection's: the original tile, a hand-added clip and a clip reframed in the editor keep their static rect, as does a clip whose path never moves. A trim alone keeps the clip following, refitted to the new window. The editor itself still shows only the static rect
 
 Everything above is ~400 lines of Swift on top of the pose output. The pose model does the heavy lifting; this code just interprets it.
 

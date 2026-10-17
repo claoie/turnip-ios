@@ -177,7 +177,8 @@ final class ClipCardPlayback: ObservableObject {
     func windowChanged(to window: TrickWindow) {
         guard let current = geometry else { return }
         geometry = ClipCardPlaybackGeometry(
-            window: window, cropRect: current.cropRect, cropAdjustment: current.cropAdjustment)
+            window: window, cropRect: current.cropRect, cropAdjustment: current.cropAdjustment,
+            isFramedByDetection: current.isFramedByDetection)
         teardown()
         resume()
     }
@@ -250,7 +251,8 @@ final class ClipCardPlayback: ObservableObject {
         let clampedWindow = ClipEditorViewModel.clamped(window: target.window, to: duration)
         guard clampedWindow != target.window else { return target }
         return ClipCardPlaybackGeometry(
-            window: clampedWindow, cropRect: target.cropRect, cropAdjustment: target.cropAdjustment)
+            window: clampedWindow, cropRect: target.cropRect, cropAdjustment: target.cropAdjustment,
+            isFramedByDetection: target.isFramedByDetection)
     }
 
     /// Clears the in-flight slot only if `token` still owns it: a later attempt for the
@@ -272,6 +274,11 @@ struct ClipCardPlaybackGeometry: Equatable {
     let window: TrickWindow
     let cropRect: NormalizedRect
     let cropAdjustment: CropAdjustment
+    var isFramedByDetection = false
+
+    /// The window a crop that follows the athlete is fitted to, or `nil` for a clip whose crop
+    /// isn't detection's and so never follows.
+    var followingWindow: TrickWindow? { isFramedByDetection ? window : nil }
 }
 
 /// Whether a mounted loop has to be replaced to show `target`: `builtFor` is `nil` when

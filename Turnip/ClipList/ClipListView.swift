@@ -336,7 +336,7 @@ private struct ClipCardView: View {
                 loadComposition: { [viewModel] geometry in
                     await viewModel.videoComposition(
                         cropRect: geometry.cropRect, cropAdjustment: geometry.cropAdjustment,
-                        window: geometry.window)
+                        followingWindow: geometry.followingWindow)
                 },
                 loadDuration: { [viewModel] in await viewModel.assetDuration() }))
     }
@@ -386,7 +386,8 @@ private struct ClipCardView: View {
     /// never from an `.onChange` action closure.
     private func currentPlaybackGeometry() -> ClipCardPlaybackGeometry {
         ClipCardPlaybackGeometry(
-            window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment)
+            window: item.window, cropRect: item.cropRect, cropAdjustment: item.cropAdjustment,
+            isFramedByDetection: item.isFramedByDetection)
     }
 
     private var tile: some View {

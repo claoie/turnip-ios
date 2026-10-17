@@ -1034,10 +1034,14 @@ final class ClipListTests: XCTestCase {
 
     private let followedWindow = TrickWindow(startTime: 0, endTime: 3)
 
-    /// An athlete crossing the frame left to right over three seconds of samples.
-    private func crossingAthlete() -> [PoseFrameResult] {
-        (0..<30).map { index in
-            let x: Float = 0.2 + 0.02 * Float(index)
+    private func detectedItem(window: TrickWindow? = nil) -> ClipListItem {
+        ClipListItem(window: window ?? followedWindow, cropRect: fullFrame, isFramedByDetection: true)
+    }
+
+    /// An athlete crossing the frame left to right, sampled every 0.1 s from `firstIndex`.
+    private func crossingAthlete(from firstIndex: Int = 0) -> [PoseFrameResult] {
+        (firstIndex..<(firstIndex + 30)).map { index in
+            let x: Float = 0.2 + 0.02 * Float(index - firstIndex)
             return PoseFixture.frame(index: index, hip: (x: x, y: 0.6), upperBody: (x: x, y: 0.3))
         }
     }
@@ -1046,19 +1050,27 @@ final class ClipListTests: XCTestCase {
         (0..<30).map { PoseFixture.frame(index: $0, hip: (x: 0.5, y: 0.6), upperBody: (x: 0.5, y: 0.3)) }
     }
 
-    private func writeFollowVideo() async throws -> URL {
-        try await TestVideoWriter.writeTestVideo(frameCount: 90, width: 64, height: 36, fps: 30)
+    private func writeFollowVideo(seconds: Int = 3) async throws -> URL {
+        try await TestVideoWriter.writeTestVideo(frameCount: seconds * 30, width: 64, height: 36, fps: 30)
+    }
+
+    @MainActor
+    private func followViewModel(
+        items: [ClipListItem], poseFrames: [PoseFrameResult], url: URL, follow: Bool = true,
+        exportClip: @escaping ExportOneClip = { _, _, _, _ in URL(fileURLWithPath: "/tmp/fake.mp4") }
+    ) -> ClipListViewModel {
+        makeViewModel(
+            items: items, poseFrames: poseFrames, asset: AVURLAsset(url: url), duration: 3,
+            exportClip: exportClip, settingsProvider: { TurnipSettings(followAthlete: follow) })
     }
 
     @MainActor
     func testFollowTheAthleteGivesACrossingAthleteAMovingCrop() async throws {
         let url = try await writeFollowVideo()
         defer { try? FileManager.default.removeItem(at: url) }
-        let viewModel = makeViewModel(
-            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
-            asset: AVURLAsset(url: url), duration: 3, settingsProvider: { TurnipSettings(followAthlete: true) })
+        let viewModel = followViewModel(items: [detectedItem()], poseFrames: crossingAthlete(), url: url)
 
-        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+        let path = await viewModel.cropPath(window: followedWindow, isFramedByDetection: true)
 
         let followed = try XCTUnwrap(path)
         XCTAssertFalse(followed.isStatic)
@@ -1069,28 +1081,59 @@ final class ClipListTests: XCTestCase {
     func testWithFollowOffEveryClipHoldsItsStaticCrop() async throws {
         let url = try await writeFollowVideo()
         defer { try? FileManager.default.removeItem(at: url) }
-        let viewModel = makeViewModel(
-            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
-            asset: AVURLAsset(url: url), duration: 3)
+        let viewModel = followViewModel(
+            items: [detectedItem()], poseFrames: crossingAthlete(), url: url, follow: false)
 
-        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+        let path = await viewModel.cropPath(window: followedWindow, isFramedByDetection: true)
 
         XCTAssertNil(path)
     }
 
-    /// The editor shows the static crop, so a clip the user reframed there keeps what they set.
+    /// Only detection's crop follows: the original stands for the whole video and a "+" clip
+    /// starts on the full frame, and following either would swap its crop for a tight 9:16 one.
     @MainActor
-    func testAClipReframedInTheEditorHoldsItsStaticCrop() async throws {
+    func testTheOriginalAndAHandAddedClipAreNotFramedByDetection() async throws {
         let url = try await writeFollowVideo()
         defer { try? FileManager.default.removeItem(at: url) }
-        let viewModel = makeViewModel(
-            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
-            asset: AVURLAsset(url: url), duration: 3, settingsProvider: { TurnipSettings(followAthlete: true) })
-        let reframed = CropAdjustment(scale: 1.2, rotationRadians: 0, offset: .zero)
+        let viewModel = followViewModel(items: [detectedItem()], poseFrames: crossingAthlete(), url: url)
 
-        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: reframed)
+        await viewModel.addClip()
 
-        XCTAssertNil(path)
+        XCTAssertFalse(viewModel.items[0].isFramedByDetection)
+        XCTAssertTrue(viewModel.items[1].isFramedByDetection)
+        XCTAssertFalse(viewModel.items[2].isFramedByDetection)
+        let addedPath = await viewModel.cropPath(
+            window: viewModel.items[2].window, isFramedByDetection: viewModel.items[2].isFramedByDetection)
+        XCTAssertNil(addedPath)
+    }
+
+    /// The editor shows the static crop, so a clip the user reframed there keeps what they set;
+    /// a trim alone leaves the framing detection's and the path refits to the new window.
+    @MainActor
+    func testAnEditorReframeStopsAClipFollowingButATrimDoesNot() async throws {
+        let url = try await writeFollowVideo()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let viewModel = followViewModel(
+            items: [detectedItem(), detectedItem()], poseFrames: crossingAthlete(), url: url)
+        let trimmed = viewModel.items[1]
+        let reframed = viewModel.items[2]
+
+        viewModel.applyEditorResult(
+            ClipEditorResult(
+                window: TrickWindow(startTime: 0.5, endTime: 2.5), cropRect: trimmed.cropRect,
+                cropAdjustment: trimmed.cropAdjustment),
+            to: trimmed.id)
+        viewModel.applyEditorResult(
+            ClipEditorResult(
+                window: reframed.window, cropRect: reframed.cropRect,
+                cropAdjustment: CropAdjustment(scale: 1.2, rotationRadians: 0, offset: .zero)),
+            to: reframed.id)
+
+        XCTAssertTrue(viewModel.items[1].isFramedByDetection)
+        XCTAssertFalse(viewModel.items[2].isFramedByDetection)
+        let trimmedPath = await viewModel.cropPath(
+            window: viewModel.items[1].window, isFramedByDetection: viewModel.items[1].isFramedByDetection)
+        XCTAssertEqual(trimmedPath?.keyframes.first?.time ?? -1, 0.5, accuracy: 0.0001)
     }
 
     /// A crop that would never move is no different from the static one, and the static one is
@@ -1099,11 +1142,9 @@ final class ClipListTests: XCTestCase {
     func testAnAthleteWhoStaysPutHoldsTheStaticCrop() async throws {
         let url = try await writeFollowVideo()
         defer { try? FileManager.default.removeItem(at: url) }
-        let viewModel = makeViewModel(
-            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: standingAthlete(),
-            asset: AVURLAsset(url: url), duration: 3, settingsProvider: { TurnipSettings(followAthlete: true) })
+        let viewModel = followViewModel(items: [detectedItem()], poseFrames: standingAthlete(), url: url)
 
-        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+        let path = await viewModel.cropPath(window: followedWindow, isFramedByDetection: true)
 
         XCTAssertNil(path)
     }
@@ -1117,12 +1158,11 @@ final class ClipListTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let toggle = FollowSwitch()
         let viewModel = makeViewModel(
-            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
-            asset: AVURLAsset(url: url), duration: 3,
+            items: [detectedItem()], poseFrames: crossingAthlete(), asset: AVURLAsset(url: url), duration: 3,
             settingsProvider: { TurnipSettings(followAthlete: toggle.isOn) })
         toggle.isOn = false
 
-        let path = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+        let path = await viewModel.cropPath(window: followedWindow, isFramedByDetection: true)
 
         XCTAssertNotNil(path)
     }
@@ -1136,15 +1176,13 @@ final class ClipListTests: XCTestCase {
         let url = try await writeFollowVideo()
         defer { try? FileManager.default.removeItem(at: url) }
         let recorder = Recorder()
-        let viewModel = makeViewModel(
-            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
-            asset: AVURLAsset(url: url), duration: 3,
+        let viewModel = followViewModel(
+            items: [detectedItem()], poseFrames: crossingAthlete(), url: url,
             exportClip: { spec, _, _, _ in
                 await recorder.record(spec.cropPath)
                 return URL(fileURLWithPath: "/tmp/fake.mp4")
-            },
-            settingsProvider: { TurnipSettings(followAthlete: true) })
-        let expected = await viewModel.cropPath(window: followedWindow, cropAdjustment: .identity)
+            })
+        let expected = await viewModel.cropPath(window: followedWindow, isFramedByDetection: true)
 
         let result = await viewModel.save()
 
@@ -1154,29 +1192,55 @@ final class ClipListTests: XCTestCase {
         XCTAssertEqual(paths, [expected])
     }
 
-    /// A tile's loop plays the moving crop too: its composition ramps, rather than holding the
-    /// static crop's one transform.
+    /// The tile's player runs over the untrimmed source, so the moving crop is timed in source
+    /// time: before a clip that starts at 1 s the crop holds still, and inside it it moves.
+    /// Timing it from the clip's own start would move it a second early.
     @MainActor
-    func testAFollowedClipsPreviewCompositionMovesTheCrop() async throws {
-        let url = try await writeFollowVideo()
+    func testAFollowedClipsPreviewMovesTheCropInSourceTime() async throws {
+        let url = try await writeFollowVideo(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
-        let viewModel = makeViewModel(
-            items: [ClipListItem(window: followedWindow, cropRect: fullFrame)], poseFrames: crossingAthlete(),
-            asset: AVURLAsset(url: url), duration: 3, settingsProvider: { TurnipSettings(followAthlete: true) })
+        let window = TrickWindow(startTime: 1, endTime: 3.95)
+        let viewModel = followViewModel(
+            items: [detectedItem(window: window)], poseFrames: crossingAthlete(from: 10), url: url)
 
         let loaded = await viewModel.videoComposition(
-            cropRect: fullFrame, cropAdjustment: .identity, window: followedWindow)
+            cropRect: fullFrame, cropAdjustment: .identity, followingWindow: window)
 
         let composition = try XCTUnwrap(loaded)
         let instruction = try XCTUnwrap(
             composition.instructions.first as? AVMutableVideoCompositionInstruction)
         let layerInstruction = try XCTUnwrap(instruction.layerInstructions.first)
-        var start = CGAffineTransform.identity
-        var end = CGAffineTransform.identity
-        var range = CMTimeRange(start: .zero, duration: .zero)
-        XCTAssertTrue(layerInstruction.getTransformRamp(
-            for: CMTime(seconds: 1.45, preferredTimescale: 600), start: &start, end: &end, timeRange: &range))
-        XCTAssertNotEqual(start, end)
+        func ramp(at seconds: TimeInterval) -> (start: CGAffineTransform, end: CGAffineTransform) {
+            var start = CGAffineTransform.identity
+            var end = CGAffineTransform.identity
+            var range = CMTimeRange(start: .zero, duration: .zero)
+            _ = layerInstruction.getTransformRamp(
+                for: CMTime(seconds: seconds, preferredTimescale: 600), start: &start, end: &end, timeRange: &range)
+            return (start, end)
+        }
+        let beforeTheClip = ramp(at: 0.5)
+        let insideTheClip = ramp(at: 1.95)
+        XCTAssertEqual(beforeTheClip.start, beforeTheClip.end)
+        XCTAssertNotEqual(insideTheClip.start, insideTheClip.end)
+    }
+
+    /// The poster is cropped where the moving crop is at the poster's moment — a 9:16 rect on
+    /// this landscape video — rather than to the clip's static full-frame rect.
+    @MainActor
+    func testAFollowedClipsPosterIsCroppedToThePath() async throws {
+        let url = try await writeFollowVideo()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let followed = followViewModel(items: [detectedItem()], poseFrames: crossingAthlete(), url: url)
+        let still = followViewModel(
+            items: [detectedItem()], poseFrames: crossingAthlete(), url: url, follow: false)
+
+        let followedPoster = await followed.thumbnail(for: followed.items[1])
+        let stillPoster = await still.thumbnail(for: still.items[1])
+
+        let portrait = try XCTUnwrap(followedPoster)
+        let landscape = try XCTUnwrap(stillPoster)
+        XCTAssertLessThan(portrait.width, portrait.height)
+        XCTAssertGreaterThan(landscape.width, landscape.height)
     }
 
     // MARK: - Add clip
