@@ -12,7 +12,7 @@ When turnip-farm and turnip-ml land, extend this file with area-specific §F sec
 
 ## Identity for any GitHub-side action
 
-If you post a review on GitHub, post it from the GitHub account your `gh` CLI is authenticated as, never as the PR's author. Reviews are posted with `gh api repos/<owner>/<repo>/pulls/<N>/reviews`.
+If you post a review on GitHub, post it from the GitHub account your `gh` CLI is authenticated as, never as the PR's author. Before posting, compare `gh api user --jq .login` with `gh pr view <N> --json author --jq .author.login`; if they match, don't post, and return your verdict with `"blocked": "gh-account-is-pr-author"`. Reviews are posted with `gh api repos/<owner>/<repo>/pulls/<N>/reviews`.
 
 ## Boot — load context BEFORE looking at any diff
 
@@ -44,8 +44,10 @@ If the working tree has uncommitted changes, include them: also run `git diff HE
 Before re-deriving anything, decide whether the intervening commits are new work or a rebase. A rebase moves the head SHA and un-anchors the previous review without changing a line of the PR's own code — so an untouched finding presents as a stale review.
 
 ```bash
-git diff $(git merge-base main <reviewed-sha>) <reviewed-sha> > /tmp/before.diff
-git diff $(git merge-base main <head>)         <head>         > /tmp/after.diff
+BASE_REMOTE=$(git remote -v | awk '/github\.com[:\/]hoiekim\/turnip-ios(\.git)? \(fetch\)/ {print $1; exit}')
+BASE_REMOTE=${BASE_REMOTE:-origin}
+git diff $(git merge-base "$BASE_REMOTE/main" <reviewed-sha>) <reviewed-sha> > /tmp/before.diff
+git diff $(git merge-base "$BASE_REMOTE/main" <head>)         <head>         > /tmp/after.diff
 diff /tmp/before.diff /tmp/after.diff    # identical (modulo blob hashes) => no work
 ```
 
@@ -325,7 +327,7 @@ print(json.dumps({
 PY
 ```
 
-**Verdict calibration — an unmet check the AUTHOR cannot move is a LOW, not a hold.** `protect_main` forces every fix onto a fork PR, and GitHub gates fork-PR workflow runs behind maintainer approval: `check-runs` returns `total_count: 0` and the sole workflow run sits `completed / action_required` at `0s`. That is not a red build and not something a commit can fix. File it as a **LOW** naming (a) the check is unmet, (b) the exact evidence — run id, `action_required`, `0s`, `mergeStateStatus` — and (c) **who** clears it, then approve on the merits. Precedent: PR 51 (2026-09-10, plist-only, four deletions) — a second reviewer held the verdict on pending CI at 08:57:47Z, the reviewer approved at 10:34:28Z with exactly this LOW, and the maintainer approved at 12:22:38Z and merged 19 seconds later. **This does NOT extend to a check the author can move by pushing a commit** — a failing test, a lint break, or a run that exists and is red is still `changes-requested`.
+**Verdict calibration — an unmet check the AUTHOR cannot move is a LOW, not a hold.** `protect_main` forces every fix from an account without push access onto a fork PR, and GitHub gates fork-PR workflow runs behind maintainer approval: `check-runs` returns `total_count: 0` and the sole workflow run sits `completed / action_required` at `0s`. That is not a red build and not something a commit can fix. File it as a **LOW** naming (a) the check is unmet, (b) the exact evidence — run id, `action_required`, `0s`, `mergeStateStatus` — and (c) **who** clears it, then approve on the merits. Precedent: PR 51 (2026-09-10, plist-only, four deletions) — a second reviewer held the verdict on pending CI at 08:57:47Z, this review approved at 10:34:28Z with exactly this LOW, and the maintainer approved at 12:22:38Z and merged 19 seconds later. **This does NOT extend to a check the author can move by pushing a commit** — a failing test, a lint break, or a run that exists and is red is still `changes-requested`.
 
 Body format — keep it tight:
 
