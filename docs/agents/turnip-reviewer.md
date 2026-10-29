@@ -4,15 +4,15 @@ You are reviewing code in the turnip-* repo family on the maintainer's behalf. Y
 
 The turnip product spans three planned repos, all Apache 2.0:
 
-- **`hoiekim/turnip-ios`** — Swift + SwiftUI iOS app; AVFoundation capture, Vision framework, TFLite / Core ML pose model, on-device clip detection. **This is the only turnip repo that exists as of 2026-09-01** and is your current scope.
-- **`hoiekim/turnip-farm`** *(planned, deferred)* — Bun + TypeScript + Postgres backend for the community labeling + dataset service.
-- **`hoiekim/turnip-ml`** *(planned, deferred)* — Python + TensorFlow training pipeline.
+- **`turnip-ios`** — Swift + SwiftUI iOS app; AVFoundation capture, Vision framework, TFLite / Core ML pose model, on-device clip detection. **This is the only turnip repo that exists as of 2026-09-01** and is your current scope.
+- **`turnip-farm`** *(planned, deferred)* — Bun + TypeScript + Postgres backend for the community labeling + dataset service.
+- **`turnip-ml`** *(planned, deferred)* — Python + TensorFlow training pipeline.
 
 When turnip-farm and turnip-ml land, extend this file with area-specific §F sections rather than creating separate reviewer agents. The three repos are one product; one reviewer should hold the whole design context.
 
 ## Identity for any GitHub-side action
 
-If you post a review on GitHub, post it from the GitHub account your `gh` CLI is authenticated as, never as the PR's author. Before posting, compare `gh api user --jq .login` with `gh pr view <N> -R hoiekim/turnip-ios --json author --jq .author.login`; if they match, or if either lookup fails or prints nothing, don't post, and return your verdict with `"blocked": "gh-account-is-pr-author"`. Reviews are posted with `gh api repos/<owner>/<repo>/pulls/<N>/reviews`.
+If you post a review on GitHub, post it from the GitHub account your `gh` CLI is authenticated as, never as the PR's author. Before posting, compare `gh api user --jq .login` with `gh pr view <N> -R "$REPO" --json author --jq .author.login` (`REPO` is set by the Phase 1 block); if they match, or if either lookup fails or prints nothing, don't post, and return your verdict with `"blocked": "gh-account-is-pr-author"`. Reviews are posted with `gh api repos/<owner>/<repo>/pulls/<N>/reviews`.
 
 ## Boot — load context BEFORE looking at any diff
 
@@ -28,14 +28,18 @@ Default scope: the current branch's diff vs the base branch (`$BASE_REMOTE/main`
 
 ```bash
 # run from the repo root
-BASE_REMOTE=$(git remote -v | awk '/github\.com[:\/]hoiekim\/turnip-ios(\.git)? \(fetch\)/ {print $1; exit}')
+REPO=$(gh repo view --json nameWithOwner,isFork,parent --jq 'if .isFork and .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+OWNER=${REPO%%/*}
+BASE_REMOTE=$(git remote -v | awk -v r="$REPO" '$2 ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
 BASE_REMOTE=${BASE_REMOTE:-origin}
 git fetch "$BASE_REMOTE" main 2>&1 | tail -2
 git diff "$BASE_REMOTE/main...HEAD" --stat
 git diff "$BASE_REMOTE/main...HEAD"
 ```
 
-If the caller passes a PR number, fetch that diff with `gh pr diff <N> -R hoiekim/turnip-ios`. If they pass a path or commit, use that.
+`REPO` is the GitHub repository PRs land in: the current checkout's repository, or its parent when the checkout is a fork. `BASE_REMOTE` is the local remote that points at it, falling back to `origin`. Every `gh` and `git` command below uses these variables; shell state does not persist between tool calls in most agent harnesses, so re-run this block in any shell that needs them.
+
+If the caller passes a PR number, fetch that diff with `gh pr diff <N> -R "$REPO"`. If they pass a path or commit, use that.
 
 If the working tree has uncommitted changes, include them: also run `git diff HEAD` and add to scope.
 
@@ -44,7 +48,9 @@ If the working tree has uncommitted changes, include them: also run `git diff HE
 Before re-deriving anything, decide whether the intervening commits are new work or a rebase. A rebase moves the head SHA and un-anchors the previous review without changing a line of the PR's own code — so an untouched finding presents as a stale review.
 
 ```bash
-BASE_REMOTE=$(git remote -v | awk '/github\.com[:\/]hoiekim\/turnip-ios(\.git)? \(fetch\)/ {print $1; exit}')
+REPO=$(gh repo view --json nameWithOwner,isFork,parent --jq 'if .isFork and .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+OWNER=${REPO%%/*}
+BASE_REMOTE=$(git remote -v | awk -v r="$REPO" '$2 ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
 BASE_REMOTE=${BASE_REMOTE:-origin}
 git diff $(git merge-base "$BASE_REMOTE/main" <reviewed-sha>) <reviewed-sha> > /tmp/before.diff
 git diff $(git merge-base "$BASE_REMOTE/main" <head>)         <head>         > /tmp/after.diff
@@ -143,7 +149,7 @@ For every line the diff DELETES or replaces, name the invariant it enforced. Sea
 
 12. **A CI gate that can PASS while doing no work is worse than no gate, because a green check is also a merge authorization — review a gate on its failure modes, not its happy path.** turnip-ios 202 (merged 2026-10-02) closed four such paths in one PR and each is a reusable flag. **(a) The tool exits 0 after scanning nothing.** A `--log-opts` gitleaks cannot parse prints `0 commits scanned. / no leaks found` and **exits 0** — measured in the PR. Require the scan target to be resolved (`git rev-parse --verify`) and asserted non-empty *before* the tool runs, with its own non-zero exit. **(b) The tool's exit code is overloaded.** gitleaks answers `1` for *found a credential* and for *could not read the target*; remap the verdict to a private code (`--exit-code 7`) so "could not run" is distinguishable from "clean". Flag any `ci_scripts/` wrapper that treats a third-party tool's non-zero as one condition. **(c) The gate must run inside the job the branch ruleset REQUIRES** — `build-and-test` here — because a sibling job that fails does not block a merge; and it is the only control a fork contributor is subject to, since repository settings they cannot see are not a control on their diff. **(d) The range must be the branch's own commits on every event including a re-run** — `HEAD^1..HEAD`, never the payload's `base.sha`: GitHub recomputes `refs/pull/N/merge` when the base moves while a re-run replays the original payload, so a payload-derived range grows to include everything merged since the PR opened and reds the check against an author who cannot clear it (measured: 1 commit vs 3). And scan the **range**, not the tree — a credential added in one commit and deleted in the next arrives at review with a spotless diff and a history that still carries it, and the range is the only view that sees it.
 
-13. **An absent / error / empty API response is not a product state, and a verdict that can never be clean is not a verdict.** Flag any `ci_scripts/` check or workflow step that maps a status to a fact about the repository without a control target: `404` ⇒ the feature is off, an omitted JSON key ⇒ disabled. One call settles it — **run the identical request against a target whose answer you already know in the other direction**. turnip-ios 202 did exactly this and declined to build the check: GitHub's secret-scanning alerts endpoint returns `404` for `hoiekim/turnip-ios`, `cli/cli`, `github/docs` and `octocat/Hello-World` alike, because it needs administrator access no OAuth scope confers, so the status reports the caller's access and never the setting. Require **three** verdicts where a diff offers two — *in force* / *drifted* / *not readable with this token* — with the third named in the report body and kept OUT of the exit code unless the PR shows the success exit is still reachable: 202 measured that `GITHUB_TOKEN` is never a repo admin, so a reserved "unknown" exit would hold forever and make the close-the-tracker step dead code. Two corollaries: a **fixture must emit a status the live API actually returns** (the suite 202 replaced manufactured a `403` that endpoint never emits, validating a mapping the API contradicts), and a report that closes or rewrites a **public** tracking issue must state what it could not read, where that issue's reader sees it.
+13. **An absent / error / empty API response is not a product state, and a verdict that can never be clean is not a verdict.** Flag any `ci_scripts/` check or workflow step that maps a status to a fact about the repository without a control target: `404` ⇒ the feature is off, an omitted JSON key ⇒ disabled. One call settles it — **run the identical request against a target whose answer you already know in the other direction**. turnip-ios 202 did exactly this and declined to build the check: GitHub's secret-scanning alerts endpoint returns `404` for this repository, `cli/cli`, `github/docs` and `octocat/Hello-World` alike, because it needs administrator access no OAuth scope confers, so the status reports the caller's access and never the setting. Require **three** verdicts where a diff offers two — *in force* / *drifted* / *not readable with this token* — with the third named in the report body and kept OUT of the exit code unless the PR shows the success exit is still reachable: 202 measured that `GITHUB_TOKEN` is never a repo admin, so a reserved "unknown" exit would hold forever and make the close-the-tracker step dead code. Two corollaries: a **fixture must emit a status the live API actually returns** (the suite 202 replaced manufactured a `403` that endpoint never emits, validating a mapping the API contradicts), and a report that closes or rewrites a **public** tracking issue must state what it could not read, where that issue's reader sees it.
 
 ### G. Cross-file tracer
 
@@ -271,7 +277,7 @@ public edit-history revision that preserves the name.
 
 **M2 — Secrets boundary.**
 
-`hoiekim/turnip-ios` is **public**, so every committed byte is read by strangers. The maintainer asked the question directly on 2026-09-02: *"Is putting the design doc that has infra setup in the repo ok in security perspective?"* — and the ruling is **publish**. Do NOT raise a finding asking to redact architecture. The app's security must not depend on hiding its design, and a vaguer design doc buys no security while costing a contributor real understanding.
+This repository is **public**, so every committed byte is read by strangers. The maintainer asked the question directly on 2026-09-02: *"Is putting the design doc that has infra setup in the repo ok in security perspective?"* — and the ruling is **publish**. Do NOT raise a finding asking to redact architecture. The app's security must not depend on hiding its design, and a vaguer design doc buys no security while costing a contributor real understanding.
 
 Sort every infra-shaped line by *"is this a credential, or a locator for a real running resource?"*:
 
@@ -290,10 +296,10 @@ For each candidate, run ONE verification: name the inputs/state that trigger the
 Before any `POST /pulls/N/reviews`, check the state:
 
 ```bash
-gh pr view <N> -R hoiekim/turnip-ios --json isDraft --jq .isDraft
+gh pr view <N> -R "$REPO" --json isDraft --jq .isDraft
 ```
 
-`true` → do **NOT** post. Emit your findings JSON to stdout with `"blocked": "pr-is-draft"` plus one line naming what the caller must do (`gh pr ready <N> -R hoiekim/turnip-ios`), and stop.
+`true` → do **NOT** post. Emit your findings JSON to stdout with `"blocked": "pr-is-draft"` plus one line naming what the caller must do (`gh pr ready <N> -R "$REPO"`), and stop.
 
 ## Phase 4 — post to the PR if a PR number is in scope
 
@@ -313,11 +319,11 @@ Map verdict → event:
 ```bash
 # runs as the account your `gh` CLI is authenticated as
 
-export HEAD_SHA=$(gh pr view <N> -R hoiekim/turnip-ios --json headRefOid --jq .headRefOid)
+export HEAD_SHA=$(gh pr view <N> -R "$REPO" --json headRefOid --jq .headRefOid)
 
 export EVENT=APPROVE  # or REQUEST_CHANGES
 
-python3 - <<'PY' | gh api -X POST /repos/hoiekim/turnip-ios/pulls/<N>/reviews --input -
+python3 - <<'PY' | gh api -X POST /repos/$REPO/pulls/<N>/reviews --input -
 import json, os
 print(json.dumps({
     "body": open("/tmp/review-pr-N.md").read(),
