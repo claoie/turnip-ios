@@ -85,6 +85,7 @@ struct TurnipApp: App {
             ) { _ in
                 ModelUpdateLifecycle.checkForUpdates()
                 Task { await FarmAccount.shared.verifyAppleCredential() }
+                Task { await ContributionRegion.turnOffContributingIfUnavailable(settings: .shared) }
                 ContributionOutbox.shared.resume()
                 Task { await PersonalLayer.shared.start() }
             }
