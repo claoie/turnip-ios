@@ -11,7 +11,8 @@ struct SettingsView: View {
     var account: FarmAccount = .shared
     var outbox: ContributionOutbox = .shared
     @Environment(\.dismiss) private var dismiss
-    @State private var isContributingOffered = true
+    /// Off until the storefront has been read, so the switch never shows and then vanishes.
+    @State private var isContributingOffered = false
 
     var body: some View {
         NavigationStack {

@@ -740,10 +740,10 @@ switch, and the confirmation sheet's Confirm once per account, §3.3):
 the EU, the EEA or the UK (`ContributionRegion`): Settings hides the
 Contribute named clips switch and sign-in there, and turns the switch
 off, which cancels what is waiting. An account already signed in can
-still sign out or be deleted. With no storefront to read, the switch
-stays offered and the farm's backstop (§8.1) decides. *(Judgment call:
-failing closed would hide contribution from every build without an App
-Store account.)*
+still sign out or be deleted. With no storefront to read, contribution
+isn't offered either (the maintainer's call), which includes builds
+without an App Store account such as the simulator. The farm's
+backstop (§8.1) refuses by the request's country as well.
 
 **Never leaves the device, even on opt-in** — the Profile: whether a
 clip shows the user, favorites, spots, achievements and progress

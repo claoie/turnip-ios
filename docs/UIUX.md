@@ -454,7 +454,8 @@ default empty state, so it never reads as "your library is empty."
   those, the account: Sign in with Apple while signed out; "Signed in with Apple", Sign Out and
   Delete Account once signed in, deletion confirming with the farm's disclosure first
   (§5.4). The account is not a preference, and nothing outside contribution reads it. On an App
-  Store storefront in the EU, the EEA or the UK the switch and Sign in with Apple are hidden, the
+  Store storefront in the EU, the EEA or the UK, or when there is no storefront to read, the
+  switch and Sign in with Apple are hidden, the
   footer says contributing isn't available there, and a signed-in account keeps Sign Out and
   Delete Account (`CONTRIBUTION_DESIGN.md` §8).
 - Further settings beyond these six are out of scope for this doc's current revision.

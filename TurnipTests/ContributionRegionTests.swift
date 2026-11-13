@@ -2,8 +2,8 @@ import XCTest
 @testable import Turnip
 
 /// `ContributionRegion` pins (`docs/CONTRIBUTION_DESIGN.md` §8): contributing isn't offered on an
-/// App Store storefront in the EU, the EEA or the UK, and is offered elsewhere or with no
-/// storefront to read.
+/// App Store storefront in the EU, the EEA or the UK, nor with no storefront to read, and is
+/// offered elsewhere.
 final class ContributionRegionTests: XCTestCase {
     func testEveryEUEEAAndUKStorefrontIsUnavailable() {
         let codes = [
@@ -27,7 +27,7 @@ final class ContributionRegionTests: XCTestCase {
         }
     }
 
-    func testNoStorefrontLeavesItToTheFarm() {
-        XCTAssertTrue(ContributionRegion.isAvailable(storefrontCountryCode: nil))
+    func testNoStorefrontIsUnavailable() {
+        XCTAssertFalse(ContributionRegion.isAvailable(storefrontCountryCode: nil))
     }
 }

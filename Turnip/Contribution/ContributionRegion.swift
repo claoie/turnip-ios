@@ -6,9 +6,9 @@ import StoreKit
 /// backstop (`BACKEND_DESIGN.md` §8.1).
 ///
 /// The storefront is the App Store country of the Apple account, not where the iPhone is. With no
-/// storefront to read, contributing stays offered and the farm's backstop decides. *(Judgment
-/// call: a missing storefront is rare outside the simulator, and failing closed would hide
-/// contributing from every build without an App Store account.)*
+/// storefront to read, contributing isn't offered either: the country can't be shown to be one
+/// where it is (the maintainer's call). That includes builds without an App Store account, such
+/// as the simulator.
 enum ContributionRegion {
     /// ISO 3166-1 alpha-3 codes, as `Storefront.countryCode` gives them.
     static let unavailableCountryCodes: Set<String> = [
@@ -22,7 +22,7 @@ enum ContributionRegion {
     ]
 
     static func isAvailable(storefrontCountryCode code: String?) -> Bool {
-        guard let code else { return true }
+        guard let code else { return false }
         return !unavailableCountryCodes.contains(code.uppercased())
     }
 
