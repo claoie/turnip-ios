@@ -26,6 +26,8 @@ enum FarmError: Error, Equatable {
     case sourceAlreadyClaimed
     /// The uploaded pose hasn't been ingested yet.
     case blobMissing
+    /// Trick names the farm's vocabulary doesn't have (`BACKEND_DESIGN.md` §1.2.25).
+    case unknownLabel(names: [String])
     case rateLimited(retryAfter: TimeInterval?)
     case appleUnavailable
     case rejected(code: String, message: String)
@@ -39,6 +41,7 @@ extension FarmError: LocalizedError {
         case .accountBlocked: return String(localized: "This account can't contribute.")
         case .sourceAlreadyClaimed: return String(localized: "This video was already contributed from another install.")
         case .blobMissing: return String(localized: "The farm is still processing the pose. Try again in a minute.")
+        case .unknownLabel: return String(localized: "Some trick names aren't in the shared vocabulary yet.")
         case .rateLimited: return String(localized: "Too many requests. Try again in a minute.")
         case .appleUnavailable: return String(localized: "Sign in with Apple is unavailable. Try again later.")
         case .rejected(_, let message): return message
@@ -100,6 +103,13 @@ struct FarmClient: Sendable {
         return response.clips
     }
 
+    /// `POST /api/labels/candidates`: names the vocabulary lacks, suggested on their own, with no
+    /// clip or pose (`BACKEND_DESIGN.md` §1.2.25). The farm skips names it already knows.
+    func suggestLabels(_ names: [String], session: String) async throws {
+        let body = LabelCandidatesRequest(names: names)
+        _ = try await send("POST", "api/labels/candidates", body: body, session: session)
+    }
+
     func source(id: String, key: String, session: String) async throws -> RemoteSource {
         try await decode(send("GET", "api/sources/\(id)", session: session, sourceKey: key))
     }
@@ -145,6 +155,7 @@ struct FarmClient: Sendable {
         case "ACCOUNT_BLOCKED": return .accountBlocked
         case "SOURCE_ALREADY_CLAIMED": return .sourceAlreadyClaimed
         case "BLOB_MISSING": return .blobMissing
+        case "UNKNOWN_LABEL": return .unknownLabel(names: envelope?.error.details?.names ?? [])
         case "APPLE_UNAVAILABLE": return .appleUnavailable
         case "RATE_LIMITED":
             let retryAfter = response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
@@ -159,6 +170,11 @@ private struct ErrorEnvelope: Decodable {
     struct Body: Decodable {
         let code: String
         let message: String?
+        let details: Details?
+    }
+    /// The one detail the app reads: the names an `UNKNOWN_LABEL` refused.
+    struct Details: Decodable {
+        let names: [String]?
     }
     let error: Body
 }
@@ -256,6 +272,10 @@ struct ClipSubmission: Encodable, Equatable, Sendable {
         try container.encode(suggestionsWithheld, forKey: .suggestionsWithheld)
         try container.encode(labels, forKey: .labels)
     }
+}
+
+private struct LabelCandidatesRequest: Encodable {
+    let names: [String]
 }
 
 private struct ClipsRequest: Encodable {

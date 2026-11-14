@@ -363,10 +363,28 @@ clip flow, because the Profile needs names on every saved clip,
 contributed or not: `PROFILE_DESIGN.md` §4 is its design. What stays
 here is what contribution adds:
 
-- **Free text is the contract.** No fixed vocabulary is enforced; the
-  farm stores raw strings and its `label_taxonomy` curates later.
-  *Planned (§8.1): only vocabulary names are contributed, and a new name
-  goes to a candidate list instead.*
+- **Only vocabulary names are contributed** (`BACKEND_DESIGN.md`
+  §1.2.25). Naming stays free text on the device, but when a job is
+  sent the outbox checks each name against the vocabulary the app holds
+  (`VocabularyStore`, `PROFILE_DESIGN.md` §4.2):
+  - a name the vocabulary has (a canonical name or a spelling of one)
+    goes with the clip, as the user spelled it;
+  - a name it lacks goes first, on its own, to
+    `POST /api/labels/candidates`, with no clip, pose or source, as a
+    suggestion for the vocabulary. The farm counts it per account by
+    keyed hash and drops it after 30 days unless the maintainer
+    promotes it. A failed suggestion is only logged: it never holds up
+    the contribution;
+  - a clip left with no vocabulary name isn't contributed, and a job
+    left with no clip registers no source.
+  - The farm's vocabulary can be older than the app's. It refuses a
+    name it lacks with `422 UNKNOWN_LABEL`; the outbox suggests those
+    names, drops them, and sends the rest once more. A second refusal
+    drops the job.
+  The sheet and Settings say briefly that new names are suggested to
+  the vocabulary. *(Judgment call: the disclosure version stays 3. A
+  name was already part of what is sent, and a suggestion carries less
+  than a label did.)*
 - **Origin.** Each name is sent with the `origin` the clip library
   recorded when it was given: `typed`, `vocabulary` (picked from the
   suggestions), or `model` (pre-filled by the trick model and kept)
@@ -724,8 +742,10 @@ switch, and the confirmation sheet's Confirm once per account, §3.3):
   (gait-from-keypoints re-identification is real research), and a
   sequence can be matched to a video of the same clip. Call what the
   farm keeps de-linked and hard to re-identify, never anonymous.
-- confirmed clip windows + free-text trick names, for clips marked as
-  the user only
+- confirmed clip windows + their trick names from the vocabulary, for
+  clips marked as the user only
+- a typed name the vocabulary lacks, on its own as a suggestion for
+  the vocabulary, with no clip, pose or source (§4)
 - label provenance — each name's `origin`, and the proposing model
   version, its pre-filled names, and the blind-sample flag per clip:
   how a label was made, never who made it
@@ -768,9 +788,10 @@ needs a call at submission time. `ITSAppUsesNonExemptEncryption` stays
 The maintainer's privacy plan changes contribution before it goes live.
 Built so far, and described in the sections above: only clips marked as
 the user are contributed, the 16-or-older confirmation (§3.3), and
-contribution switched off on EU, EEA and UK storefronts (§8). The rest
-below is not built yet; until it is, the sections above describe the
-code.
+contribution switched off on EU, EEA and UK storefronts (§8). Labels
+from the vocabulary only, with new names suggested on their own (§4),
+are built as well. The rest below is not built yet; until it is, the
+sections above describe the code.
 
 - **Consent.** The farm records each agreement (account, time,
   disclosure version), and accounts that agreed to the 30-day wording
@@ -781,9 +802,6 @@ code.
   edit. This reverses `DESIGN.md` Decision #10.
 - **Deletion.** Settings offers "Delete my account" and an equally
   prominent "Also delete my contributions".
-- **Labels.** Only vocabulary names are contributed (§4). A new name
-  goes to a candidate list, counted per account by keyed hash, kept
-  briefly and promoted by hand.
 - **Kept training data.** The farm cuts short segments at ingest. Each
   is centered on the hips, scaled to a standard body, reduced to one
   head point and lightly noised, with fresh IDs, no timestamps and no

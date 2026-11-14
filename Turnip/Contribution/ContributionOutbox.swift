@@ -110,7 +110,8 @@ final class ContributionOutbox: ObservableObject {
     static let shared = ContributionOutbox(
         account: .shared, settings: .shared,
         store: ContributionOutboxStore(directory: ContributionOutboxStore.defaultDirectory),
-        savedClip: { ClipLibrary.shared.clip($0) })
+        savedClip: { ClipLibrary.shared.clip($0) },
+        vocabulary: { VocabularyStore.shared.current })
 
     /// What a failed attempt means for its job.
     enum Disposition: Equatable {
@@ -145,6 +146,8 @@ final class ContributionOutbox: ObservableObject {
     private let settings: TurnipSettingsStore
     private let store: ContributionOutboxStore
     private let savedClip: @MainActor (UUID) -> LibraryClip?
+    /// The vocabulary a job's names are checked against when it is sent.
+    private let vocabulary: @MainActor () -> TrickVocabulary
     private let now: () -> Date
     private let sleep: @Sendable (TimeInterval) async throws -> Void
     private let pathMonitor = NWPathMonitor()
@@ -161,6 +164,7 @@ final class ContributionOutbox: ObservableObject {
         settings: TurnipSettingsStore,
         store: ContributionOutboxStore,
         savedClip: @escaping @MainActor (UUID) -> LibraryClip?,
+        vocabulary: @escaping @MainActor () -> TrickVocabulary,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
             try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -170,6 +174,7 @@ final class ContributionOutbox: ObservableObject {
         self.settings = settings
         self.store = store
         self.savedClip = savedClip
+        self.vocabulary = vocabulary
         self.now = now
         self.sleep = sleep
         observe()
@@ -305,8 +310,10 @@ final class ContributionOutbox: ObservableObject {
         defer { backgroundTime.end() }
         do {
             let uploader = ContributionUploader(client: client, credentials: account.credentials)
-            let stored = try await uploader.contribute(source, session: session)
-            guard source.clipsNotHeld(by: stored).isEmpty else {
+            guard let sent = try await contributeVocabularyNames(source, with: uploader, session: session) else {
+                return .settled
+            }
+            guard sent.source.clipsNotHeld(by: sent.stored).isEmpty else {
                 Self.logger.error("The farm's read-back doesn't hold what was sent")
                 return .retry(after: nil)
             }
@@ -324,6 +331,40 @@ final class ContributionOutbox: ObservableObject {
                 account.sessionEnded()
                 return .stopped
             }
+        }
+    }
+
+    /// Contributes `source` with vocabulary names only (`BACKEND_DESIGN.md` §1.2.25): the names the
+    /// vocabulary lacks go to the farm first as suggestions, and a clip left with no name stays
+    /// here. A farm whose vocabulary is older than the app's refuses a name with `UNKNOWN_LABEL`;
+    /// those names are suggested and dropped too, and the rest sent once more. Returns what was
+    /// sent and what the farm holds of it; `nil` when no clip had a name to send.
+    private func contributeVocabularyNames(
+        _ source: SourceContribution, with uploader: ContributionUploader, session: String
+    ) async throws -> (source: SourceContribution, stored: RemoteSource)? {
+        let split = source.splitByVocabulary(vocabulary())
+        await suggest(split.unknown, client: uploader.client, session: session)
+        guard let known = split.known else { return nil }
+        do {
+            let stored = try await uploader.contribute(known, session: session)
+            return (known, stored)
+        } catch FarmError.unknownLabel(let names) where !names.isEmpty {
+            await suggest(names, client: uploader.client, session: session)
+            guard let retried = known.droppingNames(names) else { return nil }
+            let stored = try await uploader.contribute(retried, session: session)
+            return (retried, stored)
+        }
+    }
+
+    /// Best effort: a suggestion that doesn't reach the farm costs nothing but the suggestion, so
+    /// it never holds up the contribution.
+    private func suggest(_ names: [String], client: FarmClient, session: String) async {
+        let batch = LabelCandidates.batch(names)
+        guard !batch.isEmpty else { return }
+        do {
+            try await client.suggestLabels(batch, session: session)
+        } catch {
+            Self.logger.error("Couldn't suggest names: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -366,7 +407,7 @@ final class ContributionOutbox: ObservableObject {
         switch error as? FarmError {
         case .unauthenticated:
             return .signIn
-        case .sourceAlreadyClaimed, .accountBlocked:
+        case .sourceAlreadyClaimed, .accountBlocked, .unknownLabel:
             return .drop
         case .rateLimited(let retryAfter):
             return .retry(after: retryAfter)

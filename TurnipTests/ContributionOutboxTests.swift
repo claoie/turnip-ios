@@ -87,7 +87,7 @@ final class ContributionOutboxTests: XCTestCase {
         let outbox = ContributionOutbox(
             account: account, settings: settings ?? self.settings(),
             store: ContributionOutboxStore(directory: directory),
-            savedClip: savedClip ?? { Self.saved($0, names: Self.cork) }, now: now,
+            savedClip: savedClip ?? { Self.saved($0, names: Self.cork) }, vocabulary: { .seed }, now: now,
             sleep: sleep ?? { try await waits.hold($0) })
         outboxes.append(outbox)
         return outbox
@@ -379,6 +379,7 @@ final class ContributionOutboxTests: XCTestCase {
         XCTAssertEqual(disposition(status: 404, code: "NOT_FOUND"), .drop)
         XCTAssertEqual(disposition(status: 409, code: "SOURCE_ALREADY_CLAIMED"), .drop)
         XCTAssertEqual(disposition(status: 403, code: "ACCOUNT_BLOCKED"), .drop)
+        XCTAssertEqual(disposition(status: 422, code: "UNKNOWN_LABEL"), .drop)
         XCTAssertEqual(ContributionOutbox.disposition(of: PoseEncodingError()), .drop)
 
         XCTAssertEqual(disposition(status: 500, code: "INTERNAL"), .retry(after: nil))
@@ -657,6 +658,90 @@ final class ContributionOutboxTests: XCTestCase {
         await settled(outbox)
 
         XCTAssertEqual(try sentClips(farm).map { $0["clip_id"] as? String }, [Self.otherClipID.uuidString.lowercased()])
+        XCTAssertTrue(outbox.jobs.isEmpty)
+    }
+
+    // MARK: - Vocabulary names only
+
+    private static let suggested = ScriptedFarm.Reply(status: 202, body: "")
+
+    private func suggestedNames(_ farm: ScriptedFarm) throws -> [[String]] {
+        try farm.requests.filter { $0.url?.path == "/api/labels/candidates" }.map { request in
+            let body = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+            return try XCTUnwrap(body["names"] as? [String])
+        }
+    }
+
+    /// A typed name the vocabulary lacks is suggested on its own, and the clip goes with its
+    /// vocabulary names only.
+    func testANameOutsideTheVocabularyIsSuggestedNotContributed() async throws {
+        let farm = ScriptedFarm([Self.suggested] + Self.delivered())
+        let names = [ClipName(name: "cork", origin: .vocabulary), ClipName(name: "Raiz", origin: .typed)]
+        let outbox = outbox(account(client: farm.client), savedClip: { Self.saved($0, names: names) })
+
+        await outbox.enqueue(Self.source())
+        await settled(outbox)
+
+        XCTAssertEqual(farm.calls.first, "POST /api/labels/candidates")
+        XCTAssertEqual(try suggestedNames(farm), [["Raiz"]])
+        let labels = try XCTUnwrap(try sentClips(farm).first?["labels"] as? [[String: String]])
+        XCTAssertEqual(labels, [["name": "cork", "origin": "vocabulary"]])
+        XCTAssertTrue(outbox.jobs.isEmpty)
+    }
+
+    /// A clip whose every name is new isn't contributed at all: only the suggestion goes, and no
+    /// source is registered or keyed.
+    func testAClipWithOnlyNewNamesIsNotContributed() async throws {
+        let farm = ScriptedFarm([Self.suggested])
+        let account = account(client: farm.client)
+        let raiz = [ClipName(name: "raiz", origin: .typed)]
+        let outbox = outbox(account, savedClip: { Self.saved($0, names: raiz) })
+
+        await outbox.enqueue(Self.source())
+        await settled(outbox)
+
+        XCTAssertEqual(farm.calls, ["POST /api/labels/candidates"])
+        XCTAssertEqual(try suggestedNames(farm), [["raiz"]])
+        XCTAssertNil(account.credentials.sourceKey(for: Self.videoID))
+        XCTAssertTrue(outbox.jobs.isEmpty)
+    }
+
+    /// A suggestion the farm doesn't take never holds up the contribution.
+    func testAFailedSuggestionStillContributes() async throws {
+        let farm = ScriptedFarm([Self.refusal(500, "INTERNAL")] + Self.delivered())
+        let names = [ClipName(name: "cork", origin: .vocabulary), ClipName(name: "raiz", origin: .typed)]
+        let outbox = outbox(account(client: farm.client), savedClip: { Self.saved($0, names: names) })
+
+        await outbox.enqueue(Self.source())
+        await settled(outbox)
+
+        XCTAssertEqual(farm.calls.count, 4)
+        XCTAssertTrue(outbox.jobs.isEmpty)
+    }
+
+    /// The farm's vocabulary lacks a name the app's has: those names are suggested and dropped,
+    /// and the rest sent once more.
+    func testUnknownLabelDropsThoseNamesAndRetriesOnce() async throws {
+        let unknown = ScriptedFarm.Reply(status: 422, body: """
+            {"error":{"code":"UNKNOWN_LABEL","message":"m","details":{"index":0,"field":"labels","names":["hook"]}}}
+            """)
+        let farm = ScriptedFarm([Self.registered(), unknown, Self.suggested] + Self.delivered())
+        let names = [ClipName(name: "cork", origin: .vocabulary), ClipName(name: "hook", origin: .vocabulary)]
+        let outbox = outbox(account(client: farm.client), savedClip: { Self.saved($0, names: names) })
+
+        await outbox.enqueue(Self.source())
+        await settled(outbox)
+
+        XCTAssertEqual(farm.calls, [
+            "POST /api/sources", "POST /api/clips", "POST /api/labels/candidates",
+            "POST /api/sources", "POST /api/clips", "GET /api/sources/\(Self.videoID)"
+        ])
+        XCTAssertEqual(try suggestedNames(farm), [["hook"]])
+        let retried = try XCTUnwrap(farm.requests.filter { $0.url?.path == "/api/clips" }.last)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(retried.httpBody)) as? [String: Any])
+        let labels = try XCTUnwrap((body["clips"] as? [[String: Any]])?.first?["labels"] as? [[String: String]])
+        XCTAssertEqual(labels, [["name": "cork", "origin": "vocabulary"]])
         XCTAssertTrue(outbox.jobs.isEmpty)
     }
 
