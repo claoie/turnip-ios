@@ -114,13 +114,13 @@ enum ContributionDisclosure {
         Your video never leaves this iPhone.
         """)
     static let linkWindow = String(localized: """
-        Contributions stay linked to your account for 30 days after you last change them, \
-        then are kept without any link to it.
+        Contributions stay linked to your account until you delete it, or until it goes 24 months \
+        without use.
         """)
     static let deletionReach = String(localized: """
-        Deleting your account removes every contribution this app can still find. The rest stay \
-        in the training data with no link to your account, though someone with a video of the same \
-        clip could still match them to it.
+        Deleting your account removes that link and the full pose recordings. Short, transformed \
+        training segments stay, with no link to your account, unless you also choose to delete \
+        your contributions. Someone with a video of the same clip could still match them to it.
         """)
     static let consent = String(localized: """
         Only clips marked as you are contributed. Clips marked as someone else stay on this iPhone.
@@ -151,7 +151,10 @@ enum ContributionDisclosure {
     /// The version of the words the sheet shows. An agreement counts only for the version it was
     /// given to (`FarmCredentials.hasConsented`), so bumping this asks every account again on its
     /// next save. Bump it whenever a line the sheet shows changes what the user agrees to.
+    /// The farm records the version with the agreement (`POST /api/consent`) and refuses uploads
+    /// from an account that hasn't agreed to its current one (`BACKEND_DESIGN.md` §7.3).
     /// Version 1 was the wording before clips of someone else stayed behind and before the
-    /// 16-or-older confirmation.
-    static let version = 2
+    /// 16-or-older confirmation; versions 1 and 2 said contributions were unlinked 30 days after
+    /// their last edit. Version 3 keeps the link until the account is deleted.
+    static let version = 3
 }
