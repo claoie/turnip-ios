@@ -538,14 +538,28 @@ record of whose a contribution is.
   app deletion and reinstall on current iOS, but Apple doesn't
   guarantee it, so a missing key is an expected state: the source is
   contributed but unmanageable from this install.
-- **Account deletion** (Settings): withdraw the agreement and empty the
-  outbox, waiting out any upload under way, so nothing reaches a source
-  after its deletion; delete every source the app holds a
-  key for (`DELETE /api/sources/:id`), call `DELETE /api/account`, then
-  delete the local keys and session token. Before confirming, repeat the
-  §3.3 disclosure: contributions this app can no longer find stay in
-  the training data, unlinked from the account, though someone with a
-  video of the same clip could still match them to it.
+- **Account deletion** (Settings): two choices with equal weight, side
+  by side and styled alike, **Delete My Account** and **Delete My
+  Account and Contributions**. Either one withdraws the agreement and
+  empties the outbox, waiting out any upload under way, so nothing
+  reaches a source after its deletion; deletes every source the app
+  holds a key for (`DELETE /api/sources/:id`, which deletes the
+  source's training segments too); calls `DELETE /api/account` with
+  `?contributions=keep` or `?contributions=delete`; then deletes the
+  local keys and session token. The farm then deletes every source still
+  linked to the account, and with `delete` their training segments as
+  well (`BACKEND_DESIGN.md` §7.3).
+  - So the choice decides only about contributions this app can no
+    longer find, such as ones from an earlier install: kept as short,
+    transformed training segments with no link to the account, or
+    deleted. Each confirmation says what its choice keeps, then repeats
+    the §3.3 disclosure.
+  - *Open question for the maintainer:* because the per-source deletes
+    run for both choices, "Delete My Account" also deletes the training
+    segments of every contribution this app can find. If that choice
+    should keep them, it would skip the per-source deletes and leave
+    the farm to delete each linked source's full pose while keeping
+    its segments.
 
 ---
 
@@ -788,10 +802,11 @@ needs a call at submission time. `ITSAppUsesNonExemptEncryption` stays
 The maintainer's privacy plan changes contribution before it goes live.
 Built so far, and described in the sections above: only clips marked as
 the user are contributed, the 16-or-older confirmation (§3.3), and
-contribution switched off on EU, EEA and UK storefronts (§8). Labels
-from the vocabulary only, with new names suggested on their own (§4),
-are built as well. The rest below is not built yet; until it is, the
-sections above describe the code.
+contribution switched off on EU, EEA and UK storefronts (§8). Account
+deletion with an equal choice to delete contributions too (§5.4), and
+labels from the vocabulary only, with new names suggested on their own
+(§4), are built as well. The rest below is not built yet; until it is,
+the sections above describe the code.
 
 - **Consent.** The farm records each agreement (account, time,
   disclosure version), and accounts that agreed to the 30-day wording
@@ -800,8 +815,6 @@ sections above describe the code.
 - **Retention.** The account link is kept until the user deletes it, or
   until 24 months without activity, instead of 30 days after the last
   edit. This reverses `DESIGN.md` Decision #10.
-- **Deletion.** Settings offers "Delete my account" and an equally
-  prominent "Also delete my contributions".
 - **Kept training data.** The farm cuts short segments at ingest. Each
   is centered on the hips, scaled to a standard body, reduced to one
   head point and lightly noised, with fresh IDs, no timestamps and no
