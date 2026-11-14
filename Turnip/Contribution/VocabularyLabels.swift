@@ -8,10 +8,9 @@ extension SourceContribution {
     /// once in the order first met. A clip left with no known name isn't contributed; `known` is
     /// `nil` when no clip is left.
     func splitByVocabulary(_ vocabulary: TrickVocabulary) -> (known: SourceContribution?, unknown: [String]) {
-        var unknown: [String] = []
         var seen = Set<String>()
-        for name in clips.flatMap(\.names) where vocabulary.canonicalName(for: name.name) == nil {
-            if seen.insert(TrickVocabulary.normalized(name.name)).inserted { unknown.append(name.name) }
+        let unknown = clips.flatMap(\.names).map(\.name).filter { name in
+            vocabulary.canonicalName(for: name) == nil && seen.insert(TrickVocabulary.normalized(name)).inserted
         }
         return (droppingNames(unknown), unknown)
     }

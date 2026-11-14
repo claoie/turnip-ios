@@ -319,18 +319,23 @@ final class ContributionOutbox: ObservableObject {
             }
             return .settled
         } catch {
-            switch Self.disposition(of: error) {
-            case .retry(let delay):
-                return .retry(after: delay)
-            case .drop:
-                Self.logger.error("Dropped a job the farm refused: \(error.localizedDescription, privacy: .public)")
-                return .settled
-            case .signIn:
-                // A sign-in that landed during the attempt has a session this 401 says nothing about.
-                guard account.credentials.sessionToken == session else { return .retry(after: nil) }
-                account.sessionEnded()
-                return .stopped
-            }
+            return handle(error, session: session)
+        }
+    }
+
+    /// What a failed attempt, made with `session`, means for its job and for sending at all.
+    private func handle(_ error: Error, session: String) -> Attempt {
+        switch Self.disposition(of: error) {
+        case .retry(let delay):
+            return .retry(after: delay)
+        case .drop:
+            Self.logger.error("Dropped a job the farm refused: \(error.localizedDescription, privacy: .public)")
+            return .settled
+        case .signIn:
+            // A sign-in that landed during the attempt has a session this 401 says nothing about.
+            guard account.credentials.sessionToken == session else { return .retry(after: nil) }
+            account.sessionEnded()
+            return .stopped
         }
     }
 
