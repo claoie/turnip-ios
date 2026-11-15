@@ -10,7 +10,7 @@ extension SourceContribution {
     func splitByVocabulary(_ vocabulary: TrickVocabulary) -> (known: SourceContribution?, unknown: [String]) {
         var seen = Set<String>()
         let unknown = clips.flatMap(\.names).map(\.name).filter { name in
-            vocabulary.canonicalName(for: name) == nil && seen.insert(TrickVocabulary.normalized(name)).inserted
+            !vocabulary.knows(name) && seen.insert(TrickVocabulary.normalized(name)).inserted
         }
         return (droppingNames(unknown), unknown)
     }
@@ -27,10 +27,13 @@ extension SourceContribution {
         guard !kept.isEmpty else { return nil }
         return SourceContribution(videoID: videoID, pose: pose, clips: kept)
     }
+
+    /// Every name on every clip, counted once per clip it is on.
+    var nameCount: Int { clips.reduce(0) { $0 + $1.names.count } }
 }
 
 /// What `POST /api/labels/candidates` accepts (`BACKEND_DESIGN.md` §7.3): 1 to 20 names, each 1 to
-/// 64 characters after trimming.
+/// 64 characters after trimming, counted as the farm counts them, in UTF-16 code units.
 enum LabelCandidates {
     static let maximumCount = 20
     static let maximumLength = 64
@@ -41,7 +44,10 @@ enum LabelCandidates {
         var seen = Set<String>()
         let usable = names
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && $0.count <= maximumLength && seen.insert(TrickVocabulary.normalized($0)).inserted }
+            .filter { name in
+                !name.isEmpty && name.utf16.count <= maximumLength
+                    && seen.insert(TrickVocabulary.normalized(name)).inserted
+            }
         return Array(usable.prefix(maximumCount))
     }
 }

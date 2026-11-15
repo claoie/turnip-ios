@@ -28,6 +28,14 @@ struct TrickVocabulary: Codable, Equatable, Sendable {
         Entry(canonical: "scoot", aliases: ["scoot"])
     ])
 
+    /// Whether `name` may go to the farm as a label (`BACKEND_DESIGN.md` §1.2.25): its normalized
+    /// form (`normalized`) equals that of a canonical name or of any spelling of one. The farm
+    /// applies the same rule across every taxonomy version, so this is the one place the app
+    /// decides it.
+    func knows(_ name: String) -> Bool {
+        canonicalName(for: name) != nil
+    }
+
     /// The canonical name `name` is spelled as, ignoring case and spacing; `nil` outside the
     /// vocabulary.
     func canonicalName(for name: String) -> String? {

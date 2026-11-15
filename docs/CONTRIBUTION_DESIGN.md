@@ -367,20 +367,28 @@ here is what contribution adds:
   §1.2.25). Naming stays free text on the device, but when a job is
   sent the outbox checks each name against the vocabulary the app holds
   (`VocabularyStore`, `PROFILE_DESIGN.md` §4.2):
-  - a name the vocabulary has (a canonical name or a spelling of one)
-    goes with the clip, as the user spelled it;
+  - a name the vocabulary has goes with the clip, as the user spelled
+    it. "Has" is one rule, shared with the farm (`TrickVocabulary.knows`):
+    the name's trimmed, whitespace-collapsed, lowercased form equals that
+    of a canonical name or of any spelling of one, at any taxonomy
+    version;
   - a name it lacks goes first, on its own, to
     `POST /api/labels/candidates`, with no clip, pose or source, as a
     suggestion for the vocabulary. The farm counts it per account by
     keyed hash and drops it after 30 days unless the maintainer
     promotes it. A failed suggestion is only logged: it never holds up
-    the contribution;
+    the contribution. Names over 64 UTF-16 code units, the farm's
+    measure, aren't suggested;
   - a clip left with no vocabulary name isn't contributed, and a job
     left with no clip registers no source.
-  - The farm's vocabulary can be older than the app's. It refuses a
-    name it lacks with `422 UNKNOWN_LABEL`; the outbox suggests those
-    names, drops them, and sends the rest once more. A second refusal
-    drops the job.
+  - The farm's vocabulary can be older than the app's. It refuses names
+    it lacks with `422 UNKNOWN_LABEL`, naming only the first refused
+    clip's. The outbox suggests those names, drops them, and sends the
+    rest again, for as long as each refusal leaves fewer names to send;
+    a refusal that drops nothing drops the job. If no name is left
+    after the source and its pose went up, the source is deleted with
+    its key when the farm holds no clip of it, so the job leaves no
+    source behind. A source holding clips from an earlier save stays.
   The sheet and Settings say briefly that new names are suggested to
   the vocabulary. *(Judgment call: the disclosure version stays 3. A
   name was already part of what is sent, and a suggestion carries less

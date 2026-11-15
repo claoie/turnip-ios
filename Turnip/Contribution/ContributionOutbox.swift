@@ -341,24 +341,48 @@ final class ContributionOutbox: ObservableObject {
 
     /// Contributes `source` with vocabulary names only (`BACKEND_DESIGN.md` §1.2.25): the names the
     /// vocabulary lacks go to the farm first as suggestions, and a clip left with no name stays
-    /// here. A farm whose vocabulary is older than the app's refuses a name with `UNKNOWN_LABEL`;
-    /// those names are suggested and dropped too, and the rest sent once more. Returns what was
-    /// sent and what the farm holds of it; `nil` when no clip had a name to send.
+    /// here. A farm whose vocabulary is older than the app's refuses names with `UNKNOWN_LABEL`,
+    /// one clip's at a time; those names are suggested and dropped too, and the rest sent again,
+    /// for as long as each refusal leaves fewer names to send. Returns what was sent and what the
+    /// farm holds of it; `nil` when no clip had a name to send.
     private func contributeVocabularyNames(
         _ source: SourceContribution, with uploader: ContributionUploader, session: String
     ) async throws -> (source: SourceContribution, stored: RemoteSource)? {
         let split = source.splitByVocabulary(vocabulary())
         await suggest(split.unknown, client: uploader.client, session: session)
-        guard let known = split.known else { return nil }
-        do {
-            let stored = try await uploader.contribute(known, session: session)
-            return (known, stored)
-        } catch FarmError.unknownLabel(let names) where !names.isEmpty {
-            await suggest(names, client: uploader.client, session: session)
-            guard let retried = known.droppingNames(names) else { return nil }
-            let stored = try await uploader.contribute(retried, session: session)
-            return (retried, stored)
+        guard var sending = split.known else { return nil }
+        while true {
+            do {
+                let stored = try await uploader.contribute(sending, session: session)
+                return (sending, stored)
+            } catch FarmError.unknownLabel(let names) {
+                let remaining = sending.droppingNames(names)
+                // A refusal that leaves as many names would be refused again: it drops the job.
+                guard (remaining?.nameCount ?? 0) < sending.nameCount else {
+                    throw FarmError.unknownLabel(names: names)
+                }
+                await suggest(names, client: uploader.client, session: session)
+                guard let next = remaining else {
+                    try await discardEmptySource(sending.videoID, client: uploader.client, session: session)
+                    return nil
+                }
+                sending = next
+            }
         }
+    }
+
+    /// The farm refused every name left after the source and its pose went up: a source it holds
+    /// no clip of is deleted, with its key, so a job that contributes no clip leaves no source. A
+    /// source that holds clips from an earlier save stays.
+    private func discardEmptySource(_ videoID: String, client: FarmClient, session: String) async throws {
+        guard let key = account.credentials.sourceKey(for: videoID) else { return }
+        do {
+            guard try await client.source(id: videoID, key: key, session: session).clips.isEmpty else { return }
+            try await client.deleteSource(id: videoID, key: key, session: session)
+        } catch FarmError.rejected(code: "NOT_FOUND", _) {
+            // Already gone, or never registered under this key: only the key is left to remove.
+        }
+        account.credentials.removeSourceKey(for: videoID)
     }
 
     /// Best effort: a suggestion that doesn't reach the farm costs nothing but the suggestion, so

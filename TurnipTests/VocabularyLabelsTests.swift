@@ -56,6 +56,38 @@ final class VocabularyLabelsTests: XCTestCase {
         XCTAssertNil(source.droppingNames(["cork", "HOOK"]))
     }
 
+    /// The farm's rule, pinned (`BACKEND_DESIGN.md` §1.2.25): a name is known when its trimmed,
+    /// whitespace-collapsed, lowercased form equals that of any spelling or canonical name.
+    func testANameIsKnownByItsNormalizedForm() {
+        let vocabulary = TrickVocabulary(taxonomyVersion: 4, entries: [
+            .init(canonical: "butterfly twist", aliases: []),
+            .init(canonical: "cork", aliases: ["corkscrew"])
+        ])
+        XCTAssertTrue(vocabulary.knows("butterfly twist"), "a canonical name with no spelling of its own")
+        XCTAssertTrue(vocabulary.knows("  Butterfly   TWIST "), "case, a double space and padding")
+        XCTAssertTrue(vocabulary.knows("butterfly\ttwist"), "any run of whitespace")
+        XCTAssertTrue(vocabulary.knows("CorkScrew"))
+        XCTAssertTrue(vocabulary.knows("cork"))
+        XCTAssertFalse(vocabulary.knows("butterfly-twist"))
+        XCTAssertFalse(vocabulary.knows("corks"), "a near miss is a suggestion, not a match")
+        XCTAssertFalse(vocabulary.knows(""))
+    }
+
+    func testANameCountCountsEveryNameOnEveryClip() {
+        let source = Self.source([
+            Self.clip([ClipName(name: "cork", origin: .typed), ClipName(name: "hook", origin: .typed)]),
+            Self.clip([ClipName(name: "cork", origin: .typed)])
+        ])
+        XCTAssertEqual(source.nameCount, 3)
+    }
+
+    /// The farm counts a name's length in UTF-16 code units, so an emoji counts two.
+    func testCandidateLengthCountsUTF16() {
+        let fits = String(repeating: "🤸", count: LabelCandidates.maximumLength / 2)
+        let over = fits + "a"
+        XCTAssertEqual(LabelCandidates.batch([fits, over]), [fits])
+    }
+
     func testCandidateBatchesStayWithinTheFarmsLimits() {
         let long = String(repeating: "x", count: LabelCandidates.maximumLength + 1)
         let edge = String(repeating: "y", count: LabelCandidates.maximumLength)
