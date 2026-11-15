@@ -10,18 +10,18 @@ extension SourceContribution {
     func splitByVocabulary(_ vocabulary: TrickVocabulary) -> (known: SourceContribution?, unknown: [String]) {
         var seen = Set<String>()
         let unknown = clips.flatMap(\.names).map(\.name).filter { name in
-            !vocabulary.knows(name) && seen.insert(TrickVocabulary.normalized(name)).inserted
+            !vocabulary.knows(name) && seen.insert(TrickVocabulary.farmNormalized(name)).inserted
         }
         return (droppingNames(unknown), unknown)
     }
 
-    /// The contribution without `names`, compared ignoring case and spacing. A clip left with no
-    /// name isn't contributed; `nil` when no clip is left.
+    /// The contribution without `names`, compared as the farm compares them (`farmNormalized`). A
+    /// clip left with no name isn't contributed; `nil` when no clip is left.
     func droppingNames(_ names: [String]) -> SourceContribution? {
-        let dropped = Set(names.map(TrickVocabulary.normalized))
+        let dropped = Set(names.map(TrickVocabulary.farmNormalized))
         let kept = clips.compactMap { clip -> ClipContribution? in
             var clip = clip
-            clip.names.removeAll { dropped.contains(TrickVocabulary.normalized($0.name)) }
+            clip.names.removeAll { dropped.contains(TrickVocabulary.farmNormalized($0.name)) }
             return clip.names.isEmpty ? nil : clip
         }
         guard !kept.isEmpty else { return nil }
@@ -43,10 +43,10 @@ enum LabelCandidates {
     static func batch(_ names: [String]) -> [String] {
         var seen = Set<String>()
         let usable = names
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map(TrickVocabulary.farmTrimmed)
             .filter { name in
                 !name.isEmpty && name.utf16.count <= maximumLength
-                    && seen.insert(TrickVocabulary.normalized(name)).inserted
+                    && seen.insert(TrickVocabulary.farmNormalized(name)).inserted
             }
         return Array(usable.prefix(maximumCount))
     }

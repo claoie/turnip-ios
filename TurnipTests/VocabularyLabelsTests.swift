@@ -71,6 +71,21 @@ final class VocabularyLabelsTests: XCTestCase {
         XCTAssertFalse(vocabulary.knows("butterfly-twist"))
         XCTAssertFalse(vocabulary.knows("corks"), "a near miss is a suggestion, not a match")
         XCTAssertFalse(vocabulary.knows(""))
+        XCTAssertTrue(vocabulary.knows("butterfly\r\ntwist"), "a CR LF pair")
+        XCTAssertTrue(vocabulary.knows("butterfly\u{0B}\u{0C}twist"), "vertical tab and form feed")
+    }
+
+    /// The farm's whitespace is ASCII only: a no-break space is an ordinary character, so a name
+    /// spelled with one isn't the name spelled with a space.
+    func testANoBreakSpaceIsNotWhitespace() {
+        let vocabulary = TrickVocabulary(
+            taxonomyVersion: 4, entries: [.init(canonical: "butterfly twist", aliases: [])])
+        XCTAssertFalse(vocabulary.knows("butterfly\u{00A0}twist"))
+        XCTAssertFalse(vocabulary.knows("\u{00A0}butterfly twist"), "nor is it trimmed")
+        XCTAssertEqual(TrickVocabulary.farmNormalized("A\u{00A0}B"), "a\u{00A0}b")
+        XCTAssertEqual(TrickVocabulary.farmNormalized(" \tA \n B\r "), "a b")
+        XCTAssertEqual(TrickVocabulary.farmTrimmed("\u{00A0}raiz "), "\u{00A0}raiz")
+        XCTAssertEqual(LabelCandidates.batch([" raiz\u{00A0}"]), ["raiz\u{00A0}"])
     }
 
     func testANameCountCountsEveryNameOnEveryClip() {

@@ -369,9 +369,13 @@ here is what contribution adds:
   (`VocabularyStore`, `PROFILE_DESIGN.md` §4.2):
   - a name the vocabulary has goes with the clip, as the user spelled
     it. "Has" is one rule, shared with the farm (`TrickVocabulary.knows`):
-    the name's trimmed, whitespace-collapsed, lowercased form equals that
-    of a canonical name or of any spelling of one, at any taxonomy
-    version;
+    the name's trimmed, whitespace-collapsed, lowercased form
+    (`farmNormalized`) equals that of a canonical name or of any
+    spelling of one, at any taxonomy version. Whitespace there is ASCII
+    only (space, tab, line feed, vertical tab, form feed, carriage
+    return), as on the farm: a no-break space is an ordinary character.
+    How names group on the device (`normalized`) stays as turnip-ml's
+    canonicalization has it, splitting on any Unicode whitespace;
   - a name it lacks goes first, on its own, to
     `POST /api/labels/candidates`, with no clip, pose or source, as a
     suggestion for the vocabulary. The farm counts it per account by
