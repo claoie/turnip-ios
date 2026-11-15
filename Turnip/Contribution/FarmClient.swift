@@ -26,6 +26,10 @@ enum FarmError: Error, Equatable {
     case sourceAlreadyClaimed
     /// The uploaded pose hasn't been ingested yet.
     case blobMissing
+    /// The account hasn't agreed to the farm's current contribution disclosure: ask again.
+    case consentRequired
+    /// Contribution is switched off in the request's country (`BACKEND_DESIGN.md` §7.2).
+    case regionUnavailable
     /// Trick names the farm's vocabulary doesn't have (`BACKEND_DESIGN.md` §1.2.25).
     case unknownLabel(names: [String])
     case rateLimited(retryAfter: TimeInterval?)
@@ -41,6 +45,8 @@ extension FarmError: LocalizedError {
         case .accountBlocked: return String(localized: "This account can't contribute.")
         case .sourceAlreadyClaimed: return String(localized: "This video was already contributed from another install.")
         case .blobMissing: return String(localized: "The farm is still processing the pose. Try again in a minute.")
+        case .consentRequired: return String(localized: "Agree to the contribution terms again to keep contributing.")
+        case .regionUnavailable: return ContributionDisclosure.unavailableHere
         case .unknownLabel: return String(localized: "Some trick names aren't in the shared vocabulary yet.")
         case .rateLimited: return String(localized: "Too many requests. Try again in a minute.")
         case .appleUnavailable: return String(localized: "Sign in with Apple is unavailable. Try again later.")
@@ -81,6 +87,13 @@ struct FarmClient: Sendable {
 
     func signOut(session: String) async throws {
         _ = try await send("POST", "api/auth/signout", session: session)
+    }
+
+    /// `POST /api/consent`: the farm's record of the agreement the sheet's Confirm gave, sent before
+    /// anything is uploaded. Only a user who confirmed they are 16 or older gets this far.
+    func recordConsent(disclosureVersion: Int, session: String) async throws {
+        let body = ConsentRequest(disclosureVersion: disclosureVersion, ageConfirmed: true)
+        _ = try await send("POST", "api/consent", body: body, session: session)
     }
 
     /// `DELETE /api/account`, keeping the account's de-linked training segments or deleting them too
@@ -189,6 +202,8 @@ struct FarmClient: Sendable {
         "ACCOUNT_BLOCKED": .accountBlocked,
         "SOURCE_ALREADY_CLAIMED": .sourceAlreadyClaimed,
         "BLOB_MISSING": .blobMissing,
+        "CONSENT_REQUIRED": .consentRequired,
+        "REGION_UNAVAILABLE": .regionUnavailable,
         "APPLE_UNAVAILABLE": .appleUnavailable
     ]
 }
@@ -215,6 +230,16 @@ private struct AppleSignInRequest: Encodable {
         case identityToken = "identity_token"
         case authorizationCode = "authorization_code"
         case nonce
+    }
+}
+
+private struct ConsentRequest: Encodable {
+    let disclosureVersion: Int
+    let ageConfirmed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case disclosureVersion = "disclosure_version"
+        case ageConfirmed = "age_confirmed"
     }
 }
 

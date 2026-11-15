@@ -76,6 +76,10 @@ final class FarmClientTests: XCTestCase {
             (.init(status: 422, body: """
                 {"error":{"code":"UNKNOWN_LABEL","message":"m","details":{"field":"labels","names":["raiz"]}}}
                 """), .unknownLabel(names: ["raiz"])),
+            (.init(status: 403, body: #"{"error":{"code":"CONSENT_REQUIRED","message":"m","details":{}}}"#),
+             .consentRequired),
+            (.init(status: 403, body: #"{"error":{"code":"REGION_UNAVAILABLE","message":"m"}}"#),
+             .regionUnavailable),
             (.init(status: 502, body: "<html>"), .http(status: 502))
         ]
         for (reply, expected) in cases {
@@ -99,6 +103,20 @@ final class FarmClientTests: XCTestCase {
         let body = try json(request)
         XCTAssertEqual(body.count, 1)
         XCTAssertEqual(body["names"] as? [String], ["raiz", "butterfly twist"])
+    }
+
+    func testConsentSendsTheDisclosureVersionAndTheAgeConfirmation() async throws {
+        let farm = ScriptedFarm([.init(status: 204, body: "")])
+        try await farm.client.recordConsent(disclosureVersion: 3, session: "tok")
+
+        let request = try XCTUnwrap(farm.requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "https://farm.test/api/consent")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer tok")
+        let body = try json(request)
+        XCTAssertEqual(body.count, 2)
+        XCTAssertEqual(body["disclosure_version"] as? Int, 3)
+        XCTAssertEqual(body["age_confirmed"] as? Bool, true)
     }
 
     /// Both deletion choices go to the same endpoint; only the `contributions` value differs, and
@@ -315,6 +333,28 @@ final class FarmClientTests: XCTestCase {
 
         store.removeValue(for: "consent-disclosure-version")
         XCTAssertFalse(credentials.hasConsented, "an agreement stored before versions were")
+    }
+
+    /// The farm's record of the agreement counts only for the agreement held here: a new agreement,
+    /// a withdrawal or a new disclosure version needs it sent again.
+    func testTheFarmsRecordFollowsTheAgreementHere() {
+        let credentials = FarmCredentials(store: MemorySecrets())
+        credentials.signedIn(sessionToken: "tok", appleUserID: "user-1")
+        credentials.recordConsent()
+        XCTAssertFalse(credentials.farmHasRecordedConsent)
+
+        credentials.farmRecordedConsent()
+        XCTAssertTrue(credentials.farmHasRecordedConsent)
+
+        credentials.recordConsent()
+        XCTAssertFalse(credentials.farmHasRecordedConsent, "a new agreement goes to the farm again")
+
+        credentials.farmRecordedConsent(toVersion: ContributionDisclosure.version - 1)
+        XCTAssertFalse(credentials.farmHasRecordedConsent, "the farm recorded an older version")
+
+        credentials.farmRecordedConsent()
+        credentials.withdrawConsent()
+        XCTAssertFalse(credentials.farmHasRecordedConsent)
     }
 
     /// The next account on this iPhone hasn't seen the disclosure, even signing in as the same
